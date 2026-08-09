@@ -1,0 +1,20 @@
+{
+  "entities": {
+    "backups": {
+      "title": "Clinic Backups",
+      "description": "Cloud backups of dental clinic data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "clinicName": { "type": "string" },
+        "patientCount": { "type": "number" },
+        "appointmentCount": { "type": "number" },
+        "expenseCount": { "type": "number" },
+        "data": { "type": "object" },
+        "uploadedBy": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "data"]
+    }
+  }
+}

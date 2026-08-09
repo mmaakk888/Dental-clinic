@@ -1,0 +1,6 @@
+{
+  "name": "نظام إدارة عيادة الأسنان",
+  "description": "نظام كامل متكامل لإدارة عيادة الأسنان، الحالات، المواعيد، مخطط الأسنان والتكلفة، وحسابات المعامل والمالية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
