@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { extraMessageTemplates } from '../../utils/whatsappUtils';
 import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown } from 'lucide-react';
 import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
@@ -541,7 +542,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSaveWhatsappForm = (e: React.FormEvent) => {
     e.preventDefault();
     onSaveWhatsappSettings(waState);
-    showToast('تم حفظ إعدادات وأربطة الواتساب بنجاح', 'success');
+    showToast('تم حفظ قوالب الواتساب؛ الإرسال الحالي يدوي', 'success');
   };
 
   const handleOpenAddDrug = () => {
@@ -1210,10 +1211,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div>
                 <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
                   <MessageCircle className="w-5 h-5 text-emerald-600" />
-                  إعدادات أتمتة وتكامل رسائل الواتساب (WhatsApp Integration)
+                  رسائل واتساب والقوالب
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  ربط خدمات الرسائل المباشرة مع مزودي الخدمة (Twilio / Make / UltraMsg / Wati)
+                  الوضع الحالي: تجهيز الرسالة وفتح واتساب للإرسال بنفسك.
                 </p>
               </div>
 
@@ -1226,89 +1227,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
 
-            {/* API Credentials */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">رقم المرسل بالعيادة (Sender Phone)</label>
-                <input
-                  type="text"
-                  value={waState.senderNumber}
-                  onChange={e => setWaState({ ...waState, senderNumber: e.target.value })}
-                  placeholder="01012345678"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">مفتاح API الخاص بالخدمة (API Key / Token)</label>
-                <input
-                  type="password"
-                  value={waState.apiKey}
-                  onChange={e => setWaState({ ...waState, apiKey: e.target.value })}
-                  placeholder="ضع الـ API Key لمزود الواتساب..."
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">رابط Webhook لتطبيقات الأتمتة (Webhook URL)</label>
-                <input
-                  type="text"
-                  value={waState.webhookUrl}
-                  onChange={e => setWaState({ ...waState, webhookUrl: e.target.value })}
-                  placeholder="https://hook.make.com/..."
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:outline-none focus:border-emerald-600"
-                />
-              </div>
+            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">الإرسال التلقائي غير متصل. سيُتاح بعد ربط الخدمة الرسمية بخادم آمن والتحقق من الاتصال. لا تضع مفاتيح سرية في المتصفح.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(extraMessageTemplates).map(([key, preset]) => <label key={key} className="block text-sm font-bold text-slate-700">
+                {preset.title}
+                <textarea rows={5} value={waState.templates[key as keyof typeof extraMessageTemplates] ?? preset.text}
+                  onChange={e => setWaState({ ...waState, templates: { ...waState.templates, [key]: e.target.value } })}
+                  className="mt-2 w-full p-3 border border-slate-300 rounded-xl font-normal" />
+              </label>)}
             </div>
-
-            {/* Automation Triggers Toggles */}
-            <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-slate-800 font-tajawal">مشغلات الأتمتة والتنبيهات المباشرة (Event Triggers):</h4>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <label className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={waState.autoConfirmOnAppt}
-                    onChange={e => setWaState({ ...waState, autoConfirmOnAppt: e.target.checked })}
-                    className="w-4 h-4 text-emerald-600 rounded-md"
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 text-xs block">إشعار حجز الموعد</span>
-                    <span className="text-[11px] text-slate-500">إرسال تفاصيل الموعد فور التسجيل</span>
-                  </div>
-                </label>
-
-                <label className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={waState.autoRemind24h}
-                    onChange={e => setWaState({ ...waState, autoRemind24h: e.target.checked })}
-                    className="w-4 h-4 text-emerald-600 rounded-md"
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 text-xs block">تذكير المواعيد (24 ساعة)</span>
-                    <span className="text-[11px] text-slate-500">تذكير تلقائي قبل الموعد بيوم</span>
-                  </div>
-                </label>
-
-                <label className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={waState.autoPostOpOnAttended}
-                    onChange={e => setWaState({ ...waState, autoPostOpOnAttended: e.target.checked })}
-                    className="w-4 h-4 text-emerald-600 rounded-md"
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 text-xs block">تعليمات ما بعد الجلسة</span>
-                    <span className="text-[11px] text-slate-500">إرسال Post-Op فور إتمام الحضور</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            {/* Editable Templates */}
+            <p className="text-sm text-slate-600">قوالب التعليمات مقدمات قابلة للتعديل؛ يضيف الطبيب التعليمات المناسبة للحالة قبل الإرسال.</p>
             <div className="space-y-4 pt-2">
               <h4 className="text-xs font-bold text-slate-800 font-tajawal">
                 تعديل قوالب الرسائل الديناميكية (يمكنك استخدام المتغيرات: &#123;patientName&#125;, &#123;date&#125;, &#123;time&#125;, &#123;clinicName&#125;, &#123;fileNo&#125;, &#123;remainingBalance&#125;):

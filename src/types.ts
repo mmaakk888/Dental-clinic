@@ -117,6 +117,11 @@ export interface WhatsappSettings {
     newAppt: string;
     postOp: string;
     accountBalance: string;
+    greeting?: string;
+    offer?: string;
+    extraction?: string;
+    filling?: string;
+    rootCanal?: string;
   };
 }
 

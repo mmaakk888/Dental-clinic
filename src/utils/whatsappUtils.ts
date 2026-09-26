@@ -52,12 +52,26 @@ export function buildAppointmentReminderText(appt: {
 
 export function cleanEgyptianPhone(phone: string): string {
   if (!phone) return '';
-  let cleaned = phone.replace(/\D/g, '');
+  let cleaned = phone.replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit))).replace(/\D/g, '');
+  if (cleaned.startsWith('00')) cleaned = cleaned.slice(2);
   if (cleaned.startsWith('01')) {
-    cleaned = '20' + cleaned;
+    cleaned = '20' + cleaned.slice(1);
   }
   return cleaned;
 }
+
+export function fillMessageTemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+}
+
+export const extraMessageTemplates = {
+  greeting: { title: 'معايدة', text: 'أهلاً {patientName} 🌷\nكل عام وأنتم بخير من أسرة {clinicName}. نتمنى لكم ولأحبابكم الصحة والسعادة.' },
+  offer: { title: 'عرض أو إعلان', text: 'أهلاً {patientName}، يسعدنا في {clinicName} مشاركتكم هذا الخبر:\n[اكتب تفاصيل العرض ومدته]\nللاستفسار والحجز تواصل معنا. لإيقاف رسائل العروض أرسل: إيقاف.' },
+  extraction: { title: 'تعليمات بعد الخلع', text: 'أهلاً {patientName}، نتمنى لك التعافي سريعاً 🌷\nتعليمات الطبيب بعد الخلع:\n[يضيف الطبيب التعليمات المناسبة للحالة هنا]\nلأي استفسار تواصل مع {clinicName}.' },
+  filling: { title: 'تعليمات بعد الحشو', text: 'أهلاً {patientName}، سعدنا بزيارتك لـ{clinicName}.\nتعليمات الطبيب بعد الحشو:\n[يضيف الطبيب التعليمات المناسبة للحالة هنا]\nنتمنى لك دوام الصحة.' },
+  rootCanal: { title: 'تعليمات علاج العصب', text: 'أهلاً {patientName}، نتمنى لك دوام العافية.\nتعليمات الطبيب بعد جلسة علاج العصب:\n[يضيف الطبيب التعليمات المناسبة للحالة هنا]\nموعد المتابعة: {date}، الساعة {time}.\n{clinicName}' }
+};
 
 export function getWhatsAppUrl(phone: string, text: string): string {
   const cleanPhone = cleanEgyptianPhone(phone);

@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Patient, NavigationOrigin, Session, Lab, LabCase, PaymentInstallment,
-  DrugCatalogItem, Appointment, AppointmentStatus
+  DrugCatalogItem, Appointment, AppointmentStatus, WhatsappSettings
 } from '../../types';
 import { ToothChart } from './ToothChart';
+import { WhatsAppComposer } from './WhatsAppComposer';
 import { PrescriptionAndInstructionsView } from './PrescriptionAndInstructionsView';
 import {
   ArrowRight, Phone, MessageCircle, Edit3, Trash2, ShieldAlert, Plus,
@@ -31,6 +32,7 @@ interface PatientFileViewProps {
   crownPrices: Record<string, number>;
   isPrivacyMode?: boolean;
   clinicName?: string;
+  whatsappSettings: WhatsappSettings;
   clinicLogo?: string | null;
   drugCatalog?: DrugCatalogItem[];
   onSaveSession: (patientId: string, session: Omit<Session, 'id'>) => void;
@@ -65,6 +67,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   crownPrices,
   isPrivacyMode = false,
   clinicName = 'عيادة الأسنان',
+  whatsappSettings,
   clinicLogo = null,
   drugCatalog = [],
   onSaveSession,
@@ -86,6 +89,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   // Secondary UI Controls
   const [isMoreTabsSheetOpen, setIsMoreTabsSheetOpen] = useState(false);
+  const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
   const [showFinancialDetails, setShowFinancialDetails] = useState(false);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
@@ -575,6 +579,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   return (
     <div className="space-y-4 pb-28 font-tajawal antialiased text-slate-800">
+      {isWhatsAppOpen && <WhatsAppComposer patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} onClose={() => setIsWhatsAppOpen(false)} />}
 
       {/* 1. Header & Profile Redesign (Mobile First, Desktop Grid) */}
       <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-sm space-y-4">
@@ -698,16 +703,15 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
           )}
 
           {patient.mobile ? (
-            <a
-              href={getWhatsAppUrl()}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => setIsWhatsAppOpen(true)}
               className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation text-center"
               title="مراسلة واتساب"
             >
               <MessageCircle className="w-4 h-4 shrink-0" />
               <span className="truncate">واتساب</span>
-            </a>
+            </button>
           ) : (
             <button
               disabled
@@ -1456,17 +1460,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                     <span>اتصال تلفوني</span>
                   </a>
 
-                  <a
-                    href={getWhatsAppUrl()}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    disabled={!patient.mobile}
+                    onClick={() => setIsWhatsAppOpen(true)}
                     className={`p-3 min-h-[48px] rounded-xl flex items-center justify-center gap-2 font-bold text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation ${
                       patient.mobile ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-400 pointer-events-none'
                     }`}
                   >
                     <MessageCircle className="w-4 h-4" />
                     <span>واتساب</span>
-                  </a>
+                  </button>
 
                   <a
                     href={`sms:${patient.mobile?.replace(/\D/g, '') || ''}`}
