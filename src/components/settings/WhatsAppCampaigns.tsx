@@ -65,6 +65,6 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
       <button type="button" onClick={() => { setOpened([]); setNotice('تمت إعادة قائمة الفتح؛ انتبه لعدم إرسال الرسالة مرتين.'); }} className="p-3 text-sm">إعادة قائمة الفتح</button>
     </div>
     {notice && <p role="status" className="text-sm text-amber-800">{notice}</p>}
-    {current && <WhatsAppComposer key={current.phone} patient={current.patient} appointments={[]} settings={settings} clinicName={clinicName} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
+    {current && <WhatsAppComposer patient={current.patient} appointments={[]} settings={settings} clinicName={clinicName} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
   </section>;
 }

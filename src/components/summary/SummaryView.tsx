@@ -7,6 +7,7 @@ import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
+import { expenseBreakdown, expensesForMonth, inferExpenseType } from '../../utils/expenseUtils';
 
 interface SummaryViewProps {
   patients: Patient[];
@@ -53,6 +54,12 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const [isFixedExpense, setIsFixedExpense] = useState(false);
   const [expenseInvoiceImage, setExpenseInvoiceImage] = useState<string | undefined>(undefined);
   const [expenseFilterCategory, setExpenseFilterCategory] = useState<'all' | 'fixed' | 'supplies' | 'maintenance'>('all');
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [expenseMonth, setExpenseMonth] = useState<string | 'all'>(currentMonth);
+  const [expenseType, setExpenseType] = useState<NonNullable<Expense['expenseType']>>('supplies');
+  const monthExpenses = useMemo(() => expensesForMonth(expenses, expenseMonth), [expenses, expenseMonth]);
+  const monthlyBreakdown = useMemo(() => expenseBreakdown(monthExpenses), [monthExpenses]);
+  const monthlyTotal = monthExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 
   // Lightbox Image Viewer State
   const [activeInvoiceLightbox, setActiveInvoiceLightbox] = useState<{ title: string; imageUrl: string; amount: number; date: string } | null>(null);
@@ -72,6 +79,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       setEditingExpense(null);
       setExpenseTitle('');
       setExpenseCategory('supplies');
+      setExpenseType('supplies');
       setExpenseAmount('');
       setExpenseDate(new Date().toISOString().split('T')[0]);
       setExpenseNote('');
@@ -140,10 +148,11 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     }
   };
 
-  const handleOpenAddExpense = (presetTitle?: string, presetCat?: 'fixed' | 'supplies' | 'maintenance' | 'other') => {
+  const handleOpenAddExpense = (presetTitle?: string, presetCat?: 'fixed' | 'supplies' | 'maintenance' | 'other', presetType?: NonNullable<Expense['expenseType']>) => {
     setEditingExpense(null);
     setExpenseTitle(presetTitle || '');
     setExpenseCategory(presetCat || 'supplies');
+    setExpenseType(presetType || (presetCat === 'maintenance' ? 'maintenance' : presetCat === 'supplies' || !presetCat ? 'supplies' : 'other'));
     setExpenseAmount('');
     setExpenseDate(new Date().toISOString().split('T')[0]);
     setExpenseNote('');
@@ -156,6 +165,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     setEditingExpense(exp);
     setExpenseTitle(exp.title);
     setExpenseCategory(exp.category);
+    setExpenseType(inferExpenseType(exp));
     setExpenseAmount(exp.amount);
     setExpenseDate(exp.date);
     setExpenseNote(exp.note || '');
@@ -181,10 +191,12 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       id: editingExpense ? editingExpense.id : undefined,
       title: expenseTitle.trim(),
       category: expenseCategory,
+      expenseType,
       amount: amt,
       date: expenseDate,
       note: expenseNote.trim(),
       isFixed: isFixedExpense,
+      recurringPeriod: isFixedExpense ? 'monthly' as const : 'none' as const,
       invoiceImageUrl: expenseInvoiceImage
     };
 
@@ -420,26 +432,51 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </button>
               <button
                 type="button"
-                onClick={() => handleOpenAddExpense('إيجار مقر العيادة الشهرية', 'fixed')}
+                onClick={() => handleOpenAddExpense('إيجار مقر العيادة الشهرية', 'fixed', 'rent')}
                 className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center gap-1"
               >
                 🏢 إيجار المقر
               </button>
               <button
                 type="button"
-                onClick={() => handleOpenAddExpense('مرتب السكرتيرة / المساعد', 'fixed')}
+                onClick={() => handleOpenAddExpense('مرتب السكرتيرة / المساعد', 'fixed', 'salary')}
                 className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center gap-1"
               >
                 👩‍💼 مرتب السكرتيرة
               </button>
               <button
                 type="button"
-                onClick={() => handleOpenAddExpense('فاتورة الكهرباء والمياه', 'fixed')}
+                onClick={() => handleOpenAddExpense('فاتورة الكهرباء', 'fixed', 'electricity')}
                 className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center gap-1"
               >
                 ⚡ فاتورة الكهرباء
               </button>
+              <button
+                type="button"
+                onClick={() => handleOpenAddExpense('فاتورة المياه', 'fixed', 'water')}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center gap-1"
+              >
+                💧 فاتورة المياه
+              </button>
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div><h3 className="font-bold text-sm text-slate-900">مصروفات الفترة</h3><p className="text-xs text-slate-500">كل فاتورة تُحسب مرة واحدة في شهر تاريخ الفاتورة.</p></div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input aria-label="شهر المصروفات" type="month" value={expenseMonth === 'all' ? '' : expenseMonth} onChange={e => setExpenseMonth(e.target.value || currentMonth)} className="border border-slate-300 rounded-xl p-2 bg-white" />
+                <button type="button" onClick={() => setExpenseMonth(currentMonth)} className="px-3 py-2 rounded-xl bg-white border text-xs font-bold">الشهر الحالي</button>
+                <button type="button" onClick={() => setExpenseMonth('all')} className={`px-3 py-2 rounded-xl border text-xs font-bold ${expenseMonth === 'all' ? 'bg-slate-900 text-white' : 'bg-white'}`}>كل الفترات</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center">
+              {[
+                ['الإيجار', monthlyBreakdown.rent], ['الكهرباء', monthlyBreakdown.electricity], ['المياه', monthlyBreakdown.water],
+                ['الرواتب', monthlyBreakdown.salary], ['الخامات', monthlyBreakdown.supplies], ['الصيانة', monthlyBreakdown.maintenance], ['أخرى', monthlyBreakdown.other]
+              ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white border p-2"><span className="block text-[11px] text-slate-500">{label}</span><strong className="text-xs text-slate-900">{maskMoney(Number(amount))}</strong></div>)}
+            </div>
+            <p className="text-sm font-black text-rose-700">الإجمالي: {maskMoney(monthlyTotal)} · {monthExpenses.length} بند</p>
           </div>
 
           {/* Search & Category Filter Bar */}
@@ -455,7 +492,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               />
             </div>
 
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs shrink-0">
+            <div className="flex flex-wrap items-center gap-2 pb-1 text-xs shrink-0">
               <button
                 type="button"
                 onClick={() => setExpenseFilterCategory('all')}
@@ -463,7 +500,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   expenseFilterCategory === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                الكل ({expenses.length})
+                الكل ({monthExpenses.length})
               </button>
               <button
                 type="button"
@@ -472,7 +509,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   expenseFilterCategory === 'supplies' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                📦 خامات ومستلزمات ({expenses.filter(e => e.category === 'supplies').length})
+                📦 خامات ومستلزمات ({monthExpenses.filter(e => e.category === 'supplies').length})
               </button>
               <button
                 type="button"
@@ -481,18 +518,18 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   expenseFilterCategory === 'fixed' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-900 border border-amber-200'
                 }`}
               >
-                📌 ثابتة ({expenses.filter(e => e.isFixed || e.category === 'fixed').length})
+                📌 ثابتة ({monthExpenses.filter(e => e.isFixed || e.category === 'fixed').length})
               </button>
             </div>
           </div>
 
-          {expenses.length === 0 ? (
+          {monthExpenses.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-slate-200">
               لا توجد مصروفات مسجلة بعد بالعيادة. يمكنك المسح الضوئي لفواتيرك أو استخدام الإدخال السريع.
             </div>
           ) : (
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden">
-              {expenses
+              {monthExpenses
                 .filter(exp => {
                   if (expenseFilterCategory === 'fixed' && !(exp.isFixed || exp.category === 'fixed')) return false;
                   if (expenseFilterCategory === 'supplies' && exp.category !== 'supplies') return false;
@@ -656,13 +693,20 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 </label>
                 <select
                   value={expenseCategory}
-                  onChange={e => setExpenseCategory(e.target.value as any)}
+                  onChange={e => { const category = e.target.value as Expense['category']; setExpenseCategory(category); setExpenseType(category === 'supplies' ? 'supplies' : category === 'maintenance' ? 'maintenance' : 'other'); }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0f3d3e]"
                 >
                   <option value="fixed">📌 مصروفات ثابتة (إيجارات/راتب سكرتيرة/كهرباء)</option>
                   <option value="supplies">📦 خامات ومستلزمات طبيب</option>
                   <option value="maintenance">🛠️ صيانة وتشغيل الأجهزة</option>
                   <option value="other">💬 مصروفات نثرية وأخرى</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">نوع المصروف بالتحديد</label>
+                <select value={expenseType} onChange={e => setExpenseType(e.target.value as NonNullable<Expense['expenseType']>)} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold">
+                  <option value="rent">🏢 إيجار</option><option value="electricity">⚡ كهرباء</option><option value="water">💧 مياه</option><option value="salary">👩‍💼 رواتب</option><option value="supplies">📦 خامات ومستلزمات</option><option value="maintenance">🛠️ صيانة</option><option value="other">أخرى</option>
                 </select>
               </div>
 
@@ -674,8 +718,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500"
                 />
                 <div>
-                  <span className="font-bold text-amber-950 block">تصنيف كمصروف ثابت (دورى)</span>
-                  <span className="text-[10px] text-amber-800">مثل الإيجار وراتب السكرتيرة والفواتير الشهرية</span>
+                  <span className="font-bold text-amber-950 block">تصنيف كمصروف شهري ثابت</span>
+                  <span className="text-[10px] text-amber-800">للتقارير فقط؛ تسجل القيد الفعلي كل شهر حتى لا يُحسب مبلغ لم يُدفع.</span>
                 </div>
               </label>
 
@@ -889,4 +933,3 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 });
 
 SummaryView.displayName = 'SummaryView';
-

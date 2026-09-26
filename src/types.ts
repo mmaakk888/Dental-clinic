@@ -50,6 +50,7 @@ export interface Expense {
   note?: string;
   isFixed?: boolean;
   recurringPeriod?: 'monthly' | 'yearly' | 'none';
+  expenseType?: 'rent' | 'electricity' | 'water' | 'salary' | 'supplies' | 'maintenance' | 'other';
   invoiceImageUrl?: string;
   
   // Extended ERP Supplier Invoice Fields
