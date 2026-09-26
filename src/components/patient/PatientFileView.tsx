@@ -20,7 +20,7 @@ import {
 import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBadge';
 import { buildAppointmentReminderText, getWhatsAppUrl as formatWhatsAppUrl } from '../../utils/whatsappUtils';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
-import { getPatientFinancialSummary } from '../../utils/financials';
+import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
 
 interface PatientFileViewProps {
   patient: Patient;
@@ -161,7 +161,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   const selectedToothFinancials = useMemo(() => {
     const req = selectedToothSessions.reduce((acc, s) => acc + s.amount, 0);
-    const pd = selectedToothSessions.reduce((acc, s) => acc + s.paid, 0);
+    const pd = selectedToothSessions.reduce((acc, s) => acc + getSessionCollected(s), 0);
     const rem = Math.max(0, req - pd);
     return { req, pd, rem };
   }, [selectedToothSessions]);
@@ -308,6 +308,11 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [manualAmount, setManualAmount] = useState<number | ''>('');
   const [paidNow, setPaidNow] = useState<number | ''>('');
   const [serviceDate, setServiceDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [includeExaminationFee, setIncludeExaminationFee] = useState(false);
+  const [examinationFeeAmount, setExaminationFeeAmount] = useState<number | ''>(200);
+  const [treatmentStage, setTreatmentStage] = useState<NonNullable<Session['treatmentStage']>>('single');
+  const [rootCanalStatus, setRootCanalStatus] = useState<NonNullable<Session['rootCanalStatus']>>('access_cleaning');
+  const [serviceNotes, setServiceNotes] = useState('');
 
   // Payment Installment Form State
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
@@ -321,6 +326,11 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     setManualAmount(600);
     setPaidNow('');
     setServiceDate(new Date().toISOString().split('T')[0]);
+    setIncludeExaminationFee(false);
+    setExaminationFeeAmount(200);
+    setTreatmentStage('single');
+    setRootCanalStatus('access_cleaning');
+    setServiceNotes('');
 
     const parsed = parseCompositeToothId(compositeToothId);
     if (parsed) setBridgeEndToothNum(parsed.number);
@@ -337,6 +347,11 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     setManualAmount('');
     setPaidNow('');
     setServiceDate(new Date().toISOString().split('T')[0]);
+    setIncludeExaminationFee(false);
+    setExaminationFeeAmount(200);
+    setTreatmentStage('single');
+    setRootCanalStatus('access_cleaning');
+    setServiceNotes('');
     setIsServiceModalOpen(true);
   };
 
@@ -372,12 +387,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const handleSaveService = (e: React.FormEvent) => {
     e.preventDefault();
 
-    let totalCost = 0;
+    let treatmentCost = 0;
     if (serviceType === 'تركيبات - ثابتة' && selectedToothId) {
-      totalCost = typeof manualAmount === 'number' ? manualAmount : autoCrownsTotal;
+      treatmentCost = typeof manualAmount === 'number' ? manualAmount : autoCrownsTotal;
     } else {
-      totalCost = typeof manualAmount === 'number' ? manualAmount : 0;
+      treatmentCost = typeof manualAmount === 'number' ? manualAmount : 0;
     }
+
+    const examFee = includeExaminationFee && typeof examinationFeeAmount === 'number'
+      ? Math.max(0, examinationFeeAmount)
+      : 0;
+    const totalCost = treatmentCost + examFee;
 
     if (totalCost <= 0) {
       validationFail('serviceModal', 'input-service-amount', 'يرجى كتابة تكلفة الخدمة بصورة صحيحة');
@@ -402,7 +422,15 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       remain: remainVal,
       date: serviceDate,
       payDate: serviceDate,
-      paymentsLog: paidVal > 0 ? [{ id: Math.random().toString(), amount: paidVal, date: serviceDate }] : []
+      paymentsLog: paidVal > 0 ? [{ id: crypto.randomUUID(), amount: paidVal, date: serviceDate, paymentMethod: 'cash', createdAt: new Date().toISOString() }] : [],
+      examinationFee: examFee,
+      treatmentFee: treatmentCost,
+      services: treatmentCost > 0 ? [{ id: crypto.randomUUID(), name: serviceType, price: treatmentCost }] : [],
+      procedurePerformed: serviceType,
+      visitNotes: serviceNotes.trim() || undefined,
+      treatmentStage,
+      rootCanalStatus: serviceType.includes('عصب') ? rootCanalStatus : undefined,
+      paymentMethod: 'cash'
     };
 
     onSaveSession(patient.id, newSession);
@@ -425,20 +453,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     }
 
     if (amt > selectedSessionForPayment.remain) {
-      askConfirm({
-        title: 'تأكيد تحصيل مبلغ أكبر من المتبقي',
-        message: `المبلغ المدفوع (${amt} ج.م) أكبر من المتبقي (${selectedSessionForPayment.remain} ج.م). هل ترغب في المتابعة؟`,
-        confirmLabel: 'تأكيد التحصيل',
-        tone: 'warning',
-        onConfirm: () => {
-          onAddPaymentInstallment(patient.id, selectedSessionForPayment.id, {
-            amount: amt,
-            date: paymentDate
-          });
-          setIsPaymentModalOpen(false);
-          showToast('تم تسديد الدفعة المالية بنجاح', 'success');
-        }
-      });
+      validationFail('paymentModal', 'input-payment-amount', `المبلغ أكبر من المتبقي (${selectedSessionForPayment.remain} ج.م)`);
       return;
     }
 
@@ -474,6 +489,89 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     if (!toothSheetId) return null;
     return getToothStatusForPatient(patient.sessions, toothSheetId);
   }, [toothSheetId, patient.sessions]);
+
+  const renderVisitDetails = () => (
+    <>
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <strong className="block text-xs text-slate-800">رسوم الكشف لهذه الزيارة</strong>
+            <span className="text-[11px] text-slate-500">اختيارية وتُضاف مرة واحدة إلى إجمالي الزيارة</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIncludeExaminationFee(value => !value)}
+            className={`min-h-[44px] px-3 rounded-xl text-xs font-black border transition-colors ${includeExaminationFee ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white text-slate-700 border-slate-300'}`}
+          >
+            {includeExaminationFee ? 'تمت إضافة الكشف' : 'بدون كشف'}
+          </button>
+        </div>
+        {includeExaminationFee && (
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">قيمة الكشف (ج.م)</label>
+            <input
+              type="number"
+              min="0"
+              value={examinationFeeAmount}
+              onChange={e => setExaminationFeeAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
+              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold"
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-bold text-slate-700 mb-1">مرحلة العلاج</label>
+          <select
+            value={treatmentStage}
+            onChange={e => setTreatmentStage(e.target.value as NonNullable<Session['treatmentStage']>)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+          >
+            <option value="single">جلسة واحدة / مكتملة</option>
+            <option value="first">الجلسة الأولى</option>
+            <option value="second">الجلسة الثانية</option>
+            <option value="third">الجلسة الثالثة</option>
+            <option value="follow_up">جلسة متابعة</option>
+          </select>
+        </div>
+        {serviceType.includes('عصب') && (
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">ما تم في علاج العصب</label>
+            <select
+              value={rootCanalStatus}
+              onChange={e => setRootCanalStatus(e.target.value as NonNullable<Session['rootCanalStatus']>)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+            >
+              <option value="access_cleaning">فتح وتنظيف القنوات</option>
+              <option value="working_length">تحديد الأطوال وتجهيز القنوات</option>
+              <option value="canal_filled">تم حشو العصب</option>
+              <option value="impression">تم أخذ المقاس</option>
+              <option value="final_restoration">تم الحشو / التركيب النهائي</option>
+            </select>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات الجلسة</label>
+        <textarea
+          value={serviceNotes}
+          onChange={e => setServiceNotes(e.target.value)}
+          rows={2}
+          placeholder="التشخيص، ما تم اليوم، وما المطلوب في الجلسة القادمة"
+          className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 rounded-xl bg-[#0f3d3e] px-3 py-2.5 text-white">
+        <span className="text-xs font-bold">إجمالي الزيارة</span>
+        <strong className="font-mono text-sm">
+          {((typeof manualAmount === 'number' ? manualAmount : 0) + (includeExaminationFee && typeof examinationFeeAmount === 'number' ? examinationFeeAmount : 0)).toLocaleString()} ج.م
+        </strong>
+      </div>
+    </>
+  );
 
   return (
     <div className="space-y-4 pb-28 font-tajawal antialiased text-slate-800">
@@ -889,7 +987,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                       className="px-4 py-2.5 rounded-2xl bg-[#0f3d3e] hover:bg-[#134d4f] text-white font-black text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md min-h-[44px] active:scale-95 touch-manipulation w-full sm:w-auto justify-center"
                     >
                       <Plus className="w-4 h-4 text-[#c9a227]" />
-                      <span>➕ تسجيل خدمة على هذه السنة</span>
+                      <span>تسجيل خدمة</span>
                     </button>
                   </div>
 
@@ -931,7 +1029,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
                     {selectedToothSessions.length === 0 ? (
                       <p className="text-xs text-slate-500 italic p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-center">
-                        لا توجد خدمات مسجلة سابقاً على هذه السنة.
+                        لا توجد خدمات مسجلة لهذا السن.
                       </p>
                     ) : (
                       <div className="space-y-2">
@@ -1605,6 +1703,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 />
               </div>
 
+              {renderVisitDetails()}
+
               <div className="flex items-center gap-2 pt-2">
                 <button
                   type="button"
@@ -1672,6 +1772,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:outline-none focus:border-[#0f3d3e]"
                 />
               </div>
+
+              {renderVisitDetails()}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>

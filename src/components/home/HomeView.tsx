@@ -5,6 +5,7 @@ import {
   Stethoscope, UserPlus, Users, X, Zap
 } from 'lucide-react';
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
+import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 
 interface HomeViewProps {
   clinicName: string;
@@ -78,16 +79,14 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
     const dayAppointments = appointments
       .filter(item => item.date === today)
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
-    const collected = patients.reduce((total, patient) => total + (patient.payments || [])
-      .filter(payment => payment.date === today)
-      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0), 0);
+    const dailyCollections = calculateDailyCollections(patients, date => date === today);
+    const collected = dailyCollections.totalIncomeCollected;
     const spent = expenses.filter(expense => expense.date === today)
       .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-    const outstanding = patients.reduce((total, patient) => {
-      const required = (patient.sessions || []).reduce((sum, session) => sum + Number(session.amount || 0), 0);
-      const paid = (patient.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-      return total + Math.max(0, required - paid);
-    }, 0);
+    const outstanding = patients.reduce(
+      (total, patient) => total + getPatientFinancialSummary(patient).totalRemaining,
+      0
+    );
     return {
       dayAppointments, collected, spent, outstanding,
       waiting: dayAppointments.filter(item => item.status === 'waiting' || item.status === 'confirmed').length,
@@ -150,9 +149,15 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 
       <section className="dashboard-metrics">
         <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الكشف'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />
-        <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note="المدفوعات المسجلة اليوم" icon={<CreditCard />} tone="emerald" onClick={() => onNavigate(canFinance ? 'summary' : 'secretary-desk')} />
-        <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={() => onNavigate('secretary-desk')} />
-        <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />
+        {canFinance ? (
+          <>
+            <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note="اضغط لمعرفة من دفع اليوم" icon={<CreditCard />} tone="emerald" onClick={() => onOpenDailyReport ? onOpenDailyReport() : onNavigate('summary')} />
+            <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={() => onNavigate('summary')} />
+          </>
+        ) : (
+          <MetricCard title="تحصيل مريض" value="تسجيل دفعة" note="بدون عرض إجمالي إيراد العيادة" icon={<CreditCard />} tone="emerald" onClick={() => onNavigate('secretary-desk')} />
+        )}
+        {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
       </section>
 
       <div className="dashboard-main-grid">

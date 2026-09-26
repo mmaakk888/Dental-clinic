@@ -6,7 +6,6 @@ import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
 import { MobileBottomNav } from './components/navigation/MobileBottomNav';
-import { QuickActions } from './components/navigation/QuickActions';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { LoginModal } from './components/auth/LoginModal';
 import { OfflineSyncBanner } from './components/common/OfflineSyncBanner';
@@ -503,8 +502,8 @@ export function AppContent() {
       const updatedSessions = p.sessions.map(s => {
         if (s.id !== sessionId) return s;
         const newPaid = s.paid + installment.amount;
-        const newRemain = Math.max(0, s.amount - newPaid);
-        const newLog = [...(s.paymentsLog || []), { id: instId, amount: installment.amount, date: installment.date }];
+        const newRemain = Math.max(0, s.amount - newPaid - (s.discount || 0));
+        const newLog = [...(s.paymentsLog || []), { id: instId, amount: installment.amount, date: installment.date, paymentMethod: 'cash' as const, createdAt: new Date().toISOString() }];
         return {
           ...s,
           paid: newPaid,
@@ -746,28 +745,6 @@ export function AppContent() {
         onLogout={handleLogout}
         onTogglePrivacyMode={handleTogglePrivacyMode}
         onNavigate={handleNavigateWithSubTab}
-        onSelectPatient={handleSelectPatient}
-      />
-
-      <QuickActions
-        activeView={activeView}
-        currentUser={currentUser}
-        patients={patients}
-        appointments={appointments}
-        labCases={labCases}
-        expenses={expenses}
-        onNavigate={handleNavigateWithSubTab}
-        onOpenWalkIn={() => setIsWalkInModalOpen(true)}
-        onOpenScheduleModal={() => setIsSmartScheduleOpen(true)}
-        onOpenDailyReport={() => setIsDailyReportModalOpen(true)}
-        onOpenInvoiceModal={() => setIsInvoiceOcrOpen(true)}
-        onTriggerAddExpense={handleTriggerAddExpense}
-        onOpenApprovalQueue={() => setIsApprovalQueueOpen(true)}
-        onOpenEndoHelper={(tooth, patient) => {
-          setEndoToothNumber(tooth || '21');
-          setEndoPatientName(patient || '');
-          setIsEndoHelperOpen(true);
-        }}
         onSelectPatient={handleSelectPatient}
       />
 

@@ -156,6 +156,8 @@ export interface Session {
   visitStatus?: 'completed' | 'follow_up';
   doctorName?: string;
   time?: string;
+  treatmentStage?: 'single' | 'first' | 'second' | 'third' | 'follow_up';
+  rootCanalStatus?: 'access_cleaning' | 'working_length' | 'canal_filled' | 'impression' | 'final_restoration';
 }
 
 export interface GeneralPayment {

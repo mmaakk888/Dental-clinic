@@ -264,11 +264,11 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
           {/* RTL Left Side Actions: Privacy Toggle, Connection Status & Notification Bell */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             
-            {/* PERMANENT FINANCIAL PRIVACY QUICK TOGGLE ICON */}
+            {/* Patient-facing privacy toggle for mirrored clinic displays */}
             <button
               type="button"
               onClick={onTogglePrivacyMode}
-              className={`w-9.5 h-9.5 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl transition-all cursor-pointer border shrink-0 touch-manipulation active:scale-95 min-h-[44px] ${
+              className={`h-11 px-2.5 sm:px-3 flex items-center justify-center gap-2 rounded-xl transition-all cursor-pointer border shrink-0 touch-manipulation active:scale-95 min-h-[44px] ${
                 isPrivacyMode 
                   ? 'bg-amber-50 hover:bg-amber-100/90 text-amber-800 border-amber-300/80 shadow-2xs' 
                   : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border-emerald-300/80 shadow-2xs'
@@ -280,6 +280,9 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               ) : (
                 <Eye className="w-4.5 h-4.5 text-emerald-700 animate-fadeIn" />
               )}
+              <span className="hidden lg:inline text-[11px] font-black">
+                {isPrivacyMode ? 'وضع المريض مُفعّل' : 'تفعيل وضع المريض'}
+              </span>
             </button>
 
             {/* PERMANENT CONNECTION STATUS INDICATOR BUTTON */}

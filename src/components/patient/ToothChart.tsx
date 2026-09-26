@@ -212,7 +212,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
   onSelectTooth: externalOnSelectTooth
 }) => {
   const [dentitionType, setDentitionType] = useState<'adult' | 'pediatric'>('adult');
-  const [chartStyle, setChartStyle] = useState<'anatomical' | 'boxes'>('anatomical');
+  const [chartStyle] = useState<'anatomical' | 'boxes'>('boxes');
   const [internalSelectedToothId, setInternalSelectedToothId] = useState<string | null>(null);
 
   const selectedToothId = externalSelectedToothId !== undefined ? externalSelectedToothId : internalSelectedToothId;
@@ -265,13 +265,12 @@ export const ToothChart: React.FC<ToothChartProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Dentition Selector Toggle Bar + Visual Style Switcher + Legend Header */}
+      {/* Dentition selector + compact status legend */}
       <div className="bg-white p-4 rounded-3xl border border-slate-200 text-xs space-y-4 shadow-2xs">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-3">
+        <div className="flex items-center justify-center gap-3 border-b border-slate-100 pb-3">
           {/* Adult / Pediatric Switcher Segmented Control */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-slate-800 font-tajawal text-xs">نوع الفك:</span>
-            <div className="inline-flex p-1 bg-slate-100 rounded-2xl border border-slate-200/90 shadow-inner">
+          <div className="w-full sm:w-auto">
+            <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-2xl border border-slate-200/90 shadow-inner">
               <button
                 type="button"
                 onClick={() => setDentitionType('adult')}
@@ -279,7 +278,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                   !isPediatric ? 'bg-[#0f3d3e] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                أسنان دائمة (Adult - 32)
+                أسنان دائمة
               </button>
               <button
                 type="button"
@@ -288,37 +287,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                   isPediatric ? 'bg-[#0f3d3e] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                أسنان لبنية (Pediatric - A to E)
-              </button>
-            </div>
-          </div>
-
-          {/* Chart View Style Switcher (Anatomical vs Boxes) */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-slate-800 font-tajawal text-xs">طريقة العرض:</span>
-            <div className="inline-flex p-1 bg-amber-50/80 rounded-2xl border border-amber-200 shadow-inner">
-              <button
-                type="button"
-                onClick={() => setChartStyle('anatomical')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                  chartStyle === 'anatomical'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-amber-900 hover:bg-amber-100'
-                }`}
-              >
-                <span>🦷 تشريحي</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setChartStyle('boxes')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                  chartStyle === 'boxes'
-                    ? 'bg-[#0f3d3e] text-white shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>مربعات</span>
+                أسنان لبنية
               </button>
             </div>
           </div>
@@ -357,23 +326,23 @@ export const ToothChart: React.FC<ToothChartProps> = ({
       </div>
 
       {/* Main Diagram Area */}
-      <div className="bg-white rounded-3xl p-5 md:p-8 border border-slate-200 shadow-sm relative overflow-x-auto scrollbar-none">
+      <div className="bg-white rounded-3xl p-3 sm:p-5 md:p-8 border border-slate-200 shadow-sm relative overflow-hidden">
         {/* Label Top */}
         <div className="text-center font-bold text-[#0f3d3e] font-tajawal text-sm tracking-wider mb-4 flex items-center justify-center gap-2">
           <span>▲ الفك العلوي ({isPediatric ? 'أسنان لبنية' : 'أسنان دائمة'})</span>
         </div>
 
         {/* Cross Container */}
-        <div className="relative min-w-[500px] max-w-3xl mx-auto py-2">
+        <div className="relative max-w-3xl mx-auto py-2">
           {/* Vertical Cross Line */}
-          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-slate-200 pointer-events-none" />
+          <div className="hidden sm:block absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-slate-200 pointer-events-none" />
           {/* Horizontal Cross Line */}
-          <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-slate-200 pointer-events-none" />
+          <div className="hidden sm:block absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-slate-200 pointer-events-none" />
 
           {/* Grid Layout of 4 Quadrants */}
-          <div className="grid grid-cols-2 gap-x-6 sm:gap-x-10 gap-y-8 relative z-10">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 sm:gap-x-10 gap-y-4 sm:gap-y-8 relative z-10">
             {/* Upper Right Quadrant (UR) */}
-            <div className="flex items-center justify-end gap-1.5 sm:gap-2">
+            <div className="flex items-center justify-center sm:justify-end gap-1 sm:gap-2">
               {(isPediatric ? pedsUR : adultUR).map(item => {
                 const compositeId = `ur${item}`;
                 const res = getToothStatusForPatient(patient.sessions, compositeId);
@@ -400,7 +369,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                     key={compositeId}
                     type="button"
                     onClick={() => handleToothClick(compositeId)}
-                    className={`relative w-9 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
+                    className={`relative w-8 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
                       isSelected ? 'ring-3 ring-[#c9a227] scale-110 z-20 shadow-lg' : isDimmed ? 'opacity-40 scale-95' : ''
                     }`}
                   >
@@ -414,7 +383,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
             </div>
 
             {/* Upper Left Quadrant (UL) */}
-            <div className="flex items-center justify-start gap-1.5 sm:gap-2">
+            <div className="flex items-center justify-center sm:justify-start gap-1 sm:gap-2">
               {(isPediatric ? pedsUL : adultUL).map(item => {
                 const compositeId = `ul${item}`;
                 const res = getToothStatusForPatient(patient.sessions, compositeId);
@@ -441,7 +410,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                     key={compositeId}
                     type="button"
                     onClick={() => handleToothClick(compositeId)}
-                    className={`relative w-9 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
+                    className={`relative w-8 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
                       isSelected ? 'ring-3 ring-[#c9a227] scale-110 z-20 shadow-lg' : isDimmed ? 'opacity-40 scale-95' : ''
                     }`}
                   >
@@ -455,7 +424,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
             </div>
 
             {/* Lower Right Quadrant (LR) */}
-            <div className="flex items-center justify-end gap-1.5 sm:gap-2">
+            <div className="flex items-center justify-center sm:justify-end gap-1 sm:gap-2">
               {(isPediatric ? pedsLR : adultLR).map(item => {
                 const compositeId = `lr${item}`;
                 const res = getToothStatusForPatient(patient.sessions, compositeId);
@@ -482,7 +451,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                     key={compositeId}
                     type="button"
                     onClick={() => handleToothClick(compositeId)}
-                    className={`relative w-9 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
+                    className={`relative w-8 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
                       isSelected ? 'ring-3 ring-[#c9a227] scale-110 z-20 shadow-lg' : isDimmed ? 'opacity-40 scale-95' : ''
                     }`}
                   >
@@ -496,7 +465,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
             </div>
 
             {/* Lower Left Quadrant (LL) */}
-            <div className="flex items-center justify-start gap-1.5 sm:gap-2">
+            <div className="flex items-center justify-center sm:justify-start gap-1 sm:gap-2">
               {(isPediatric ? pedsLL : adultLL).map(item => {
                 const compositeId = `ll${item}`;
                 const res = getToothStatusForPatient(patient.sessions, compositeId);
@@ -523,7 +492,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                     key={compositeId}
                     type="button"
                     onClick={() => handleToothClick(compositeId)}
-                    className={`relative w-9 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
+                    className={`relative w-8 h-11 sm:w-11 sm:h-13 rounded-xl border text-sm font-bold transition-all cursor-pointer flex flex-col items-center justify-center ${getStatusColor(res.status)} ${
                       isSelected ? 'ring-3 ring-[#c9a227] scale-110 z-20 shadow-lg' : isDimmed ? 'opacity-40 scale-95' : ''
                     }`}
                   >
@@ -545,7 +514,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
       </div>
 
       {/* Selected Tooth Detail Panel */}
-      {selectedToothId && (
+      {false && selectedToothId && (
         <div className="bg-gradient-to-br from-teal-900/5 via-slate-50 to-amber-50/20 rounded-3xl p-5 sm:p-6 border-2 border-[#0f3d3e]/20 shadow-md space-y-4 animate-fadeIn">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
             <div className="flex items-center gap-3">
@@ -574,7 +543,7 @@ export const ToothChart: React.FC<ToothChartProps> = ({
                 className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-[#0f3d3e] hover:bg-[#134d4f] text-white text-xs font-black shadow-md transition-all cursor-pointer active:scale-95 min-h-[46px] touch-manipulation"
               >
                 <Plus className="w-4 h-4 text-[#c9a227]" />
-                <span>تسجيل خدمة على هذه السنة</span>
+                <span>تسجيل خدمة</span>
               </button>
 
               <button
