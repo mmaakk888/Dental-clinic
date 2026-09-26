@@ -1020,6 +1020,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <label className="space-y-2 text-right">
+                <span className="text-xs font-bold text-slate-700">عنوان الترحيب في لوحة التحكم</span>
+                <input
+                  type="text"
+                  value={tempLabels.welcomeText}
+                  onChange={(event) => setTempLabels({ ...tempLabels, welcomeText: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="مرحباً بك في عيادتك"
+                />
+              </label>
+              <label className="space-y-2 text-right">
+                <span className="text-xs font-bold text-slate-700">الوصف المختصر للصفحة الرئيسية</span>
+                <input
+                  type="text"
+                  value={tempLabels.homeSubtitle}
+                  onChange={(event) => setTempLabels({ ...tempLabels, homeSubtitle: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="إدارة يوم العمل من مكان واحد"
+                />
+              </label>
+            </div>
+
             <div className="space-y-4">
               {tempTileOrder.map((tileKey, idx) => (
                 <div key={tileKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
