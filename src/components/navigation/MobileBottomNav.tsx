@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ActiveView, User as UserType, Appointment, LabCase } from '../../types';
+import { ActiveView, User as UserType, Appointment, LabCase, UILabels } from '../../types';
 import { 
   Home, Users, Calendar, Landmark, MoreHorizontal, Smartphone, 
   Microscope, Sliders, X, ChevronLeft, CreditCard 
@@ -7,6 +7,7 @@ import {
 
 interface MobileBottomNavProps {
   activeView: ActiveView;
+  labels: UILabels;
   currentUser: UserType | null;
   appointments?: Appointment[];
   labCases?: LabCase[];
@@ -15,6 +16,7 @@ interface MobileBottomNavProps {
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
   activeView,
+  labels,
   currentUser,
   appointments = [],
   labCases = [],
@@ -35,21 +37,21 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
 
     const homeItem = {
       key: 'home' as ActiveView,
-      label: 'الرئيسية',
+      label: labels.tabs.home || 'الرئيسية',
       icon: <Home className="w-5.5 h-5.5 shrink-0" />,
       allowed: true,
     };
 
     const patientsItem = {
       key: 'patients' as ActiveView,
-      label: 'المرضى',
+      label: labels.tiles.patients?.title || 'المرضى',
       icon: <Users className="w-5.5 h-5.5 shrink-0" />,
       allowed: currentUser ? currentUser.permissions.patientView : true,
     };
 
     const apptsItem = {
       key: 'appointments' as ActiveView,
-      label: 'المواعيد',
+      label: labels.tiles.appointments?.title || 'المواعيد',
       icon: <Calendar className="w-5.5 h-5.5 shrink-0" />,
       badge: todayApptsCount,
       allowed: currentUser ? currentUser.permissions.appointments : true,
@@ -57,14 +59,14 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
 
     const collectionsItem = {
       key: 'secretary-desk' as ActiveView,
-      label: 'التحصيل',
+      label: labels.tabs['secretary-desk'] || 'التحصيل',
       icon: <CreditCard className="w-5.5 h-5.5 shrink-0 text-emerald-600" />,
       allowed: true,
     };
 
     const financeItem = {
       key: 'summary' as ActiveView,
-      label: 'المالية',
+      label: labels.tiles.summary?.title || 'المالية',
       icon: <Landmark className="w-5.5 h-5.5 shrink-0 text-indigo-600" />,
       allowed: currentUser ? currentUser.permissions.summary : true,
     };
@@ -84,20 +86,20 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
       : [homeItem, patientsItem, apptsItem, financeItem, moreItem];
 
     return rawItems.filter(i => i.allowed);
-  }, [currentUser, todayApptsCount, pendingLabCount]);
+  }, [currentUser, todayApptsCount, pendingLabCount, labels]);
 
   const extraNavItems = useMemo(() => {
     return [
       {
         key: 'secretary-desk' as ActiveView,
-        label: 'مكتب الاستقبال والتحصيل',
+        label: labels.tabs['secretary-desk'] || 'مكتب الاستقبال والتحصيل',
         desc: 'إدارة المرضى والحجوزات السريعة',
         icon: <Smartphone className="w-5.5 h-5.5 text-emerald-600" />,
         allowed: true,
       },
       {
         key: 'lab' as ActiveView,
-        label: 'التركيبات',
+        label: labels.tiles.lab?.title || 'التركيبات',
         desc: 'متابعة طلبات وتكاليف التركيبات',
         icon: <Microscope className="w-5.5 h-5.5 text-purple-600" />,
         badge: pendingLabCount,
@@ -105,13 +107,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
       },
       {
         key: 'settings' as ActiveView,
-        label: 'إعدادات النظام والتحكم',
+        label: labels.tiles.settings?.title || 'إعدادات النظام والتحكم',
         desc: 'ضبط الأسعار، الأطباء والنسخ',
         icon: <Sliders className="w-5.5 h-5.5 text-slate-600" />,
         allowed: currentUser ? currentUser.permissions.controlPanel : true,
       },
     ].filter(i => i.allowed);
-  }, [currentUser, pendingLabCount]);
+  }, [currentUser, pendingLabCount, labels]);
 
   const handleSelectTab = (key: string) => {
     if (key === 'more') {

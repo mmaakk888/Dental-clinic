@@ -740,6 +740,7 @@ export function AppContent() {
       <OfflineSyncBanner />
       <HeaderNavbar
         activeView={activeView}
+        labels={labels}
         activeSubTab={activeSubTab}
         clinicName={clinicName}
         clinicLogo={clinicLogo}
@@ -965,6 +966,7 @@ export function AppContent() {
 
       <MobileBottomNav
         activeView={activeView}
+        labels={labels}
         currentUser={currentUser}
         appointments={appointments}
         labCases={labCases}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ActiveView, Patient, Appointment, LabCase, Expense, User as UserType, DeviceMode } from '../../types';
+import { ActiveView, Patient, Appointment, LabCase, Expense, User as UserType, DeviceMode, UILabels } from '../../types';
 import { 
   Home, Users, Calendar, Microscope, Landmark, Sliders, Search, Command, 
   Eye, EyeOff, LogOut, Stethoscope, Bell, ChevronDown, CheckCircle2, ArrowRight, X, Shield,
@@ -12,6 +12,7 @@ import { OfflineSyncEngine, PendingMutation } from '../../utils/offlineSync';
 interface HeaderNavbarProps {
   activeView: ActiveView;
   activeSubTab?: string;
+  labels: UILabels;
   clinicName: string;
   clinicLogo: string | null;
   patients: Patient[];
@@ -34,6 +35,7 @@ interface HeaderNavbarProps {
 
 export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   activeView,
+  labels,
   clinicName,
   clinicLogo,
   patients,
@@ -170,13 +172,13 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
 
   // Navigation Items
   const navItems = [
-    { key: 'home', label: 'الرئيسية', icon: <Home className="w-4 h-4 text-indigo-500" />, hideOnMobile: true },
-    { key: 'secretary-desk', label: 'الاستقبال', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
-    { key: 'patients', label: 'المرضى', icon: <Users className="w-4 h-4 text-indigo-600" /> },
-    { key: 'appointments', label: 'المواعيد', icon: <Calendar className="w-4 h-4 text-amber-600" /> },
-    { key: 'lab', label: 'التركيبات', icon: <Microscope className="w-4 h-4 text-purple-600" /> },
-    { key: 'summary', label: 'المالية', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
-    { key: 'settings', label: 'الإعدادات', icon: <Sliders className="w-4 h-4 text-slate-600" /> },
+    { key: 'home', label: labels.tabs.home || 'الرئيسية', icon: <Home className="w-4 h-4 text-indigo-500" />, hideOnMobile: true },
+    { key: 'secretary-desk', label: labels.tabs['secretary-desk'] || 'الاستقبال', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
+    { key: 'patients', label: labels.tiles.patients?.title || 'المرضى', icon: <Users className="w-4 h-4 text-indigo-600" /> },
+    { key: 'appointments', label: labels.tiles.appointments?.title || 'المواعيد', icon: <Calendar className="w-4 h-4 text-amber-600" /> },
+    { key: 'lab', label: labels.tiles.lab?.title || 'التركيبات', icon: <Microscope className="w-4 h-4 text-purple-600" /> },
+    { key: 'summary', label: labels.tiles.summary?.title || 'المالية', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
+    { key: 'settings', label: labels.tiles.settings?.title || 'الإعدادات', icon: <Sliders className="w-4 h-4 text-slate-600" /> },
   ];
 
   const visibleNavItems = navItems.filter(item => {
@@ -203,7 +205,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 title="العودة للشاشة الرئيسية"
               >
                 <ArrowRight className="w-4 h-4 shrink-0" />
-                <span className="font-tajawal hidden sm:inline">الرئيسية</span>
+                <span className="font-tajawal hidden sm:inline">{labels.tabs.home || 'الرئيسية'}</span>
               </button>
             )}
 
