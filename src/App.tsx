@@ -862,6 +862,7 @@ export function AppContent() {
                 onAddLabCasePayment={handleAddLabCasePayment}
                 onSaveCrownPrices={handleSaveCrownPrices}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
+                canViewFinancials={currentUser?.permissions?.labProfit === true && !isPrivacyMode}
               />
             ) : (
               <PermissionDeniedCard title="متابعة حالات التركيبات" onBackToHome={() => handleNavigateWithSubTab('home')} />

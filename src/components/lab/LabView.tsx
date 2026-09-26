@@ -17,6 +17,7 @@ interface LabViewProps {
   onAddLabCasePayment: (caseId: string, amount: number) => void;
   onSaveCrownPrices: (prices: Record<string, number>) => void;
   onBackToHome: () => void;
+  canViewFinancials?: boolean;
 }
 
 export const LabView: React.FC<LabViewProps> = ({
@@ -30,7 +31,8 @@ export const LabView: React.FC<LabViewProps> = ({
   onUpdateLabCase,
   onAddLabCasePayment,
   onSaveCrownPrices,
-  onBackToHome
+  onBackToHome,
+  canViewFinancials = false
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
 
@@ -307,13 +309,13 @@ export const LabView: React.FC<LabViewProps> = ({
               حسابات التركيبات
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              متابعة التكاليف، المستحقات وأرباح التركيبات
+              {canViewFinancials ? 'متابعة التكاليف، المستحقات وأرباح التركيبات' : 'متابعة حالات التركيبات ومواعيد التسليم'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
+          {canViewFinancials && <button
             type="button"
             onClick={() => {
               setTempCrownPrices({ ...crownPrices });
@@ -322,16 +324,16 @@ export const LabView: React.FC<LabViewProps> = ({
             className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200/60 transition-colors cursor-pointer"
           >
             ⚙️ تسعير البيع للمريض
-          </button>
+          </button>}
 
-          <button
+          {canViewFinancials && <button
             type="button"
             onClick={handleOpenAddLabModal}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer"
           >
             <Plus className="w-4 h-4 text-white" />
             إضافة معمل جديد
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -357,7 +359,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            جميع حالات التركيبات والأرباح ({labCases.length})
+            جميع حالات التركيبات ({labCases.length})
           </button>
         </div>
       )}
@@ -376,7 +378,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 رجوع لقائمة المعامل
               </button>
 
-              <div className="flex items-center gap-2">
+              {canViewFinancials && <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleOpenEditLabModal(selectedLab)}
@@ -393,7 +395,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
-              </div>
+              </div>}
             </div>
 
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
@@ -418,7 +420,7 @@ export const LabView: React.FC<LabViewProps> = ({
             </div>
 
             {/* Financial Stats Bar with Visual Progress Meter for this Lab */}
-            <div className="pt-2">
+            {canViewFinancials && <div className="pt-2">
               <BalanceProgressMeter
                 total={currentLabTotal}
                 paid={currentLabPaid}
@@ -427,19 +429,19 @@ export const LabView: React.FC<LabViewProps> = ({
                 size="lg"
                 type="lab"
               />
-            </div>
+            </div>}
           </div>
 
           {/* Lab Services Catalog */}
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-3">
             <h3 className="text-sm font-bold text-[#0f3d3e] font-tajawal">
-              كتالوج خدمات وأسعار المعمل المعتمدة
+              {canViewFinancials ? 'كتالوج خدمات وأسعار المعمل المعتمدة' : 'خدمات المعمل المعتمدة'}
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               {selectedLab.services.map(s => (
                 <div key={s.id} className="p-3 bg-[#f7f5ef] rounded-xl border border-slate-200">
                   <span className="font-bold text-slate-800 block">{s.name}</span>
-                  <span className="text-slate-500 block text-[11px] mt-0.5">{s.unitLabel} — {s.price} ج.م</span>
+                  <span className="text-slate-500 block text-[11px] mt-0.5">{s.unitLabel}{canViewFinancials ? ` — ${s.price} ج.م` : ''}</span>
                 </div>
               ))}
             </div>
@@ -474,7 +476,7 @@ export const LabView: React.FC<LabViewProps> = ({
                         <p className="text-slate-500 text-[11px]">تاريخ الطلب: {c.date} {c.note && `• ${c.note}`}</p>
                       </div>
 
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-4">
+                      {canViewFinancials && <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-4">
                         {/* Compact Balance Progress Bar */}
                         <div className="w-full sm:w-64">
                           <BalanceProgressMeter
@@ -499,7 +501,7 @@ export const LabView: React.FC<LabViewProps> = ({
                             <span>+ تسديد للمعمل</span>
                           </button>
                         )}
-                      </div>
+                      </div>}
                     </div>
                   );
                 })}
@@ -528,7 +530,9 @@ export const LabView: React.FC<LabViewProps> = ({
                     <div className="w-12 h-12 rounded-2xl bg-[#e4ede9] text-[#0f3d3e] flex items-center justify-center font-bold shadow-inner">
                       <Microscope className="w-6 h-6 text-[#0f3d3e]" />
                     </div>
-                    <CompactBalanceBadge remaining={remain} total={total} />
+                    {canViewFinancials
+                      ? <CompactBalanceBadge remaining={remain} total={total} />
+                      : <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-black text-indigo-700">{cases.length} حالة</span>}
                   </div>
 
                   <div>
@@ -542,7 +546,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 </div>
 
                 {/* Embedded Visual Progress Meter */}
-                <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                {canViewFinancials && <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                   <div className="flex items-center justify-between text-xs font-mono">
                     <span className="text-slate-500 font-sans text-[11px]">نسبة التسديد للمعمل:</span>
                     <span className="font-bold text-slate-800">{paidPercent}%</span>
@@ -559,7 +563,7 @@ export const LabView: React.FC<LabViewProps> = ({
                       {remain > 0 ? `متبقي: ${remain.toLocaleString()}` : 'خالص السداد'}
                     </span>
                   </div>
-                </div>
+                </div>}
 
                 <div className="pt-2 flex items-center justify-between text-xs font-bold text-[#0f3d3e] group-hover:text-[#c9a227]">
                   <span>عرض كشف المعمل والتفاصيل</span>
@@ -573,14 +577,14 @@ export const LabView: React.FC<LabViewProps> = ({
         /* ALL LAB CASES TAB WITH PROFIT CALCULATION & FILTERS */
         <div className="space-y-5 animate-fadeIn">
           {/* Net Profit Visual Financial Card */}
-          <VisualFinancialCard
+          {canViewFinancials && <VisualFinancialCard
             title="صافي أرباح التركيبات الكلي"
             subtitle="تحصيل المريض الإجمالي − تكلفة المعمل المباشرة"
             amount={totalNetProfit}
             icon={<TrendingUp className="w-6 h-6 text-[#c9a227]" />}
             gradient="teal"
             footerInfo={`إجمالي عدد حالات التركيبات المسجلة: ${labCases.length} حالة`}
-          />
+          />}
 
           {/* Search & Lab Filter Bar */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -670,6 +674,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <span>متأخر عن الموعد</span>
             </button>
 
+            {canViewFinancials && <>
             <button
               onClick={() => setStatusFilter('paid')}
               className={`px-3.5 py-2 rounded-xl font-bold whitespace-nowrap cursor-pointer transition-all ${
@@ -691,6 +696,7 @@ export const LabView: React.FC<LabViewProps> = ({
             >
               🔴 غير مدفوع / جزئي
             </button>
+            </>}
           </div>
 
           {/* Lab Cases List / Cards */}
@@ -762,7 +768,7 @@ export const LabView: React.FC<LabViewProps> = ({
                     </div>
 
                     {/* Financial Summary & Meter for this Case */}
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                    {canViewFinancials && <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
                       <div className="md:col-span-8">
                         <BalanceProgressMeter
                           total={c.labTotal}
@@ -799,7 +805,7 @@ export const LabView: React.FC<LabViewProps> = ({
                           </button>
                         )}
                       </div>
-                    </div>
+                    </div>}
                   </div>
                 );
               })}
@@ -926,7 +932,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 >
                   {selectedLab.services.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} (تكلفة المعمل: {s.price} ج.م/{s.unitLabel})
+                      {s.name}{canViewFinancials ? ` (تكلفة المعمل: ${s.price} ج.م/${s.unitLabel})` : ` (${s.unitLabel})`}
                     </option>
                   ))}
                 </select>
