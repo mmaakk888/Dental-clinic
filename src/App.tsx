@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session } from './types';
 import { Storage } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
+import { canUserLoginNow } from './utils/accessControl';
 import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
@@ -76,7 +77,7 @@ export function AppContent() {
         u.id === remembered.userId &&
         u.username.toLowerCase() === remembered.username.toLowerCase() &&
         (u.credentialVersion ?? 1) === remembered.credentialVersion &&
-        u.isActive !== false
+        canUserLoginNow(u).allowed
       );
       if (match) {
         return match;
@@ -94,7 +95,7 @@ export function AppContent() {
         u.id === sessionUser.id &&
         u.username.toLowerCase() === sessionUser.username.toLowerCase() &&
         (u.credentialVersion ?? 1) === (sessionUser.credentialVersion ?? 1) &&
-        u.isActive !== false
+        canUserLoginNow(u).allowed
       );
       if (match) {
         return match;
@@ -427,6 +428,18 @@ export function AppContent() {
     Storage.saveRememberedSession(null);
     setIsLoginModalOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (!currentUser?.accessSchedule?.enabled) return;
+    const verifyAccessWindow = () => {
+      const latestUser = Storage.getUsers().find(user => user.id === currentUser.id);
+      if (!latestUser || !canUserLoginNow(latestUser).allowed) {
+        handleLogout();
+      }
+    };
+    const timer = window.setInterval(verifyAccessWindow, 60_000);
+    return () => window.clearInterval(timer);
+  }, [currentUser, handleLogout]);
 
   const handleOpenLogin = useCallback(() => {
     setIsLoginModalOpen(true);

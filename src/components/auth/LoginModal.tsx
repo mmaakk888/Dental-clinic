@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Lock, Eye, EyeOff, KeyRound, HelpCircle, CheckCircle2, AlertCircle, ArrowLeft, Sparkles, ShieldCheck, Stethoscope, UserCheck, ChevronLeft } from 'lucide-react';
 import { User as UserType } from '../../types';
+import { canUserLoginNow } from '../../utils/accessControl';
 
 interface LoginModalProps {
   users: UserType[];
@@ -65,9 +66,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         return;
       }
 
-      if (found.isActive === false) {
+      const accessDecision = canUserLoginNow(found);
+      if (!accessDecision.allowed) {
         setIsLoading(false);
-        setErrorMessage('هذا الحساب موقوف. يرجى التواصل مع مدير العيادة');
+        setErrorMessage(accessDecision.message || 'هذا الحساب غير متاح الآن');
         return;
       }
 

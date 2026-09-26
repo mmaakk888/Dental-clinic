@@ -303,6 +303,13 @@ export interface User {
   /** Incremented whenever credentials change. */
   credentialVersion?: number;
   isActive?: boolean;
+  accessSchedule?: {
+    enabled: boolean;
+    days: number[];
+    startTime: string;
+    endTime: string;
+    timezone?: string;
+  };
 }
 
 export type DeviceMode = 'auto' | 'mobile' | 'desktop' | 'tv';

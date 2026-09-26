@@ -130,6 +130,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
   const [userRole, setUserRole] = useState<'doctor' | 'secretary' | 'admin'>('secretary');
+  const [userIsActive, setUserIsActive] = useState(true);
+  const [userScheduleEnabled, setUserScheduleEnabled] = useState(false);
+  const [userScheduleDays, setUserScheduleDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [userScheduleStart, setUserScheduleStart] = useState('09:00');
+  const [userScheduleEnd, setUserScheduleEnd] = useState('21:00');
   const [userPermissions, setUserPermissions] = useState<UserPermission>({
     patientView: true,
     patientEdit: true,
@@ -430,6 +435,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setUserEmail('');
     setUserPhone('');
     setUserRole('secretary');
+    setUserIsActive(true);
+    setUserScheduleEnabled(false);
+    setUserScheduleDays([0, 1, 2, 3, 4, 5, 6]);
+    setUserScheduleStart('09:00');
+    setUserScheduleEnd('21:00');
     setUserPermissions({
       patientView: true,
       patientEdit: true,
@@ -452,7 +462,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setUserEmail(user.email || '');
     setUserPhone(user.phone || '');
     setUserRole(user.role);
+    setUserIsActive(user.isActive !== false);
+    setUserScheduleEnabled(user.accessSchedule?.enabled ?? false);
+    setUserScheduleDays(user.accessSchedule?.days ?? [0, 1, 2, 3, 4, 5, 6]);
+    setUserScheduleStart(user.accessSchedule?.startTime ?? '09:00');
+    setUserScheduleEnd(user.accessSchedule?.endTime ?? '21:00');
     setUserPermissions({
+      ...user.permissions,
       patientView: user.permissions?.patientView ?? true,
       patientEdit: user.permissions?.patientEdit ?? true,
       deletePatients: user.permissions?.deletePatients ?? false,
@@ -487,7 +503,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       phone: userPhone.trim(),
       role: userRole,
       permissions: userPermissions,
-      isActive: editingUser?.isActive ?? true,
+      isActive: userIsActive,
+      accessSchedule: {
+        enabled: userScheduleEnabled,
+        days: userScheduleDays,
+        startTime: userScheduleStart,
+        endTime: userScheduleEnd,
+        timezone: 'Africa/Cairo'
+      },
       credentialVersion: editingUser
         ? (editingUser.credentialVersion ?? 1) + (editingUser.password !== (userPassword.trim() || '123') ? 1 : 0)
         : 1
@@ -1978,6 +2001,79 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <option value="admin">👑 صاحب العيادة / مدير النظام</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Account availability and working hours */}
+              <div className="rounded-2xl border border-sky-200 bg-sky-50/60 p-4 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <strong className="block text-sm text-slate-900">حالة الحساب وأوقات العمل</strong>
+                    <span className="text-[11px] text-slate-600">التحكم في موعد السماح بتسجيل الدخول لهذا الحساب</span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <span className="font-bold text-xs">{userIsActive ? 'الحساب مفعل' : 'الحساب موقوف'}</span>
+                    <input
+                      type="checkbox"
+                      checked={userIsActive}
+                      onChange={e => setUserIsActive(e.target.checked)}
+                      className="h-4 w-4 rounded text-emerald-600"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white p-3 cursor-pointer">
+                  <span>
+                    <strong className="block text-xs text-slate-900">تقييد الدخول بأيام وساعات العمل</strong>
+                    <small className="text-[11px] text-slate-500">عند إيقافه يمكن للحساب الدخول في أي وقت</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={userScheduleEnabled}
+                    onChange={e => setUserScheduleEnabled(e.target.checked)}
+                    className="h-4 w-4 rounded text-sky-600"
+                  />
+                </label>
+
+                {userScheduleEnabled && (
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">من الساعة</label>
+                        <input type="time" value={userScheduleStart} onChange={e => setUserScheduleStart(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">إلى الساعة</label>
+                        <input type="time" value={userScheduleEnd} onChange={e => setUserScheduleEnd(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono" />
+                      </div>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] font-bold text-slate-600 mb-2">أيام السماح بالدخول</span>
+                      <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+                        {[
+                          [6, 'السبت'], [0, 'الأحد'], [1, 'الاثنين'], [2, 'الثلاثاء'],
+                          [3, 'الأربعاء'], [4, 'الخميس'], [5, 'الجمعة']
+                        ].map(([day, label]) => {
+                          const dayNumber = day as number;
+                          const selected = userScheduleDays.includes(dayNumber);
+                          return (
+                            <button
+                              key={dayNumber}
+                              type="button"
+                              onClick={() => setUserScheduleDays(current => selected ? current.filter(item => item !== dayNumber) : [...current, dayNumber])}
+                              className={`min-h-[42px] rounded-lg border text-[10px] font-black ${selected ? 'border-sky-700 bg-sky-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <p className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-900">
+                  قفل الشبكة بالـIP سيظهر هنا لاحقاً عند تفعيل تسجيل الدخول الآمن عبر الخادم وامتلاك Public Static IP؛ لن يتم تشغيل قفل شكلي يمكن تجاوزه من الهاتف.
+                </p>
               </div>
 
               {/* Categorized Granular Permissions Switches */}
