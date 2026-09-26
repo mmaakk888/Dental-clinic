@@ -106,6 +106,7 @@ export interface DrugCatalogItem {
 }
 
 export interface WhatsappSettings {
+  campaignConsent?: Record<string, 'allowed' | 'declined'>;
   apiKey: string;
   webhookUrl: string;
   senderNumber: string;

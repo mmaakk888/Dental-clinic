@@ -9,9 +9,10 @@ interface Props {
   settings: WhatsappSettings;
   clinicName: string;
   onClose: () => void;
+  campaign?: { template: 'greeting' | 'offer'; message: string; link: string; attachment: File | null; onOpened: () => void };
 }
 
-export function WhatsAppComposer({ patient, appointments, settings, clinicName, onClose }: Props) {
+export function WhatsAppComposer({ patient, appointments, settings, clinicName, onClose, campaign }: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -20,13 +21,13 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
     dialogRef.current?.focus();
     return () => { document.body.style.overflow = overflow; previous?.focus(); };
   }, []);
-  const [template, setTemplate] = useState('reminderTomorrow');
+  const [template, setTemplate] = useState(campaign?.template ?? 'reminderTomorrow');
   const [appointmentId, setAppointmentId] = useState('manual');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [edited, setEdited] = useState<string | null>(null);
-  const [link, setLink] = useState('');
-  const [attachment, setAttachment] = useState<File | null>(null);
+  const [link, setLink] = useState(campaign?.link ?? '');
+  const [attachment, setAttachment] = useState<File | null>(campaign?.attachment ?? null);
   const [notice, setNotice] = useState('');
   const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', accountBalance: 'الرصيد المتبقي', postOp: 'تعليمات عامة',
     ...Object.fromEntries(Object.entries(extraMessageTemplates).map(([key, value]) => [key, value.title])) };
@@ -35,7 +36,7 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
   const selected = appts.find(a => a.id === appointmentId);
   const activeDate = selected?.date || date;
   const activeTime = selected?.time || time;
-  const raw = settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
+  const raw = campaign?.message ?? settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
   const message = edited ?? fillMessageTemplate(raw, { patientName: patient.name, clinicName, fileNo: patient.id,
     date: formatArabicDate(activeDate), time: format12HourAr(activeTime), remainingBalance: getPatientFinancialSummary(patient).totalRemaining.toLocaleString('ar-EG') });
   const text = message + (link.trim() ? `\n${link.trim()}` : '');
@@ -57,7 +58,7 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg">رسالة إلى {patient.name}</h2><button type="button" onClick={onClose} className="p-3 rounded-xl bg-slate-100">إغلاق</button></div>
       <p className="text-sm text-slate-600">تجهّز الرسالة هنا ثم تراجعها وتضغط إرسال داخل واتساب.</p>
       <p className="text-xs text-slate-500">راجع التاريخ والتعليمات الطبية والمبلغ قبل الإرسال. لا تُرسل عروضاً إلا لمن وافق على استقبالها.</p>
-      <label className="block text-sm font-bold">نوع الرسالة<select value={template} onChange={e => { setTemplate(e.target.value); setEdited(null); }} className="block w-full border rounded-xl p-3 mt-1">{Object.entries(options).map(([key, title]) => <option key={key} value={key}>{title}</option>)}</select></label>
+      {!campaign && <label className="block text-sm font-bold">نوع الرسالة<select value={template} onChange={e => { setTemplate(e.target.value); setEdited(null); }} className="block w-full border rounded-xl p-3 mt-1">{Object.entries(options).map(([key, title]) => <option key={key} value={key}>{title}</option>)}</select></label>}
       {['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) && <div className="space-y-2">
         <label className="block text-sm">الموعد<select value={appointmentId} onChange={e => { setAppointmentId(e.target.value); setEdited(null); }} className="block border rounded-xl p-3 w-full"><option value="manual">تحديد موعد يدوياً</option>{appts.map(a => <option key={a.id} value={a.id}>{a.date} — {format12HourAr(a.time)}</option>)}</select></label>
         {appointmentId === 'manual' && <div className="grid grid-cols-2 gap-2"><input aria-label="تاريخ الموعد" type="date" value={date} onChange={e => { setDate(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /><input aria-label="وقت الموعد" type="time" value={time} onChange={e => { setTime(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /></div>}
@@ -76,7 +77,7 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       {!validLink && <p className="text-rose-700 text-sm">اكتب رابطاً كاملاً يبدأ بـ https://</p>}
       {notice && <p role="status" className="text-sm text-slate-700">{notice}</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!ready} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer')}>فتح الرسالة في واتساب</button>
+        <button type="button" disabled={!ready} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => { window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer'); campaign?.onOpened(); }}>فتح الرسالة في واتساب</button>
         {attachment && <button type="button" disabled={!ready} className="rounded-xl bg-slate-100 px-4 py-3 disabled:opacity-40" onClick={async () => {
           if (!navigator.canShare?.({ files: [attachment] })) { setNotice('مشاركة الصور غير متاحة في هذا المتصفح. افتح الرسالة وأرفق الصورة من واتساب يدوياً.'); return; }
           try { await navigator.share({ files: [attachment], text }); setNotice('تم فتح المشاركة؛ تحقق من المستلم والإرسال داخل واتساب.'); }

@@ -6,6 +6,7 @@ import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { saveBackupToFirebase, fetchFirebaseBackups, fetchSingleFirebaseBackup, removeFirebaseBackup, FirebaseBackupMeta } from '../../utils/firebaseService';
 import { ClinicLogo } from '../common/ClinicLogo';
 import { AuditTrailView } from './AuditTrailView';
+import { WhatsAppCampaigns } from './WhatsAppCampaigns';
 import * as XLSX from 'xlsx';
 
 interface SettingsViewProps {
@@ -1206,6 +1207,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* WhatsApp Integration SubTab */}
         {activeSubTab === 'whatsapp' && (
+          <div className="space-y-5">
           <form onSubmit={handleSaveWhatsappForm} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
@@ -1285,6 +1287,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
           </form>
+          <WhatsAppCampaigns patients={patients} settings={waState} clinicName={clinicName} onSave={next => { setWaState(next); onSaveWhatsappSettings(next); }} />
+          </div>
         )}
 
         {/* Drug Catalog SubTab */}
