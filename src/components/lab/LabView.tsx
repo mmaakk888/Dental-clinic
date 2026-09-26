@@ -3,6 +3,7 @@ import { Microscope, ArrowRight, Plus, Phone, MapPin, DollarSign, Edit3, Trash2,
 import { Lab, LabCase, Patient, LabService } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
+import { allocateLabPayment, getLabCaseFinancials } from '../../utils/labFinancials';
 import { BalanceProgressMeter, CompactBalanceBadge, VisualFinancialCard } from '../common/FinancialBadge';
 
 interface LabViewProps {
@@ -18,6 +19,7 @@ interface LabViewProps {
   onSaveCrownPrices: (prices: Record<string, number>) => void;
   onBackToHome: () => void;
   canViewFinancials?: boolean;
+  onBulkPayment: (labId: string, amount: number) => void;
 }
 
 export const LabView: React.FC<LabViewProps> = ({
@@ -32,7 +34,8 @@ export const LabView: React.FC<LabViewProps> = ({
   onAddLabCasePayment,
   onSaveCrownPrices,
   onBackToHome,
-  canViewFinancials = false
+  canViewFinancials = false,
+  onBulkPayment
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
 
@@ -41,6 +44,8 @@ export const LabView: React.FC<LabViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'ready' | 'delivered' | 'delayed' | 'paid' | 'unpaid'>('all');
   const [labFilter, setLabFilter] = useState<string>('all');
+  const [bulkAmount, setBulkAmount] = useState('');
+  const [caseSessionId, setCaseSessionId] = useState('');
 
   // Modals
   const [isLabModalOpen, setIsLabModalOpen] = useState(false);
@@ -169,6 +174,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleOpenAddCaseModal = () => {
     if (!selectedLab) return;
+    setCaseSessionId('');
     setCasePatientId(patients[0]?.id || '');
     setCaseServiceId(selectedLab.services[0]?.id || '');
     setCaseUnits(1);
@@ -196,10 +202,16 @@ export const LabView: React.FC<LabViewProps> = ({
     }
 
     const labTotal = targetService.price * caseUnits;
+    if (!Number.isInteger(caseUnits) || caseUnits < 1) return;
+    if (caseSessionId && labCases.some(c => c.patientId === targetPatient.id && c.linkedSessionId === caseSessionId)) {
+      showToast('هذه الخدمة مرتبطة بالفعل بطلب معمل', 'warning');
+      return;
+    }
     const patientUnitPrice = crownPrices[targetService.name] || 2200;
     const patientTotal = patientUnitPrice * caseUnits;
 
     onSaveLabCase({
+      linkedSessionId: caseSessionId || undefined,
       labId: selectedLab.id,
       labName: selectedLab.name,
       patientId: targetPatient.id,
@@ -230,6 +242,11 @@ export const LabView: React.FC<LabViewProps> = ({
     const amt = typeof paymentAmount === 'number' ? paymentAmount : 0;
     if (amt <= 0) {
       validationFail('labPaymentModal', 'input-lab-payment', 'يرجى إدخال مبلغ دفع صحيح للمعمل');
+      return;
+    }
+
+    if (!Number.isFinite(amt) || amt > selectedCaseForPayment.labTotal - selectedCaseForPayment.labPaid) {
+      showToast('المبلغ أكبر من المتبقي للمعمل أو غير صحيح', 'warning');
       return;
     }
 
@@ -291,6 +308,32 @@ export const LabView: React.FC<LabViewProps> = ({
   }, [labCases, selectedLabId, labFilter, searchQuery, statusFilter, todayStr]);
 
   const totalNetProfit = labCases.reduce((acc, c) => acc + (c.patientTotal - c.labTotal), 0);
+
+  const renderReservation = (item: LabCase) => {
+    if (!canViewFinancials) return null;
+    const financial = getLabCaseFinancials(item, patients);
+    const patient = patients.find(p => p.id === item.patientId);
+    return <div className="w-full rounded-xl border border-teal-200 bg-teal-50 p-3 space-y-2 text-xs">
+      <label className="block font-bold">الخدمة المرتبطة بحساب المريض</label>
+      <select className="w-full min-h-11 rounded-lg border border-slate-200 bg-white px-2" value={item.linkedSessionId || ''}
+        onChange={e => onUpdateLabCase?.({ ...item, linkedSessionId: e.target.value || undefined })}>
+        <option value="">اختر الخدمة لحساب المحجوز</option>
+        {(patient?.sessions || []).filter(s => s.id === item.linkedSessionId || !labCases.some(c => c.patientId === item.patientId && c.linkedSessionId === s.id)).map(s =>
+          <option key={s.id} value={s.id}>{s.type} — {s.date} — {s.toothLabel || 'عام'}</option>)}
+      </select>
+      {financial.linked ? <div className="grid grid-cols-2 gap-2">
+        <span>المحصل للخدمة: <strong>{financial.collected.toLocaleString()} ج.م</strong></span>
+        <span>محجوز للمعمل: <strong>{financial.reserved.toLocaleString()} ج.م</strong></span>
+        <span>متبقي للمعمل: <strong>{financial.remaining.toLocaleString()} ج.م</strong></span>
+        <span>المتاح بعد تكلفة المعمل: <strong>{financial.availableToClinic.toLocaleString()} ج.م</strong></span>
+      </div> : <p className="text-amber-800">لم تُربط الخدمة بعد؛ لا يُحسب مبلغ محجوز لهذه الحالة.</p>}
+    </div>;
+  };
+
+  let bulkAllocations: ReturnType<typeof allocateLabPayment> = [];
+  if (selectedLabId && Number(bulkAmount) > 0) {
+    try { bulkAllocations = allocateLabPayment(labCases, selectedLabId, Number(bulkAmount)); } catch { /* Inline validation below. */ }
+  }
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto py-2">
@@ -433,6 +476,25 @@ export const LabView: React.FC<LabViewProps> = ({
           </div>
 
           {/* Lab Services Catalog */}
+          {canViewFinancials && <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+            <h3 className="font-bold">دفعة مجمعة للمعمل</h3>
+            <p className="text-sm text-slate-600">المحجوز حالياً: {currentLabCases.reduce((sum, c) => sum + getLabCaseFinancials(c, patients).reserved, 0).toLocaleString()} ج.م. توزع الدفعة على أقدم الحالات المستحقة.</p>
+            <label className="block text-sm">مبلغ الدفعة (ج.م)
+              <input type="number" min="0.01" step="0.01" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} className="block w-full border rounded-xl p-3 mt-1" />
+            </label>
+            {bulkAllocations.map(a => <p key={a.caseId} className="text-sm">{labCases.find(c => c.id === a.caseId)?.patientName}: {a.amount.toLocaleString()} ج.م</p>)}
+            {bulkAmount && !bulkAllocations.length && <p className="text-sm text-rose-700">أدخل مبلغاً أكبر من صفر ولا يتجاوز المستحق.</p>}
+            <button type="button" disabled={!bulkAllocations.length} className="rounded-xl bg-teal-800 text-white px-4 py-3 disabled:opacity-40" onClick={() => {
+              const amount = Number(bulkAmount);
+              askConfirm({ title: 'تأكيد سداد المعمل', message: `سداد ${amount.toLocaleString()} ج.م إلى ${selectedLab.name} موزعة على ${bulkAllocations.length} حالة؟`, confirmLabel: 'تسجيل السداد', tone: 'warning', onConfirm: () => {
+                onBulkPayment(selectedLab.id, amount); setBulkAmount(''); showToast('تم تسجيل الدفعة المجمعة', 'success');
+              }});
+            }}>تسجيل الدفعة المجمعة</button>
+            <details className="text-sm"><summary className="cursor-pointer font-bold">سجل المدفوعات للحالات</summary>
+              {currentLabCases.flatMap(c => (c.paymentsLog || []).map(p => <div key={`${c.id}-${p.id}`} className="border-b py-2">{p.date} · {c.patientName} · {p.amount.toLocaleString()} ج.م · {p.note || 'دفعة للمعمل'}</div>))}
+              <p className="text-xs text-slate-500 mt-2">الدفعات القديمة التي حُفظت كإجمالي فقط لا تملك تفاصيل إيصالات.</p>
+            </details>
+          </section>}
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-3">
             <h3 className="text-sm font-bold text-[#0f3d3e] font-tajawal">
               {canViewFinancials ? 'كتالوج خدمات وأسعار المعمل المعتمدة' : 'خدمات المعمل المعتمدة'}
@@ -474,6 +536,7 @@ export const LabView: React.FC<LabViewProps> = ({
                           </span>
                         </div>
                         <p className="text-slate-500 text-[11px]">تاريخ الطلب: {c.date} {c.note && `• ${c.note}`}</p>
+                        {renderReservation(c)}
                       </div>
 
                       {canViewFinancials && <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-4">
@@ -768,6 +831,7 @@ export const LabView: React.FC<LabViewProps> = ({
                     </div>
 
                     {/* Financial Summary & Meter for this Case */}
+                    {renderReservation(c)}
                     {canViewFinancials && <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
                       <div className="md:col-span-8">
                         <BalanceProgressMeter
@@ -904,6 +968,13 @@ export const LabView: React.FC<LabViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveLabCase} className="space-y-4">
+              <label className="block text-xs font-bold">الخدمة المسجلة في ملف المريض
+                <select value={caseSessionId} onChange={e => setCaseSessionId(e.target.value)} className="w-full border rounded-xl p-3 mt-1">
+                  <option value="">ربط الخدمة لاحقاً</option>
+                  {(patients.find(p => p.id === casePatientId)?.sessions || []).filter(s => !labCases.some(c => c.patientId === casePatientId && c.linkedSessionId === s.id)).map(s => <option key={s.id} value={s.id}>{s.type} — {s.date} — {s.toothLabel || 'عام'}</option>)}
+                </select>
+                <span className="block mt-1 font-normal text-slate-500">الربط يتابع الدفعات الموجودة ولا يضيف تكلفة جديدة للمريض.</span>
+              </label>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   اختر المريض
@@ -911,7 +982,7 @@ export const LabView: React.FC<LabViewProps> = ({
                 <select
                   id="select-case-patient"
                   value={casePatientId}
-                  onChange={e => setCasePatientId(e.target.value)}
+                  onChange={e => { setCasePatientId(e.target.value); setCaseSessionId(''); }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold"
                 >
                   {patients.map(p => (

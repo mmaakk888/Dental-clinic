@@ -17,7 +17,7 @@ const positiveMoney = (value: number | undefined): number =>
  */
 export function getSessionCollected(session: Session): number {
   const activePayments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
-  if (activePayments.length > 0) {
+  if ((session.paymentsLog || []).length > 0) {
     return activePayments.reduce((sum, payment) => sum + positiveMoney(payment.amount), 0);
   }
   return positiveMoney(session.paid);
@@ -189,7 +189,7 @@ export function calculateDailyCollections(
       const installmentPaidInPeriod = installmentsInPeriod.reduce((sum, p) => sum + p.amount, 0);
 
       // Legacy sessions may have only a paid total and no receipt log.
-      const legacyPaidInPeriod = allActiveInstallments.length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
+      const legacyPaidInPeriod = (session.paymentsLog || []).length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
         ? positiveMoney(session.paid)
         : 0;
       const paidInPeriod = installmentPaidInPeriod + legacyPaidInPeriod;

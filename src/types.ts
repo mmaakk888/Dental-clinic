@@ -233,6 +233,7 @@ export interface Lab {
 
 export interface LabCase {
   id: string;
+  linkedSessionId?: string;
   labId: string;
   labName: string;
   patientId: string;

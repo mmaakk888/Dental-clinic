@@ -3,6 +3,7 @@ import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, 
 import { Storage } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
 import { canUserLoginNow } from './utils/accessControl';
+import { allocateLabPayment } from './utils/labFinancials';
 import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
@@ -584,19 +585,47 @@ export function AppContent() {
   };
 
   const handleUpdateLabCase = (updatedCase: LabCase) => {
-    setLabCases(prev => prev.map(c => c.id === updatedCase.id ? updatedCase : c));
+    setLabCases(prev => prev.map(c => {
+      if (c.id !== updatedCase.id) return c;
+      if (c.linkedSessionId !== updatedCase.linkedSessionId) {
+        if (currentUser?.permissions?.labProfit !== true) return c;
+        if (updatedCase.linkedSessionId && prev.some(other => other.id !== c.id && other.patientId === c.patientId && other.linkedSessionId === updatedCase.linkedSessionId)) return c;
+      }
+      return updatedCase;
+    }));
   };
 
   const handleAddLabCasePayment = (caseId: string, amount: number) => {
+    if (currentUser?.permissions?.labProfit !== true || !Number.isFinite(amount) || amount <= 0) return;
+    const receiptId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
     setLabCases(prev => prev.map(c => {
       if (c.id !== caseId) return c;
+      if (amount > c.labTotal - c.labPaid) return c;
       const newPaid = c.labPaid + amount;
       return {
         ...c,
         labPaid: newPaid,
-        status: newPaid >= c.labTotal ? 'completed' : c.status
+        paymentsLog: [...(c.paymentsLog || []), { id: receiptId, amount, date: new Date().toLocaleDateString('en-CA'), createdAt, recordedBy: currentUser.id }]
       };
     }));
+  };
+
+  const handleLabBulkPayment = (labId: string, amount: number) => {
+    if (currentUser?.permissions?.labProfit !== true) return;
+    const receiptId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    setLabCases(prev => {
+      let allocations: ReturnType<typeof allocateLabPayment>;
+      try { allocations = allocateLabPayment(prev, labId, amount); } catch { return prev; }
+      return prev.map(c => {
+        const allocation = allocations.find(a => a.caseId === c.id);
+        return allocation ? { ...c, labPaid: c.labPaid + allocation.amount,
+          paymentsLog: [...(c.paymentsLog || []), { id: receiptId, amount: allocation.amount,
+            date: new Date().toLocaleDateString('en-CA'), createdAt, recordedBy: currentUser.id, note: 'دفعة مجمعة للمعمل' }]
+        } : c;
+      });
+    });
   };
 
   // Settings Actions
@@ -860,6 +889,7 @@ export function AppContent() {
                 onSaveLabCase={handleSaveLabCase}
                 onUpdateLabCase={handleUpdateLabCase}
                 onAddLabCasePayment={handleAddLabCasePayment}
+                onBulkPayment={handleLabBulkPayment}
                 onSaveCrownPrices={handleSaveCrownPrices}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
                 canViewFinancials={currentUser?.permissions?.labProfit === true && !isPrivacyMode}
