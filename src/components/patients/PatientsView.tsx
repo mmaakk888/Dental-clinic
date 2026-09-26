@@ -29,6 +29,7 @@ import {
 import { Patient, NavigationOrigin, Appointment, LabCase, User, AppointmentStatus } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface PatientsViewProps {
   patients: Patient[];
@@ -438,9 +439,10 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   // Helper getters for patient status flags
   const getPatientMetrics = (p: Patient) => {
-    const totalRequired = p.sessions ? p.sessions.reduce((acc, s) => acc + (s.amount || 0), 0) : 0;
-    const totalPaid = p.sessions ? p.sessions.reduce((acc, s) => acc + (s.paid || 0), 0) : 0;
-    const totalRemain = totalRequired - totalPaid;
+    const financial = getPatientFinancialSummary(p);
+    const totalRequired = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+    const totalPaid = financial.totalCollected;
+    const totalRemain = financial.totalRemaining;
     const hasAllergy = Boolean(p.allergy && p.allergy.trim());
     const hasTodayAppointment = appointments.some(a => a.patientId === p.id && a.date === todayStr);
     const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.remain > 0 || s.visitStatus === 'follow_up') : false;

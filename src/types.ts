@@ -2,6 +2,12 @@ export interface PaymentInstallment {
   id: string;
   amount: number;
   date: string;
+  paymentMethod?: 'cash' | 'card' | 'transfer';
+  note?: string;
+  recordedBy?: string;
+  createdAt?: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface ExpenseItem {
@@ -158,6 +164,11 @@ export interface GeneralPayment {
   date: string;
   paymentMethod?: 'cash' | 'card' | 'transfer';
   note?: string;
+  linkedSessionId?: string;
+  recordedBy?: string;
+  createdAt?: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface Patient {
@@ -287,6 +298,9 @@ export interface User {
   phone?: string;
   role: 'doctor' | 'secretary' | 'admin';
   permissions: UserPermission;
+  /** Incremented whenever credentials change. */
+  credentialVersion?: number;
+  isActive?: boolean;
 }
 
 export type DeviceMode = 'auto' | 'mobile' | 'desktop' | 'tv';

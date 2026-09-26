@@ -486,7 +486,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       email: userEmail.trim(),
       phone: userPhone.trim(),
       role: userRole,
-      permissions: userPermissions
+      permissions: userPermissions,
+      isActive: editingUser?.isActive ?? true,
+      credentialVersion: editingUser
+        ? (editingUser.credentialVersion ?? 1) + (editingUser.password !== (userPassword.trim() || '123') ? 1 : 0)
+        : 1
     };
 
     let updatedUsers = [...users];

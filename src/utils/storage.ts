@@ -29,6 +29,23 @@ const KEYS = {
   REMEMBERED_SESSION: 'dental_remembered_session_v2'
 };
 
+export interface RememberedSession {
+  userId: string;
+  username: string;
+  credentialVersion: number;
+  issuedAt: string;
+}
+
+function getCredentialVersion(user: User): number {
+  return user.credentialVersion ?? 1;
+}
+
+function sanitizeSessionUser(user: User | null): User | null {
+  if (!user) return null;
+  const { password: _password, ...safeUser } = user;
+  return safeUser;
+}
+
 // In-memory cache to eliminate repetitive synchronous JSON parsing on render loops
 const cacheMap = new Map<string, any>();
 
@@ -134,11 +151,20 @@ export const Storage = {
   getPrivacyMode: (): boolean => safeGet(KEYS.PRIVACY_MODE, true),
   savePrivacyMode: (mode: boolean) => safeSet(KEYS.PRIVACY_MODE, mode, true),
 
-  getCurrentUser: (): User | null => safeGet(KEYS.CURRENT_USER, null),
-  saveCurrentUser: (user: User | null) => safeSet(KEYS.CURRENT_USER, user, true),
+  getCurrentUser: (): User | null => sanitizeSessionUser(safeGet<User | null>(KEYS.CURRENT_USER, null)),
+  saveCurrentUser: (user: User | null) => safeSet(KEYS.CURRENT_USER, sanitizeSessionUser(user), true),
 
-  getRememberedSession: (): { userId: string; username: string; password?: string } | null => safeGet(KEYS.REMEMBERED_SESSION, null),
-  saveRememberedSession: (session: { userId: string; username: string; password?: string } | null) => {
+  getRememberedSession: (): RememberedSession | null => {
+    const remembered = safeGet<RememberedSession | (Partial<RememberedSession> & { password?: string }) | null>(KEYS.REMEMBERED_SESSION, null);
+    if (!remembered?.userId || !remembered.username) return null;
+    return {
+      userId: remembered.userId,
+      username: remembered.username,
+      credentialVersion: remembered.credentialVersion ?? 1,
+      issuedAt: remembered.issuedAt ?? new Date(0).toISOString()
+    };
+  },
+  saveRememberedSession: (session: RememberedSession | null) => {
     cacheMap.set(KEYS.REMEMBERED_SESSION, session);
     if (!session) {
       localStorage.removeItem(KEYS.REMEMBERED_SESSION);
@@ -146,6 +172,13 @@ export const Storage = {
       safeSet(KEYS.REMEMBERED_SESSION, session, true);
     }
   },
+
+  createRememberedSession: (user: User): RememberedSession => ({
+    userId: user.id,
+    username: user.username,
+    credentialVersion: getCredentialVersion(user),
+    issuedAt: new Date().toISOString()
+  }),
 
   resetAll: () => {
     cacheMap.clear();

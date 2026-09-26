@@ -6,6 +6,7 @@ import { BalanceProgressMeter, CompactBalanceBadge, VisualFinancialCard } from '
 import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface SummaryViewProps {
   patients: Patient[];
@@ -98,13 +99,12 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     let paid = 0;
 
     patients.forEach(p => {
-      p.sessions.forEach(s => {
-        req += s.amount;
-        paid += s.paid;
-      });
+      const financial = getPatientFinancialSummary(p);
+      req += Math.max(0, financial.totalRequired - financial.totalDiscounts);
+      paid += financial.totalCollected;
     });
 
-    const rem = req - paid;
+    const rem = Math.max(0, req - paid);
     const labCosts = labCases.reduce((acc, c) => acc + c.labTotal, 0);
     const expAmt = expenses.reduce((acc, e) => acc + e.amount, 0);
     const profit = paid - (labCosts + expAmt);

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Bell, Calendar, DollarSign, Microscope, AlertCircle, CheckCircle, X, ArrowLeft, Clock } from 'lucide-react';
 import { Patient, Appointment, LabCase, ActiveView, NavigationOrigin } from '../../types';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 export interface NotificationItem {
   id: string;
@@ -70,9 +71,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
     // 2. Overdue patient balances (> 0)
     patients.forEach(p => {
-      const totalCost = p.sessions.reduce((acc, s) => acc + s.amount, 0);
-      const totalPaid = p.sessions.reduce((acc, s) => acc + (s.paid || 0), 0) + p.payments.reduce((acc, pay) => acc + pay.amount, 0);
-      const balance = totalCost - totalPaid;
+      const balance = getPatientFinancialSummary(p).totalRemaining;
 
       if (balance > 500) {
         list.push({

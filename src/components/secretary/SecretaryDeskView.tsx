@@ -9,6 +9,7 @@ import { Patient, Appointment, LabCase, User, NavigationOrigin, ActiveView, Appo
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBadge';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface SecretaryDeskViewProps {
   currentUser: User | null;
@@ -469,9 +470,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
             ) : (
               <div className="space-y-2">
                 {filteredPatients.slice(0, 6).map(patient => {
-                  const totalReq = patient.sessions.reduce((a, s) => a + s.amount, 0);
-                  const totalPaid = patient.sessions.reduce((a, s) => a + s.paid, 0);
-                  const remain = totalReq - totalPaid;
+                  const financial = getPatientFinancialSummary(patient);
+                  const totalReq = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+                  const totalPaid = financial.totalCollected;
+                  const remain = financial.totalRemaining;
 
                   return (
                     <button
@@ -802,9 +804,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
               </div>
             ) : (
               filteredPatients.map(patient => {
-                const totalReq = patient.sessions.reduce((a, s) => a + s.amount, 0);
-                const totalPaid = patient.sessions.reduce((a, s) => a + s.paid, 0);
-                const remain = totalReq - totalPaid;
+                const financial = getPatientFinancialSummary(patient);
+                const totalReq = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+                const totalPaid = financial.totalCollected;
+                const remain = financial.totalRemaining;
 
                 return (
                   <div key={patient.id} className="p-3.5 sm:p-4 bg-white hover:bg-slate-50/80 transition-colors flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">

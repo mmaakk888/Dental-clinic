@@ -1,5 +1,89 @@
 import { Session, SessionServiceItem, Patient, Appointment } from '../types';
 
+export interface PatientFinancialSummary {
+  totalRequired: number;
+  totalCollected: number;
+  totalDiscounts: number;
+  totalRemaining: number;
+}
+
+const positiveMoney = (value: number | undefined): number =>
+  Number.isFinite(value) ? Math.max(0, Number(value)) : 0;
+
+/**
+ * Payment logs are the canonical source of session collections. `session.paid`
+ * remains a compatibility fallback for records created before payment logs
+ * were introduced.
+ */
+export function getSessionCollected(session: Session): number {
+  const activePayments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
+  if (activePayments.length > 0) {
+    return activePayments.reduce((sum, payment) => sum + positiveMoney(payment.amount), 0);
+  }
+  return positiveMoney(session.paid);
+}
+
+function getIndependentGeneralPayments(patient: Patient) {
+  const sessionPaymentIds = new Set(
+    patient.sessions.flatMap(session => (session.paymentsLog || []).map(payment => payment.id))
+  );
+  const linkedSessionIds = new Set(patient.sessions.map(session => session.id));
+  const legacyMirrorCounts = new Map<string, number>();
+
+  patient.sessions.forEach(session => {
+    (session.paymentsLog || [])
+      .filter(payment => !payment.voidedAt)
+      .forEach(payment => {
+        const key = `${payment.date}|${positiveMoney(payment.amount)}`;
+        legacyMirrorCounts.set(key, (legacyMirrorCounts.get(key) || 0) + 1);
+      });
+  });
+
+  return (patient.payments || []).filter(payment => {
+    if (payment.voidedAt || sessionPaymentIds.has(payment.id)) return false;
+    if (payment.linkedSessionId && linkedSessionIds.has(payment.linkedSessionId)) return false;
+
+    // Older app versions copied every session receipt into `patient.payments`
+    // with a different id. Consume matching date/amount pairs once as mirrors.
+    if (!payment.linkedSessionId) {
+      const key = `${payment.date}|${positiveMoney(payment.amount)}`;
+      const mirrorCount = legacyMirrorCounts.get(key) || 0;
+      if (mirrorCount > 0) {
+        legacyMirrorCounts.set(key, mirrorCount - 1);
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+export function getPatientFinancialSummary(patient: Patient): PatientFinancialSummary {
+  const totalRequired = patient.sessions.reduce(
+    (sum, session) => sum + positiveMoney(session.amount),
+    0
+  );
+  const totalDiscounts = patient.sessions.reduce(
+    (sum, session) => sum + positiveMoney(session.discount),
+    0
+  );
+  const sessionCollections = patient.sessions.reduce(
+    (sum, session) => sum + getSessionCollected(session),
+    0
+  );
+  const generalCollections = getIndependentGeneralPayments(patient)
+    .reduce((sum, payment) => sum + positiveMoney(payment.amount), 0);
+  const totalCollected = sessionCollections + generalCollections;
+  const netRequired = Math.max(0, totalRequired - totalDiscounts);
+
+  return {
+    totalRequired,
+    totalCollected,
+    totalDiscounts,
+    totalRemaining: Math.max(0, netRequired - totalCollected)
+  };
+}
+
 export const STANDARD_SERVICES_CATALOG = [
   { id: 'exam', name: 'كشف ومعاينة', defaultPrice: 50 },
   { id: 'extraction', name: 'خلع أسنان', defaultPrice: 200 },
@@ -100,19 +184,24 @@ export function calculateDailyCollections(
       const sessionInPeriod = dateFilterFn(session.date);
 
       // Check installments logged on the filtered date
-      const installmentsInPeriod = session.paymentsLog?.filter(p => dateFilterFn(p.date)) || [];
+      const allActiveInstallments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
+      const installmentsInPeriod = allActiveInstallments.filter(p => dateFilterFn(p.date));
       const installmentPaidInPeriod = installmentsInPeriod.reduce((sum, p) => sum + p.amount, 0);
 
-      if (sessionInPeriod || installmentsInPeriod.length > 0) {
+      // Legacy sessions may have only a paid total and no receipt log.
+      const legacyPaidInPeriod = allActiveInstallments.length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
+        ? positiveMoney(session.paid)
+        : 0;
+      const paidInPeriod = installmentPaidInPeriod + legacyPaidInPeriod;
+
+      if (sessionInPeriod || paidInPeriod > 0) {
         patientIdsSeen.add(patient.id);
 
         const examFee = session.examinationFee || 0;
         const totalVal = session.amount;
         
-        // Paid amount for this session in period
-        const paidInPeriod = sessionInPeriod ? session.paid : installmentPaidInPeriod;
         const discountAmt = sessionInPeriod ? (session.discount || 0) : 0;
-        const remainAmt = Math.max(0, session.amount - session.paid - (session.discount || 0));
+        const remainAmt = Math.max(0, session.amount - getSessionCollected(session) - (session.discount || 0));
 
         if (sessionInPeriod) {
           totalOutstandingRemain += remainAmt;
@@ -122,10 +211,9 @@ export function calculateDailyCollections(
         totalIncomeCollected += paidInPeriod;
 
         // Payment Method breakdown
-        const method = session.paymentMethod || 'cash';
-        if (method === 'cash') cashTotal += paidInPeriod;
-        else if (method === 'card') cardTotal += paidInPeriod;
-        else if (method === 'transfer') transferTotal += paidInPeriod;
+        // Clinic policy records all receipts as cash, regardless of the external channel.
+        const method: 'cash' = 'cash';
+        cashTotal += paidInPeriod;
 
         // Procedures breakdown allocation for reports
         let servicesList = session.services && session.services.length > 0
@@ -178,21 +266,36 @@ export function calculateDailyCollections(
           discountAmount: discountAmt,
           remainAmount: remainAmt,
           paymentMethod: method,
-          date: session.date,
+          date: sessionInPeriod ? session.date : (installmentsInPeriod[0]?.date || session.payDate || session.date),
           isWalkIn: Boolean(session.isWalkIn),
         });
       }
     });
 
     // Also include general payments made on this date
-    patient.payments?.forEach(pay => {
+    getIndependentGeneralPayments(patient).forEach(pay => {
       if (dateFilterFn(pay.date)) {
         totalIncomeCollected += pay.amount;
-        const method = pay.paymentMethod || 'cash';
-        if (method === 'cash') cashTotal += pay.amount;
-        else if (method === 'card') cardTotal += pay.amount;
-        else if (method === 'transfer') transferTotal += pay.amount;
+        cashTotal += pay.amount;
         procedureFeesCollectedByName['دفعة عامة / أقساط'] = (procedureFeesCollectedByName['دفعة عامة / أقساط'] || 0) + pay.amount;
+        patientIdsSeen.add(patient.id);
+        rows.push({
+          sessionId: pay.linkedSessionId || `general_${pay.id}`,
+          patientId: patient.id,
+          fileNo: patient.id,
+          patientName: patient.name,
+          mobile: patient.mobile,
+          time: pay.createdAt ? new Date(pay.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—',
+          proceduresText: pay.note || 'دفعة عامة / سداد رصيد سابق',
+          servicesBreakdown: [{ name: 'دفعة عامة / أقساط', price: pay.amount, paid: pay.amount }],
+          totalValue: pay.amount,
+          paidAmount: pay.amount,
+          discountAmount: 0,
+          remainAmount: getPatientFinancialSummary(patient).totalRemaining,
+          paymentMethod: 'cash',
+          date: pay.date,
+          isWalkIn: false
+        });
       }
     });
   });

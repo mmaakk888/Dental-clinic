@@ -107,6 +107,8 @@ export const DEFAULT_USERS: User[] = [
     email: 'dr.ahmed@clinic.com',
     phone: '01012345678',
     role: 'doctor',
+    credentialVersion: 1,
+    isActive: true,
     permissions: {
       patientView: true,
       patientEdit: true,
@@ -127,6 +129,8 @@ export const DEFAULT_USERS: User[] = [
     email: 'sara@clinic.com',
     phone: '01198765432',
     role: 'secretary',
+    credentialVersion: 1,
+    isActive: true,
     permissions: {
       patientView: true,
       patientEdit: true,

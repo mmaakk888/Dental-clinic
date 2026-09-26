@@ -4,6 +4,7 @@ import {
   ChevronLeft, FileText, Phone, Clock, ShieldAlert
 } from 'lucide-react';
 import { Patient, Appointment, LabCase, Expense, ActiveView, NavigationOrigin } from '../../types';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface GlobalSearchModalProps {
   isOpen: boolean;
@@ -411,9 +412,10 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                       );
                       const isFocused = globalIdx === selectedIndex;
 
-                      const totalReq = p.sessions.reduce((a, s) => a + s.amount, 0);
-                      const totalPaid = p.sessions.reduce((a, s) => a + s.paid, 0);
-                      const remain = totalReq - totalPaid;
+                      const financial = getPatientFinancialSummary(p);
+                      const totalReq = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+                      const totalPaid = financial.totalCollected;
+                      const remain = financial.totalRemaining;
 
                       return (
                         <button

@@ -20,6 +20,7 @@ import {
 import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBadge';
 import { buildAppointmentReminderText, getWhatsAppUrl as formatWhatsAppUrl } from '../../utils/whatsappUtils';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface PatientFileViewProps {
   patient: Patient;
@@ -89,17 +90,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   // Financial Calculations
-  const totalRequired = useMemo(() => {
-    return patient.sessions.reduce((acc, s) => acc + s.amount, 0);
-  }, [patient.sessions]);
-
-  const totalPaid = useMemo(() => {
-    return patient.sessions.reduce((acc, s) => acc + s.paid, 0);
-  }, [patient.sessions]);
-
-  const totalRemain = useMemo(() => {
-    return Math.max(0, totalRequired - totalPaid);
-  }, [totalRequired, totalPaid]);
+  const financialSummary = useMemo(() => getPatientFinancialSummary(patient), [patient]);
+  const totalRequired = Math.max(0, financialSummary.totalRequired - financialSummary.totalDiscounts);
+  const totalPaid = financialSummary.totalCollected;
+  const totalRemain = financialSummary.totalRemaining;
 
   const paidPercentage = totalRequired > 0 ? Math.min(100, Math.round((totalPaid / totalRequired) * 100)) : 100;
 

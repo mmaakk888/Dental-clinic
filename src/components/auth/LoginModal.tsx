@@ -65,6 +65,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         return;
       }
 
+      if (found.isActive === false) {
+        setIsLoading(false);
+        setErrorMessage('هذا الحساب موقوف. يرجى التواصل مع مدير العيادة');
+        return;
+      }
+
       // Check password if set
       if (found.password && found.password !== passwordInput) {
         setIsLoading(false);
@@ -114,7 +120,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const handleVerifyCode = (e: React.FormEvent) => {
     e.preventDefault();
     setResetError('');
-    if (verificationCodeInput.trim() !== generatedCode && verificationCodeInput.trim() !== '0000') {
+    if (verificationCodeInput.trim() !== generatedCode) {
       setResetError('رمز التحقق غير صحيح');
       return;
     }
@@ -138,7 +144,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     if (!matchedUser) return;
 
     const updatedUsers = users.map(u =>
-      u.id === matchedUser.id ? { ...u, password: newPassword } : u
+      u.id === matchedUser.id
+        ? { ...u, password: newPassword, credentialVersion: (u.credentialVersion ?? 1) + 1 }
+        : u
     );
 
     onUpdateUsers(updatedUsers);

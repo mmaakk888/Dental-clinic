@@ -67,7 +67,7 @@ export function AppContent() {
   // Persistent Domain Data
   const [users, setUsers] = useState<User[]>(() => Storage.getUsers());
 
-  // Authentication State (Forces login page on load, remembers valid sessions, auto-invalidates if password/user changes)
+  // Authentication State. Remembered sessions never persist a password.
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const savedUsers = Storage.getUsers();
     const remembered = Storage.getRememberedSession();
@@ -76,7 +76,8 @@ export function AppContent() {
       const match = savedUsers.find(u =>
         u.id === remembered.userId &&
         u.username.toLowerCase() === remembered.username.toLowerCase() &&
-        u.password === remembered.password
+        (u.credentialVersion ?? 1) === remembered.credentialVersion &&
+        u.isActive !== false
       );
       if (match) {
         return match;
@@ -93,7 +94,8 @@ export function AppContent() {
       const match = savedUsers.find(u =>
         u.id === sessionUser.id &&
         u.username.toLowerCase() === sessionUser.username.toLowerCase() &&
-        u.password === sessionUser.password
+        (u.credentialVersion ?? 1) === (sessionUser.credentialVersion ?? 1) &&
+        u.isActive !== false
       );
       if (match) {
         return match;
@@ -220,15 +222,11 @@ export function AppContent() {
         const target = updated[existingIdx];
         
         const updatedSessions = [newSession, ...target.sessions];
-        const updatedPayments = payload.visit.paidAmount > 0 
-          ? [{ id: `gp_${Date.now()}`, amount: payload.visit.paidAmount, date: todayStr }, ...target.payments]
-          : target.payments;
-
         updated[existingIdx] = {
           ...target,
           mobile: payload.patient.mobile || target.mobile,
           sessions: updatedSessions,
-          payments: updatedPayments
+          payments: target.payments
         };
         return updated;
       } else {
@@ -243,9 +241,7 @@ export function AppContent() {
           notes: payload.visit.visitNotes,
           allergy: '',
           sessions: [newSession],
-          payments: payload.visit.paidAmount > 0 
-            ? [{ id: `gp_${Date.now()}`, amount: payload.visit.paidAmount, date: todayStr }]
-            : []
+          payments: []
         };
         return [newPatient, ...prev];
       }
@@ -415,11 +411,7 @@ export function AppContent() {
     setCurrentUser(user);
     Storage.saveCurrentUser(user);
     if (rememberMe) {
-      Storage.saveRememberedSession({
-        userId: user.id,
-        username: user.username,
-        password: user.password
-      });
+      Storage.saveRememberedSession(Storage.createRememberedSession(user));
     } else {
       Storage.saveRememberedSession(null);
     }
@@ -493,14 +485,11 @@ export function AppContent() {
     setPatients(prev => prev.map(p => {
       if (p.id !== patientId) return p;
       const updatedSessions = [newSession, ...p.sessions];
-      const updatedPayments = sessionData.paid > 0
-        ? [{ id: `gp_${Date.now()}`, amount: sessionData.paid, date: sessionData.date }, ...p.payments]
-        : p.payments;
 
       return {
         ...p,
         sessions: updatedSessions,
-        payments: updatedPayments
+        payments: p.payments
       };
     }));
   };
@@ -524,12 +513,10 @@ export function AppContent() {
         };
       });
 
-      const updatedPayments = [{ id: `gp_${Date.now()}`, amount: installment.amount, date: installment.date }, ...p.payments];
-
       return {
         ...p,
         sessions: updatedSessions,
-        payments: updatedPayments
+        payments: p.payments
       };
     }));
   };
@@ -629,7 +616,10 @@ export function AppContent() {
 
     if (currentUser) {
       const match = newUsers.find(
-        u => u.id === currentUser.id && u.username === currentUser.username && u.password === currentUser.password
+        u => u.id === currentUser.id &&
+          u.username === currentUser.username &&
+          (u.credentialVersion ?? 1) === (currentUser.credentialVersion ?? 1) &&
+          u.isActive !== false
       );
       if (!match) {
         handleLogout();
