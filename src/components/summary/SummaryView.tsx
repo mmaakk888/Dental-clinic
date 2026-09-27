@@ -188,7 +188,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     }
 
     const amt = typeof expenseAmount === 'number' ? expenseAmount : 0;
-    if (amt <= 0) {
+    if (!Number.isFinite(amt) || amt <= 0) {
       showToast('يرجى كتابة قيمة مصروف صحيحة أكبر من الصفر', 'warning');
       return;
     }
@@ -737,6 +737,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   <input
                     type="number"
                     required
+                    min="0.01"
+                    step="0.01"
                     value={expenseAmount}
                     onChange={e => setExpenseAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
                     placeholder="0"

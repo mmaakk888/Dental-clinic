@@ -4,6 +4,7 @@ import { Storage } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
 import { canUserLoginNow } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
+import { mergeExpenseUpdate } from './utils/expenseUtils';
 import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
@@ -686,7 +687,7 @@ export function AppContent() {
 
   const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }) => {
     if (expenseData.id) {
-      setExpenses(prev => prev.map(e => e.id === expenseData.id ? (expenseData as import('./types').Expense) : e));
+      setExpenses(prev => prev.map(e => e.id === expenseData.id ? mergeExpenseUpdate(e, expenseData) : e));
     } else {
       const newExp: import('./types').Expense = {
         ...expenseData,

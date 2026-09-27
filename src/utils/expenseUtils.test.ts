@@ -1,9 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Expense } from '../types';
-import { expenseBreakdown, expensesForMonth, inferExpenseType } from './expenseUtils';
+import { expenseBreakdown, expensesForMonth, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
 
 const expense = (id: string, title: string, category: Expense['category'], amount: number, date: string): Expense => ({ id, title, category, amount, date });
+
+test('basic expense edits preserve supplier, invoice items and payment metadata', () => {
+  const original: Expense = {
+    ...expense('invoice-1', 'خامات', 'supplies', 500, '2026-09-01'),
+    supplierName: 'المورد', invoiceNumber: 'INV-42', paidAmount: 200, remainingAmount: 300,
+    items: [{ id: 'item-1', itemName: 'قفازات', quantity: 5, unit: 'علبة', unitPrice: 100, total: 500 }],
+    invoiceImageUrl: 'image',
+  };
+  const updated = mergeExpenseUpdate(original, { title: 'خامات سبتمبر', note: 'تمت المراجعة' });
+  assert.equal(updated.supplierName, original.supplierName);
+  assert.equal(updated.invoiceNumber, original.invoiceNumber);
+  assert.deepEqual(updated.items, original.items);
+  assert.equal(updated.paidAmount, 200);
+  assert.equal(updated.remainingAmount, 300);
+  assert.equal(updated.title, 'خامات سبتمبر');
+  assert.equal(original.title, 'خامات');
+  assert.equal(mergeExpenseUpdate(original, { invoiceImageUrl: undefined }).invoiceImageUrl, undefined);
+  assert.equal(mergeExpenseUpdate(original, { id: 'different' }).id, original.id);
+});
 
 test('classifies legacy operating expenses without changing stored records', () => {
   assert.equal(inferExpenseType(expense('1', 'إيجار العيادة', 'fixed', 1, '2026-09-01')), 'rent');
@@ -21,3 +40,4 @@ test('filters by invoice month and totals each expense once', () => {
   assert.equal(september.length, 2);
   assert.deepEqual(expenseBreakdown(september), { rent: 2000, electricity: 0, water: 0, salary: 0, supplies: 500, maintenance: 0, other: 0 });
 });
+

@@ -2,6 +2,11 @@ import { Expense } from '../types';
 
 export type ExpenseType = NonNullable<Expense['expenseType']>;
 
+// A basic editor only submits its visible fields; retain invoice metadata and items.
+export function mergeExpenseUpdate(existing: Expense, update: Partial<Expense>): Expense {
+  return { ...existing, ...update, id: existing.id };
+}
+
 export function inferExpenseType(expense: Pick<Expense, 'title' | 'category' | 'expenseType'>): ExpenseType {
   if (expense.expenseType) return expense.expenseType;
   const title = expense.title.toLowerCase();
@@ -25,3 +30,4 @@ export function expenseBreakdown(expenses: Expense[]) {
     return result;
   }, { rent: 0, electricity: 0, water: 0, salary: 0, supplies: 0, maintenance: 0, other: 0 });
 }
+
