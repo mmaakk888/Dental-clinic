@@ -980,26 +980,6 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
           </div>
         </div>
       )}
-      {/* Smart Mobile Floating Action Button (FAB) for fast appointment booking */}
-      <div 
-        className={`fixed bottom-22 sm:bottom-10 left-4 sm:left-8 z-40 transition-all duration-300 ${
-          isFabVisible ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0 pointer-events-none'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={handleOpenAddModal}
-          className={`bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold shadow-lg border border-indigo-500/40 flex items-center justify-center transition-all duration-300 cursor-pointer touch-manipulation ${
-            isFabExpanded 
-              ? 'px-4 py-3 rounded-full gap-2 text-xs sm:text-sm min-h-[48px]' 
-              : 'w-12 h-12 rounded-full min-h-[48px]'
-          }`}
-          title="حجز موعد جديد"
-        >
-          <Plus className="w-5 h-5 shrink-0" />
-          {isFabExpanded && <span className="whitespace-nowrap font-tajawal">حجز موعد</span>}
-        </button>
-      </div>
 
       {/* Appointment Status Bottom Sheet / Modal */}
       <AppointmentStatusModal

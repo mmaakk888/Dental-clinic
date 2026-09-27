@@ -783,7 +783,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       </div>
 
       {/* 4. Sticky Segmented Control Tabs */}
-      <div className="sticky top-2 z-30 bg-white/95 backdrop-blur-md p-1.5 rounded-2xl border border-slate-200/90 shadow-md">
+      <div className="bg-white p-1.5 rounded-2xl border border-slate-200">
         <div className="flex flex-wrap items-center gap-1.5 py-0.5">
           <button
             type="button"
@@ -1533,65 +1533,6 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
         </div>
       </div>
 
-      {/* 6. Fixed Bottom Action Bar (Appears when a Tooth is Selected) */}
-      {selectedToothId && (
-        <div className="patient-floating-action fixed bottom-3 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-lg z-40 bg-[#0f3d3e] text-white p-3.5 rounded-3xl shadow-2xl border border-teal-700/80 flex flex-wrap items-center justify-between gap-3 animate-slideUp">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-[#c9a227] text-slate-950 font-black text-sm flex items-center justify-center shrink-0 shadow-xs">
-              🦷
-            </div>
-            <div className="min-w-0">
-              <span className="text-[11px] text-amber-300 font-mono font-bold block">سن #{selectedToothId}</span>
-              <h4 className="text-xs font-black truncate">{getToothLabel(selectedToothId)}</h4>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => handleOpenServiceModal(selectedToothId)}
-              className="px-3 py-2 rounded-xl bg-[#c9a227] hover:bg-amber-500 text-slate-950 font-black text-xs transition-all cursor-pointer shadow-xs active:scale-95 touch-manipulation min-h-[40px] flex items-center gap-1"
-            >
-              <Plus className="w-4 h-4" />
-              <span>تسجيل خدمة</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleOpenPaymentModal()}
-              className="px-3 py-2 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-extrabold text-xs transition-all cursor-pointer min-h-[40px] flex items-center gap-1"
-            >
-              <Wallet className="w-3.5 h-3.5" />
-              <span>إضافة دفعة</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedToothId(null)}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
-              title="إلغاء التحديد"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 7. Floating Action Button (FAB) to return to Dental Chart */}
-      {activeTab !== 'chart' && (
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab('chart');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          className="patient-floating-action fixed bottom-4 right-4 z-30 px-4 py-3 rounded-2xl bg-[#0f3d3e] text-[#c9a227] font-black text-xs shadow-xl border border-teal-700 flex items-center gap-2 hover:bg-[#134d4f] transition-all cursor-pointer active:scale-95 touch-manipulation min-h-[48px]"
-        >
-          <span className="text-base">🦷</span>
-          <span>المخطط الطبي</span>
-          <ArrowUp className="w-4 h-4 text-white" />
-        </button>
-      )}
 
       {/* 8. MODALS & BOTTOM SHEETS */}
 
@@ -2122,4 +2063,3 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 });
 
 PatientFileView.displayName = 'PatientFileView';
-

@@ -182,7 +182,8 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   ];
 
   const visibleNavItems = navItems.filter(item => {
-    if (isDetectedMobile && item.hideOnMobile) return false;
+    const permission = { patients: 'patientView', appointments: 'appointments', lab: 'lab', summary: 'summary', settings: 'controlPanel' }[item.key];
+    if (permission && currentUser?.permissions?.[permission] === false) return false;
     return true;
   });
 
@@ -191,7 +192,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
 
   return (
     <>
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 font-['Cairo',sans-serif] w-full max-w-[100vw] shadow-2xs">
+      <header className="bg-white border-b border-slate-200 font-['Cairo',sans-serif] w-full shadow-2xs">
         <div className="max-w-[1800px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
           
           {/* RTL Right Side: Brand/Back & Clickable Account Area Trigger */}
@@ -344,27 +345,28 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
         </div>
 
         {/* Desktop Primary View Navigation Tabs */}
-        <div className="hidden md:block bg-slate-50/90 border-t border-slate-200 px-3 sm:px-6 py-1.5 overflow-x-auto scrollbar-none w-full">
-          <div className="flex items-center gap-2 min-w-max max-w-[1800px] mx-auto px-1">
+        <div className="bg-slate-50 border-t border-slate-200 px-3 sm:px-6 py-3 w-full">
+          <nav aria-label="أقسام العيادة" className="clinic-navigation max-w-[1800px] mx-auto">
             {visibleNavItems.map(item => {
-              const isActive = activeView === item.key;
+              const isActive = activeView === item.key || (activeView === 'patient-file' && item.key === 'patients');
               return (
                 <button
                   key={item.key}
                   type="button"
                   onClick={() => onNavigate(item.key as ActiveView)}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold font-tajawal transition-all cursor-pointer whitespace-nowrap touch-manipulation active:scale-95 ${
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold font-tajawal cursor-pointer min-w-0 min-h-[44px] ${
                     isActive
                       ? 'bg-slate-900 text-white shadow-2xs ring-1 ring-slate-800'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
                   }`}
                 >
-                  <span>{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span className="shrink-0" aria-hidden="true">{item.icon}</span>
+                  <span className="break-words text-start">{item.label}</span>
                 </button>
               );
             })}
-          </div>
+          </nav>
         </div>
       </header>
 

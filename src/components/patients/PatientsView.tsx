@@ -538,6 +538,10 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       )}
 
       {/* 1. Smart Collapsing Top Bar Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="text-sm text-slate-600">اختر ملف المريض لحجز موعد أو تسجيل دفعة.</p>
+        <button type="button" onClick={handleOpenAddModal} className="flex items-center gap-2 min-h-[44px] rounded-xl bg-purple-700 px-4 py-3 text-sm font-bold text-white"><UserPlus className="w-4 h-4" />إضافة مريض</button>
+      </div>
       <div 
         className={`flex items-center justify-between gap-2.5 bg-white px-3.5 rounded-2xl border border-slate-200/90 shadow-2xs transition-all duration-300 overflow-hidden ${
           isHeaderCollapsed 
@@ -892,149 +896,6 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
         )}
       </div>
 
-      {/* 4. Smart Speed Dial Backdrop */}
-      {isSpeedDialOpen && (
-        <div
-          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 transition-opacity animate-fadeIn cursor-pointer"
-          onClick={() => setIsSpeedDialOpen(false)}
-        />
-      )}
-
-      {/* 4. Smart Floating Action Button & Speed Dial Actions (Bottom Left for RTL) */}
-      <div className={`fixed bottom-22 sm:bottom-10 left-4 sm:left-8 z-40 flex flex-col items-start space-y-3 pointer-events-none pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-all duration-300 ${
-        isFabVisible || isSpeedDialOpen ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0 pointer-events-none'
-      }`}>
-        {/* Speed Dial Quick Action Options */}
-        {isSpeedDialOpen && (
-          <div className="flex flex-col items-start space-y-2.5 mb-1 pointer-events-auto animate-slideUp font-tajawal dir-rtl">
-            {/* Action 1: Add New Patient */}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic();
-                setIsSpeedDialOpen(false);
-                handleOpenAddModal();
-              }}
-              className="group flex items-center gap-3 active:scale-95 transition-all cursor-pointer"
-            >
-              <div className="w-12 h-12 rounded-full bg-purple-700 hover:bg-purple-800 text-white shadow-lg flex items-center justify-center border border-purple-400/30">
-                <UserPlus className="w-5 h-5 text-white" />
-              </div>
-              <span className="bg-slate-900/90 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md border border-slate-700/50 whitespace-nowrap">
-                ➕ إضافة مريض جديد
-              </span>
-            </button>
-
-            {/* Action 2: Quick Appointment */}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic();
-                setIsSpeedDialOpen(false);
-                if (patients.length > 0) {
-                  setQuickApptPatient(patients[0]);
-                } else {
-                  handleOpenAddModal();
-                }
-              }}
-              className="group flex items-center gap-3 active:scale-95 transition-all cursor-pointer"
-            >
-              <div className="w-12 h-12 rounded-full bg-sky-600 hover:bg-sky-700 text-white shadow-lg flex items-center justify-center border border-sky-400/30">
-                <Calendar className="w-5 h-5 text-white" />
-              </div>
-              <span className="bg-slate-900/90 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md border border-slate-700/50 whitespace-nowrap">
-                📅 حجز موعد سريع
-              </span>
-            </button>
-
-            {/* Action 3: Record Payment */}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic();
-                setIsSpeedDialOpen(false);
-                const debtPatient = patients.find(p => getPatientMetrics(p).totalRemain > 0) || patients[0];
-                if (debtPatient) {
-                  onSelectPatient(debtPatient.id, 'patients');
-                } else {
-                  showToast('يرجى اختيار مريض من القائمة لتسجيل الدفعة المالية', 'info');
-                }
-              }}
-              className="group flex items-center gap-3 active:scale-95 transition-all cursor-pointer"
-            >
-              <div className="w-12 h-12 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center justify-center border border-emerald-400/30">
-                <DollarSign className="w-5 h-5 text-white" />
-              </div>
-              <span className="bg-slate-900/90 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md border border-slate-700/50 whitespace-nowrap">
-                💵 تسجيل دفعة مالية
-              </span>
-            </button>
-
-            {/* Action 4: Role-Based Treatment Plan / Patient File */}
-            {isDoctor ? (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic();
-                  setIsSpeedDialOpen(false);
-                  if (patients.length > 0) {
-                    onSelectPatient(patients[0].id, 'patients');
-                  } else {
-                    handleOpenAddModal();
-                  }
-                }}
-                className="group flex items-center gap-3 active:scale-95 transition-all cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg flex items-center justify-center border border-indigo-400/30">
-                  <Activity className="w-5 h-5 text-white" />
-                </div>
-                <span className="bg-slate-900/90 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md border border-slate-700/50 whitespace-nowrap">
-                  🦷 إنشاء خطة علاج
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic();
-                  setIsSpeedDialOpen(false);
-                  handleOpenAddModal();
-                }}
-                className="group flex items-center gap-3 active:scale-95 transition-all cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-full bg-purple-600 hover:bg-purple-700 text-white shadow-lg flex items-center justify-center border border-purple-400/30">
-                  <FileText className="w-5 h-5 text-white" />
-                </div>
-                <span className="bg-slate-900/90 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md border border-slate-700/50 whitespace-nowrap">
-                  👤 إنشاء ملف مريض
-                </span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Main Smart FAB Trigger */}
-        <button
-          type="button"
-          onClick={handleFabClick}
-          className={`pointer-events-auto flex items-center justify-center gap-2 bg-purple-700 hover:bg-purple-800 active:bg-purple-900 text-white rounded-full shadow-xl shadow-purple-950/30 border border-purple-400/30 cursor-pointer min-w-[52px] min-h-[52px] h-[52px] transition-all duration-250 ease-in-out active:scale-95 ${
-            isFabExpanded ? 'px-4 sm:px-5' : 'px-3.5'
-          }`}
-          title={isSpeedDialOpen ? 'إغلاق قائمة الإجراءات' : 'إضافة مريض وإجراءات سريعة'}
-        >
-          <div className={`transition-transform duration-200 ${isSpeedDialOpen ? 'rotate-45' : ''}`}>
-            <Plus className="w-6 h-6 text-white shrink-0" />
-          </div>
-
-          <span
-            className={`font-black font-tajawal text-xs sm:text-sm whitespace-nowrap overflow-hidden transition-all duration-200 ${
-              isFabExpanded ? 'max-w-[120px] opacity-100 ml-1' : 'max-w-0 opacity-0 hidden'
-            }`}
-          >
-            إضافة مريض
-          </span>
-        </button>
-      </div>
 
       {/* 5. Touch Options Bottom Sheet (قائمة الخيارات السريعة للمريض) */}
       {activeBottomSheetPatient && (

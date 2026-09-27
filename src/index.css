@@ -464,6 +464,11 @@ th, td { text-align: start; }
 .dashboard-footer-strip button svg { width: .9rem; height: .9rem; }
 
 .summary-tabs > button { white-space: normal; min-width: 0; min-height: 44px; line-height: 1.5; }
+.clinic-navigation { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .5rem; }
+.clinic-navigation button:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+@media (max-width: 639px) {
+  .clinic-navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .dashboard-panel-header { flex-wrap: wrap; }
 .dashboard-card > span { overflow-wrap: anywhere; }
 .dashboard-module-count { max-width: calc(100% - 4.2rem); overflow-wrap: anywhere; }
@@ -507,4 +512,3 @@ th, td { text-align: start; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
-

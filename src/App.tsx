@@ -7,7 +7,6 @@ import { allocateLabPayment } from './utils/labFinancials';
 import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
-import { MobileBottomNav } from './components/navigation/MobileBottomNav';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { LoginModal } from './components/auth/LoginModal';
 import { OfflineSyncBanner } from './components/common/OfflineSyncBanner';
@@ -799,7 +798,7 @@ export function AppContent() {
         onSelectPatient={handleSelectPatient}
       />
 
-      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-24 lg:pb-6">
+      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6">
         <Suspense fallback={<ViewFallbackLoader />}>
           {activeView === 'home' && (
             <HomeView
@@ -988,14 +987,6 @@ export function AppContent() {
         </Suspense>
       </main>
 
-      <MobileBottomNav
-        activeView={activeView}
-        labels={labels}
-        currentUser={currentUser}
-        appointments={appointments}
-        labCases={labCases}
-        onNavigate={handleNavigateWithSubTab}
-      />
 
       {isLoginModalOpen && (
         <LoginModal
@@ -1083,4 +1074,3 @@ export default function App() {
     </ToastAndConfirmProvider>
   );
 }
-
