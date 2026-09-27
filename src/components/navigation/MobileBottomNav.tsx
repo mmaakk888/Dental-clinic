@@ -132,7 +132,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
   return (
     <>
       {/* 5-ITEM THUMB-FRIENDLY BOTTOM BAR */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-lg border-t border-slate-200/90 shadow-lg px-2 h-17 flex items-center justify-between font-['Cairo',sans-serif] select-none touch-manipulation dir-rtl">
+      <nav aria-label="التنقل الرئيسي" className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-lg border-t border-slate-200/90 shadow-lg px-2 h-[calc(4.25rem+env(safe-area-inset-bottom,0px))] pb-[env(safe-area-inset-bottom,0px)] flex items-center justify-between font-['Cairo',sans-serif] select-none touch-manipulation dir-rtl">
         {main5Items.map(item => {
           const isMoreActive = item.key === 'more' && ['secretary-desk', 'lab', 'settings'].includes(activeView);
           const isActive = activeView === item.key || (activeView === 'patient-file' && item.key === 'patients') || isMoreActive;
@@ -178,7 +178,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
 
       {/* MORE MODULES BOTTOM SHEET MODAL */}
       {isMoreOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end font-['Cairo',sans-serif] dir-rtl">
+        <div className="lg:hidden fixed inset-0 z-50 flex flex-col justify-end font-['Cairo',sans-serif] dir-rtl">
           {/* Backdrop */}
           <div
             className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity animate-fadeIn"
@@ -248,5 +248,6 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
 });
 
 MobileBottomNav.displayName = 'MobileBottomNav';
+
 
 

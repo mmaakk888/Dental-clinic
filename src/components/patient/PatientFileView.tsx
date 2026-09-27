@@ -784,7 +784,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 4. Sticky Segmented Control Tabs */}
       <div className="sticky top-2 z-30 bg-white/95 backdrop-blur-md p-1.5 rounded-2xl border border-slate-200/90 shadow-md">
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
+        <div className="flex flex-wrap items-center gap-1.5 py-0.5">
           <button
             type="button"
             onClick={() => setActiveTab('chart')}
@@ -1535,7 +1535,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 6. Fixed Bottom Action Bar (Appears when a Tooth is Selected) */}
       {selectedToothId && (
-        <div className="fixed bottom-3 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-lg z-40 bg-[#0f3d3e] text-white p-3.5 rounded-3xl shadow-2xl border border-teal-700/80 flex items-center justify-between gap-3 animate-slideUp">
+        <div className="patient-floating-action fixed bottom-3 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-lg z-40 bg-[#0f3d3e] text-white p-3.5 rounded-3xl shadow-2xl border border-teal-700/80 flex flex-wrap items-center justify-between gap-3 animate-slideUp">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-[#c9a227] text-slate-950 font-black text-sm flex items-center justify-center shrink-0 shadow-xs">
               🦷
@@ -1585,7 +1585,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
             setActiveTab('chart');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          className="fixed bottom-4 right-4 z-30 px-4 py-3 rounded-2xl bg-[#0f3d3e] text-[#c9a227] font-black text-xs shadow-xl border border-teal-700 flex items-center gap-2 hover:bg-[#134d4f] transition-all cursor-pointer active:scale-95 touch-manipulation min-h-[48px]"
+          className="patient-floating-action fixed bottom-4 right-4 z-30 px-4 py-3 rounded-2xl bg-[#0f3d3e] text-[#c9a227] font-black text-xs shadow-xl border border-teal-700 flex items-center gap-2 hover:bg-[#134d4f] transition-all cursor-pointer active:scale-95 touch-manipulation min-h-[48px]"
         >
           <span className="text-base">🦷</span>
           <span>المخطط الطبي</span>
@@ -2122,3 +2122,4 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 });
 
 PatientFileView.displayName = 'PatientFileView';
+

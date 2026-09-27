@@ -262,7 +262,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
         </div>
 
         {/* Tab switcher */}
-        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto">
+        <div className="summary-tabs grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200 w-full lg:w-auto">
           <button
             type="button"
             onClick={() => setActiveTab('overview')}
@@ -396,14 +396,14 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </p>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto">
+            <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto min-w-0">
               <button
                 type="button"
                 onClick={() => setIsOcrModalOpen(true)}
                 className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-700 to-indigo-800 hover:from-emerald-800 hover:to-indigo-900 text-white text-xs font-black shadow-md cursor-pointer transition-all flex items-center justify-center gap-2 shrink-0 border border-emerald-400/30"
               >
                 <Sparkles className="w-4 h-4 text-emerald-300" />
-                <span>✨ مسح وتفنيط فاتورة بالذكاء الاصطناعي (OCR)</span>
+                <span>قراءة صورة فاتورة</span>
               </button>
 
               <button
@@ -939,3 +939,4 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 });
 
 SummaryView.displayName = 'SummaryView';
+

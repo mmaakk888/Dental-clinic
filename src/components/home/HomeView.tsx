@@ -131,8 +131,8 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       {canPatients && (
         <section className="dashboard-search-panel">
           <Search className="pointer-events-none absolute start-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-          <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} className="dashboard-search-input" placeholder="ابحث باسم المريض أو رقم الهاتف أو رقم الملف" />
-          {searchQuery && <button type="button" className="dashboard-search-clear" onClick={() => setSearchQuery('')}><X /></button>}
+          <input aria-label="البحث عن مريض بالاسم أو الهاتف أو رقم الملف" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} className="dashboard-search-input" placeholder="اسم المريض، الهاتف أو رقم الملف" />
+          {searchQuery && <button type="button" aria-label="مسح البحث" className="dashboard-search-clear" onClick={() => setSearchQuery('')}><X /></button>}
           {searchQuery && (
             <div className="dashboard-search-results">
               {filteredPatients.length ? filteredPatients.map(patient => (
@@ -161,7 +161,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       </section>
 
       <div className="dashboard-main-grid">
-        <section className="dashboard-panel lg:col-span-2">
+        <section className="dashboard-panel">
           <div className="dashboard-panel-header">
             <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">المواعيد القادمة</h2></div>
             <button type="button" className="dashboard-link" onClick={() => onNavigate('appointments')}>عرض الجدول <ChevronLeft /></button>

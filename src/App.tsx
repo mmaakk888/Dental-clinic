@@ -799,7 +799,7 @@ export function AppContent() {
         onSelectPatient={handleSelectPatient}
       />
 
-      <main className="flex-1 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-24 md:pb-6">
+      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-24 lg:pb-6">
         <Suspense fallback={<ViewFallbackLoader />}>
           {activeView === 'home' && (
             <HomeView
@@ -1083,3 +1083,4 @@ export default function App() {
     </ToastAndConfirmProvider>
   );
 }
+
