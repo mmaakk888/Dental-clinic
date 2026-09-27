@@ -1,5 +1,5 @@
 import {
-  Patient, Appointment, Lab, LabCase, ThemeSettings, UILabels, User, Expense, WhatsappSettings, DrugCatalogItem
+  Patient, Appointment, Lab, LabCase, ThemeSettings, UILabels, User, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage
 } from '../types';
 import {
   INITIAL_PATIENTS, INITIAL_APPOINTMENTS, INITIAL_LABS, INITIAL_LAB_CASES,
@@ -22,6 +22,7 @@ const KEYS = {
   CLINIC_NAME: 'dental_clinic_name_v2',
   CLINIC_LOGO: 'dental_clinic_logo_v2',
   EXPENSES: 'dental_expenses_v2',
+  MATERIAL_USAGES: 'dental_material_usages_v1',
   WHATSAPP_SETTINGS: 'dental_whatsapp_settings_v2',
   DRUG_CATALOG: 'dental_drug_catalog_v2',
   PRIVACY_MODE: 'dental_privacy_mode_v2',
@@ -142,6 +143,9 @@ export const Storage = {
   getExpenses: (): Expense[] => safeGet(KEYS.EXPENSES, INITIAL_EXPENSES),
   saveExpenses: (expenses: Expense[]) => safeSet(KEYS.EXPENSES, expenses),
 
+  getMaterialUsages: (): MaterialUsage[] => safeGet(KEYS.MATERIAL_USAGES, []),
+  saveMaterialUsages: (usages: MaterialUsage[]) => safeSet(KEYS.MATERIAL_USAGES, usages),
+
   getWhatsappSettings: (): WhatsappSettings => safeGet(KEYS.WHATSAPP_SETTINGS, DEFAULT_WHATSAPP_SETTINGS),
   saveWhatsappSettings: (settings: WhatsappSettings) => safeSet(KEYS.WHATSAPP_SETTINGS, settings),
 
@@ -187,4 +191,3 @@ export const Storage = {
     Object.values(KEYS).forEach(k => localStorage.removeItem(k));
   }
 };
-

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { extraMessageTemplates } from '../../utils/whatsappUtils';
 import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown } from 'lucide-react';
-import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem } from '../../types';
+import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { saveBackupToFirebase, fetchFirebaseBackups, fetchSingleFirebaseBackup, removeFirebaseBackup, FirebaseBackupMeta } from '../../utils/firebaseService';
 import { ClinicLogo } from '../common/ClinicLogo';
@@ -24,6 +24,7 @@ interface SettingsViewProps {
   labs: Lab[];
   labCases: LabCase[];
   expenses: Expense[];
+  materialUsages: MaterialUsage[];
   whatsappSettings: WhatsappSettings;
   drugCatalog: DrugCatalogItem[];
   onSaveClinicInfo: (name: string, logo: string | null) => void;
@@ -55,6 +56,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   labs,
   labCases,
   expenses,
+  materialUsages,
   whatsappSettings,
   drugCatalog,
   onSaveClinicInfo,
@@ -622,6 +624,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         labs,
         labCases,
         expenses,
+        materialUsages,
         users,
         serviceTypes,
         whatsappSettings,

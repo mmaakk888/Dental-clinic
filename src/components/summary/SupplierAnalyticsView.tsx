@@ -1,15 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import { TrendingUp, Package, Building2, AlertTriangle, ArrowUpRight, ArrowDownRight, DollarSign, PieChart, Layers, Search, RefreshCw, BarChart2 } from 'lucide-react';
-import { Expense, ExpenseItem } from '../../types';
+import { Expense, ExpenseItem, MaterialUsage } from '../../types';
+import { MaterialInventoryPanel } from './MaterialInventoryPanel';
 
 interface SupplierAnalyticsViewProps {
   expenses: Expense[];
   isPrivacyMode?: boolean;
+  materialUsages: MaterialUsage[];
+  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void;
+  onDeleteMaterialUsage: (id: string) => void;
 }
 
 export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   expenses,
   isPrivacyMode = false,
+  materialUsages,
+  onAddMaterialUsage,
+  onDeleteMaterialUsage,
 }) => {
   const [materialSearchQuery, setMaterialSearchQuery] = useState('');
   const [selectedMaterialFilter, setSelectedMaterialFilter] = useState<string | null>(null);
@@ -30,7 +37,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
       pricesHistory: { price: number; date: string; supplier: string }[];
     }> = {};
 
-    expenses.forEach(exp => {
+    expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
       const items = exp.items && exp.items.length > 0
         ? exp.items
         : [{ itemName: exp.title, quantity: 1, unit: 'دفعة', unitPrice: exp.amount, total: exp.amount }];
@@ -86,7 +93,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   const supplierAnalytics = useMemo(() => {
     const map: Record<string, { name: string; totalSpent: number; count: number; lastInvoiceDate: string; phone?: string }> = {};
 
-    expenses.forEach(exp => {
+    expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
       const name = exp.supplierName || exp.title || 'مورد غير محدد';
       if (!map[name]) {
         map[name] = {
@@ -122,11 +129,12 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   }, [materialAnalytics, materialSearchQuery]);
 
   const totalSuppliesSpend = useMemo(() => {
-    return expenses.reduce((acc, e) => acc + e.amount, 0);
+    return expenses.filter(e => e.category === 'supplies').reduce((acc, e) => acc + e.amount, 0);
   }, [expenses]);
 
   return (
     <div className="space-y-6 animate-fadeIn font-cairo dir-rtl">
+      <MaterialInventoryPanel expenses={expenses} usages={materialUsages} isPrivacyMode={isPrivacyMode} onAddUsage={onAddMaterialUsage} onDeleteUsage={onDeleteMaterialUsage} />
       
       {/* Top Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -204,7 +212,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div>
               <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                <Package className="w-4 h-4 text-indigo-600" /> أكثر المواد المستهلكة والإنفاق عليها
+                <Package className="w-4 h-4 text-indigo-600" /> أكثر المواد شراءً والإنفاق عليها
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">ترتيب الخامات الطبية حسب حجم الإنفاق المالي الإجمالي</p>
             </div>

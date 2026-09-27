@@ -80,6 +80,18 @@ export interface Expense {
   createdAt?: string;
 }
 
+export interface MaterialUsage {
+  id: string;
+  materialKey: string;
+  materialName: string;
+  quantity: number;
+  unit: string;
+  date: string;
+  kind: 'used' | 'waste';
+  note?: string;
+  unitCostAtUse: number;
+}
+
 export interface PrescriptionItem {
   id: string;
   drugName: string;

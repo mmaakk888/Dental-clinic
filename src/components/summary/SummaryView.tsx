@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ArrowRight, Landmark, DollarSign, TrendingUp, AlertCircle, Calendar, Plus, Trash2, Receipt, ShieldAlert, CreditCard, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2 } from 'lucide-react';
-import { Patient, LabCase, Expense } from '../../types';
+import { Patient, LabCase, Expense, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { BalanceProgressMeter, CompactBalanceBadge, VisualFinancialCard } from '../common/FinancialBadge';
 import { InvoiceOcrModal } from './InvoiceOcrModal';
@@ -13,12 +13,15 @@ interface SummaryViewProps {
   patients: Patient[];
   labCases: LabCase[];
   expenses: Expense[];
+  materialUsages: MaterialUsage[];
   isPrivacyMode?: boolean;
   isOpenAddExpenseModal?: boolean;
   onCloseAddExpenseModal?: () => void;
   onAddExpense: (expense: Omit<Expense, 'id'>) => void;
   onSaveExpense?: (expense: Omit<Expense, 'id'> & { id?: string }) => void;
   onDeleteExpense: (id: string) => void;
+  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void;
+  onDeleteMaterialUsage: (id: string) => void;
   onBackToHome: () => void;
 }
 
@@ -26,12 +29,15 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   patients,
   labCases,
   expenses,
+  materialUsages,
   isPrivacyMode = false,
   isOpenAddExpenseModal = false,
   onCloseAddExpenseModal,
   onAddExpense,
   onSaveExpense,
   onDeleteExpense,
+  onAddMaterialUsage,
+  onDeleteMaterialUsage,
   onBackToHome
 }) => {
   const { showToast, askConfirm } = useToastAndConfirm();
@@ -646,7 +652,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
       {/* Analytics Tab */}
       {activeTab === 'analytics' && (
-        <SupplierAnalyticsView expenses={expenses} isPrivacyMode={isPrivacyMode} />
+        <SupplierAnalyticsView expenses={expenses} materialUsages={materialUsages} onAddMaterialUsage={onAddMaterialUsage} onDeleteMaterialUsage={onDeleteMaterialUsage} isPrivacyMode={isPrivacyMode} />
       )}
 
       {/* Add / Edit Expense Modal */}

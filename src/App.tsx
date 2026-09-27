@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session } from './types';
+import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
 import { Storage } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
 import { canUserLoginNow } from './utils/accessControl';
@@ -126,6 +126,7 @@ export function AppContent() {
   const [clinicLogo, setClinicLogo] = useState<string | null>(() => Storage.getClinicLogo());
 
   const [expenses, setExpenses] = useState<import('./types').Expense[]>(() => Storage.getExpenses());
+  const [materialUsages, setMaterialUsages] = useState<MaterialUsage[]>(() => Storage.getMaterialUsages());
   const [whatsappSettings, setWhatsappSettings] = useState<import('./types').WhatsappSettings>(() => Storage.getWhatsappSettings());
   const [drugCatalog, setDrugCatalog] = useState<import('./types').DrugCatalogItem[]>(() => Storage.getDrugCatalog());
   const [isPrivacyMode, setIsPrivacyMode] = useState<boolean>(() => Storage.getPrivacyMode());
@@ -404,6 +405,7 @@ export function AppContent() {
   useEffect(() => { Storage.saveLabs(labs); }, [labs]);
   useEffect(() => { Storage.saveLabCases(labCases); }, [labCases]);
   useEffect(() => { Storage.saveExpenses(expenses); }, [expenses]);
+  useEffect(() => { Storage.saveMaterialUsages(materialUsages); }, [materialUsages]);
   useEffect(() => { Storage.saveWhatsappSettings(whatsappSettings); }, [whatsappSettings]);
   useEffect(() => { Storage.saveDrugCatalog(drugCatalog); }, [drugCatalog]);
 
@@ -702,6 +704,12 @@ export function AppContent() {
     setExpenses(prev => prev.filter(e => e.id !== expenseId));
   };
 
+  const handleAddMaterialUsage = (usage: Omit<MaterialUsage, 'id'>) => {
+    setMaterialUsages(prev => [{ ...usage, id: `usage_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` }, ...prev]);
+  };
+
+  const handleDeleteMaterialUsage = (id: string) => setMaterialUsages(prev => prev.filter(usage => usage.id !== id));
+
   const handleSaveWhatsappSettings = (settings: import('./types').WhatsappSettings) => {
     setWhatsappSettings(settings);
     Storage.saveWhatsappSettings(settings);
@@ -730,6 +738,7 @@ export function AppContent() {
     if (Array.isArray(data.labs)) setLabs(data.labs);
     if (Array.isArray(data.labCases)) setLabCases(data.labCases);
     if (Array.isArray(data.expenses)) setExpenses(data.expenses);
+    if (Array.isArray(data.materialUsages)) setMaterialUsages(data.materialUsages);
     if (Array.isArray(data.users)) setUsers(data.users);
     if (Array.isArray(data.serviceTypes)) setServiceTypes(data.serviceTypes);
     if (data.whatsappSettings) setWhatsappSettings(data.whatsappSettings);
@@ -905,12 +914,15 @@ export function AppContent() {
                 patients={patients}
                 labCases={labCases}
                 expenses={expenses}
+                materialUsages={materialUsages}
                 isPrivacyMode={isPrivacyMode}
                 isOpenAddExpenseModal={isAddExpenseModalOpen}
                 onCloseAddExpenseModal={handleCloseAddExpenseModal}
                 onAddExpense={handleAddExpense}
                 onSaveExpense={handleSaveExpense}
                 onDeleteExpense={handleDeleteExpense}
+                onAddMaterialUsage={handleAddMaterialUsage}
+                onDeleteMaterialUsage={handleDeleteMaterialUsage}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
               />
             ) : (
@@ -935,6 +947,7 @@ export function AppContent() {
                 labs={labs}
                 labCases={labCases}
                 expenses={expenses}
+                materialUsages={materialUsages}
                 whatsappSettings={whatsappSettings}
                 drugCatalog={drugCatalog}
                 onSaveClinicInfo={handleSaveClinicInfo}
