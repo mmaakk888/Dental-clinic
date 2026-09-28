@@ -442,7 +442,14 @@ export function AppContent() {
       }
     };
     const timer = window.setInterval(verifyAccessWindow, 60_000);
-    return () => window.clearInterval(timer);
+    window.addEventListener('focus', verifyAccessWindow);
+    document.addEventListener('visibilitychange', verifyAccessWindow);
+    verifyAccessWindow();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', verifyAccessWindow);
+      document.removeEventListener('visibilitychange', verifyAccessWindow);
+    };
   }, [currentUser, handleLogout]);
 
   const handleOpenLogin = useCallback(() => {
@@ -1084,4 +1091,3 @@ export default function App() {
     </ToastAndConfirmProvider>
   );
 }
-

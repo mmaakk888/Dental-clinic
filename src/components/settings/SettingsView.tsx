@@ -498,6 +498,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
+    if (userScheduleEnabled && (!userScheduleDays.length || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleEnd) || userScheduleStart === userScheduleEnd)) {
+      showToast('اختر يوم عمل واحدًا على الأقل ووقت بداية ونهاية صحيحين ومختلفين.', 'warning');
+      return;
+    }
+
     const newUser: User = {
       id: editingUser ? editingUser.id : `u_${Date.now()}`,
       name: userName.trim(),
@@ -1982,7 +1987,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
                     </div>
                     <div>
-                      <span className="block text-[11px] font-bold text-slate-600 mb-2">أيام السماح بالدخول</span>
+                      <span className="block text-[11px] font-bold text-slate-600 mb-2">أيام بداية الشيفت — بتوقيت القاهرة</span>
+                      <p className="text-xs text-slate-500 mb-2">لو الشيفت من ٨ مساءً إلى ٢ صباحًا، اختر يوم بدايته؛ السماح يمتد لصباح اليوم التالي وينتهي عند موعد النهاية.</p>
                       <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                         {[
                           [6, 'السبت'], [0, 'الأحد'], [1, 'الاثنين'], [2, 'الثلاثاء'],
