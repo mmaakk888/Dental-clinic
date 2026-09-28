@@ -102,16 +102,6 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       || patient.mobile.includes(query) || patient.id.includes(query)).slice(0, 6);
   }, [patients, searchQuery]);
 
-  const modules = {
-    patients: { view: 'patients' as ActiveView, icon: <Users />, tone: 'indigo' as Tone, count: patientCount + ' ملف', allowed: canPatients, title: 'سجل المرضى', desc: 'الملفات الطبية والحسابات' },
-    appointments: { view: 'appointments' as ActiveView, icon: <Calendar />, tone: 'amber' as Tone, count: todayApptCount + ' اليوم', allowed: canAppointments, title: 'المواعيد', desc: 'تنظيم الحجوزات والمتابعات' },
-    lab: { view: 'lab' as ActiveView, icon: <Microscope />, tone: 'purple' as Tone, count: activeLabCount + ' نشطة', allowed: canLab, title: 'التركيبات والمعامل', desc: 'متابعة الحالات والمستحقات' },
-    summary: { view: 'summary' as ActiveView, icon: <Landmark />, tone: 'emerald' as Tone, count: 'تقارير', allowed: canFinance, title: 'المالية والتقارير', desc: 'الإيرادات والمصروفات والأرباح' },
-    settings: { view: 'settings' as ActiveView, icon: <Settings2 />, tone: 'teal' as Tone, count: 'إدارة', allowed: canSettings, title: 'لوحة التحكم', desc: 'المظهر والمحتوى والصلاحيات' },
-  };
-  const orderedModules = tileOrder
-    .map(key => ({ key, module: modules[key as keyof typeof modules] }))
-    .filter(item => item.module?.allowed);
   const statusLabel: Record<string, string> = {
     scheduled: 'محجوز', waiting: 'في الانتظار', attended: 'تم الكشف', no_show: 'لم يحضر',
     apologized: 'اعتذر', confirmed: 'مؤكد', cancelled: 'ملغي'
@@ -163,7 +153,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       <div className="dashboard-main-grid">
         <section className="dashboard-panel">
           <div className="dashboard-panel-header">
-            <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">المواعيد القادمة</h2></div>
+            <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">جدول اليوم</h2></div>
             <button type="button" className="dashboard-link" onClick={() => onNavigate('appointments')}>عرض الجدول <ChevronLeft /></button>
           </div>
           {stats.dayAppointments.length ? (
@@ -182,13 +172,13 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         </section>
 
         <aside className="dashboard-panel">
-          <div className="dashboard-panel-header"><div><p className="dashboard-eyebrow">تنفيذ سريع</p><h2 className="dashboard-section-title">أهم الإجراءات</h2></div><Zap className="text-amber-500" /></div>
+          <div className="dashboard-panel-header"><div><p className="dashboard-eyebrow">تنفيذ سريع</p><h2 className="dashboard-section-title">إجراءات اليوم</h2></div></div>
           <div className="dashboard-actions">
             {canPatients && <button type="button" onClick={onOpenWalkIn} className="dashboard-action"><span className="dashboard-action-icon bg-indigo-100 text-indigo-700"><UserPlus /></span><span><strong>زيارة بدون موعد</strong><small>فتح ملف وتسجيل التحصيل</small></span><ChevronLeft /></button>}
             {canAppointments && <button type="button" onClick={onOpenScheduleModal} className="dashboard-action"><span className="dashboard-action-icon bg-amber-100 text-amber-700"><Calendar /></span><span><strong>حجز موعد</strong><small>إضافة حجز جديد بسرعة</small></span><ChevronLeft /></button>}
             <button type="button" onClick={() => onNavigate('secretary-desk')} className="dashboard-action"><span className="dashboard-action-icon bg-emerald-100 text-emerald-700"><CreditCard /></span><span><strong>تسجيل دفعة</strong><small>تحصيل مبلغ من مريض</small></span><ChevronLeft /></button>
             {canFinance && <button type="button" onClick={onOpenInvoiceModal} className="dashboard-action"><span className="dashboard-action-icon bg-rose-100 text-rose-700"><Receipt /></span><span><strong>إضافة مصروف</strong><small>تسجيل فاتورة أو مصروف</small></span><ChevronLeft /></button>}
-            {onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action"><span className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>ملخص الحركة والتحصيل</small></span><ChevronLeft /></button>}
+            {canFinance && onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action"><span className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>ملخص الحركة والتحصيل</small></span><ChevronLeft /></button>}
           </div>
         </aside>
       </div>
@@ -198,27 +188,12 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
           <div className="flex items-center gap-2"><AlertCircle /><strong>تنبيهات تحتاج متابعة</strong></div>
           <div className="dashboard-alert-grid">
             {stats.noShow > 0 && <span>{stats.noShow} موعد لم يحضر صاحبه</span>}
-            {activeLabCount > 0 && <span>{activeLabCount} حالة معمل ما زالت مفتوحة</span>}
+            {canLab && activeLabCount > 0 && <span>{activeLabCount} حالة معمل ما زالت مفتوحة</span>}
             {canFinance && stats.spent > 0 && <span>مصروفات اليوم: {money(stats.spent, isPrivacyMode)}</span>}
           </div>
         </section>
       )}
 
-      <section>
-        <div className="dashboard-section-heading"><div><p className="dashboard-eyebrow">الإدارة</p><h2 className="dashboard-section-title">أقسام النظام</h2></div><span>الترتيب والمسميات من لوحة التحكم</span></div>
-        <div className="dashboard-modules">
-          {orderedModules.map(({ key, module }) => {
-            const configured = labels.tiles[key];
-            return (
-              <button key={key} type="button" onClick={() => onNavigate(module.view)} className={'dashboard-module ' + tones[module.tone].hover}>
-                <span className={'dashboard-icon ' + tones[module.tone].icon}>{module.icon}</span>
-                <span className="dashboard-module-count">{module.count}</span>
-                <strong>{configured?.title || module.title}</strong><small>{configured?.desc || module.desc}</small><ChevronLeft className="dashboard-module-arrow" />
-              </button>
-            );
-          })}
-        </div>
-      </section>
 
       <section className="dashboard-footer-strip">
         <Stethoscope /><span>{labels.welcomeText || 'اختر الإجراء المطلوب للمتابعة'}</span>
@@ -229,4 +204,3 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 });
 
 HomeView.displayName = 'HomeView';
-

@@ -171,21 +171,6 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   };
 
   // Navigation Items
-  const navItems = [
-    { key: 'home', label: labels.tabs.home || 'الرئيسية', icon: <Home className="w-4 h-4 text-indigo-500" />, hideOnMobile: true },
-    { key: 'secretary-desk', label: labels.tabs['secretary-desk'] || 'الاستقبال', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
-    { key: 'patients', label: labels.tiles.patients?.title || 'المرضى', icon: <Users className="w-4 h-4 text-indigo-600" /> },
-    { key: 'appointments', label: labels.tiles.appointments?.title || 'المواعيد', icon: <Calendar className="w-4 h-4 text-amber-600" /> },
-    { key: 'lab', label: labels.tiles.lab?.title || 'التركيبات', icon: <Microscope className="w-4 h-4 text-purple-600" /> },
-    { key: 'summary', label: labels.tiles.summary?.title || 'المالية', icon: <Landmark className="w-4 h-4 text-emerald-600" /> },
-    { key: 'settings', label: labels.tiles.settings?.title || 'الإعدادات', icon: <Sliders className="w-4 h-4 text-slate-600" /> },
-  ];
-
-  const visibleNavItems = navItems.filter(item => {
-    const permission = { patients: 'patientView', appointments: 'appointments', lab: 'lab', summary: 'summary', settings: 'controlPanel' }[item.key];
-    if (permission && currentUser?.permissions?.[permission] === false) return false;
-    return true;
-  });
 
   const failedCount = queue.filter(q => q.status === 'failed').length;
   const pendingCount = queue.filter(q => q.status === 'pending' || q.status === 'syncing').length;
@@ -344,30 +329,6 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
           </div>
         </div>
 
-        {/* Desktop Primary View Navigation Tabs */}
-        <div className="bg-slate-50 border-t border-slate-200 px-3 sm:px-6 py-3 w-full">
-          <nav aria-label="أقسام العيادة" className="clinic-navigation max-w-[1800px] mx-auto">
-            {visibleNavItems.map(item => {
-              const isActive = activeView === item.key || (activeView === 'patient-file' && item.key === 'patients');
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => onNavigate(item.key as ActiveView)}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold font-tajawal cursor-pointer min-w-0 min-h-[44px] ${
-                    isActive
-                      ? 'bg-slate-900 text-white shadow-2xs ring-1 ring-slate-800'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
-                  }`}
-                >
-                  <span className="shrink-0" aria-hidden="true">{item.icon}</span>
-                  <span className="break-words text-start">{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
       </header>
 
       {/* MODERN ACCOUNT MENU BOTTOM SHEET */}

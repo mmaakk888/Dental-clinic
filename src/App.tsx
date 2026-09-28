@@ -811,7 +811,7 @@ export function AppContent() {
         onSelectPatient={handleSelectPatient}
       />
 
-      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] lg:pb-6">
+      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-[calc(7rem+env(safe-area-inset-bottom,0px))]">
         <Suspense fallback={<ViewFallbackLoader />}>
           {activeView === 'home' && (
             <HomeView
