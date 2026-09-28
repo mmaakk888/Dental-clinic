@@ -5,6 +5,12 @@ export interface AccessDecision {
   message?: string;
 }
 
+export function matchesSessionIdentity(user: User, session: { userId: string; username: string; credentialVersion: number }): boolean {
+  return user.isActive !== false && user.id === session.userId &&
+    user.username.toLowerCase() === session.username.toLowerCase() &&
+    (user.credentialVersion ?? 1) === session.credentialVersion;
+}
+
 const minutesFromTime = (value: string) => {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) return NaN;
   const [hours, minutes] = value.split(':').map(Number);

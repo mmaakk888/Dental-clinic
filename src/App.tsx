@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
 import { Storage } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
-import { canUserLoginNow } from './utils/accessControl';
+import { canUserLoginNow, matchesSessionIdentity } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
 import { mergeExpenseUpdate } from './utils/expenseUtils';
 import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
@@ -75,13 +75,12 @@ export function AppContent() {
     const remembered = Storage.getRememberedSession();
 
     if (remembered) {
-      const match = savedUsers.find(u =>
-        u.id === remembered.userId &&
-        u.username.toLowerCase() === remembered.username.toLowerCase() &&
-        (u.credentialVersion ?? 1) === remembered.credentialVersion &&
-        canUserLoginNow(u).allowed
-      );
+      const match = savedUsers.find(u => matchesSessionIdentity(u, remembered));
       if (match) {
+        if (!canUserLoginNow(match).allowed) {
+          Storage.saveCurrentUser(null);
+          return null;
+        }
         return match;
       } else {
         // User account deleted or password/username changed -> cancel auto-login!
@@ -434,11 +433,16 @@ export function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!currentUser?.accessSchedule?.enabled) return;
+    if (!currentUser) return;
     const verifyAccessWindow = () => {
       const latestUser = Storage.getUsers().find(user => user.id === currentUser.id);
-      if (!latestUser || !canUserLoginNow(latestUser).allowed) {
+      if (!latestUser || !matchesSessionIdentity(latestUser, { userId: currentUser.id, username: currentUser.username, credentialVersion: currentUser.credentialVersion ?? 1 })) {
         handleLogout();
+      } else if (!canUserLoginNow(latestUser).allowed) {
+        // Lock the active session, but keep a valid remember-me identity for the next shift.
+        setCurrentUser(null);
+        Storage.saveCurrentUser(null);
+        setIsLoginModalOpen(true);
       }
     };
     const timer = window.setInterval(verifyAccessWindow, 60_000);

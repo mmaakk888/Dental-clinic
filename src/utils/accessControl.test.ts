@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { User } from '../types';
-import { canUserLoginNow } from './accessControl';
+import { canUserLoginNow, matchesSessionIdentity } from './accessControl';
 
 const user: User = {
   id: 'secretary', name: 'سكرتيرة', username: 'desk', role: 'secretary',
@@ -12,6 +12,17 @@ const user: User = {
   isActive: true,
   accessSchedule: { enabled: true, days: [0], startTime: '09:00', endTime: '17:00' }
 };
+
+test('remembered identity stays valid outside work hours without granting access', () => {
+  const session = { userId: user.id, username: 'DESK', credentialVersion: 1 };
+  assert.equal(matchesSessionIdentity(user, session), true);
+  assert.equal(canUserLoginNow(user, new Date(2026, 8, 27, 23)).allowed, false);
+  assert.equal(canUserLoginNow(user, new Date(2026, 8, 27, 12)).allowed, true);
+  assert.equal(matchesSessionIdentity({ ...user, isActive: false }, session), false);
+  assert.equal(matchesSessionIdentity({ ...user, credentialVersion: 2 }, session), false);
+  assert.equal(matchesSessionIdentity({ ...user, username: 'new-name' }, session), false);
+  assert.equal(matchesSessionIdentity({ ...user, id: 'different' }, session), false);
+});
 
 test('allows login during an enabled work period', () => {
   assert.equal(canUserLoginNow(user, new Date(2026, 8, 27, 12, 0)).allowed, true);
