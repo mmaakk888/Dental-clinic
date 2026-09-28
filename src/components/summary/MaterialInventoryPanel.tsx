@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Expense, MaterialUsage } from '../../types';
-import { getInventory } from '../../utils/inventory';
+import { getInventory, getMonthlyMaterials } from '../../utils/inventory';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 
 interface Props {
@@ -19,6 +19,11 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
   const [search, setSearch] = useState('');
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const monthly = useMemo(() => getMonthlyMaterials(expenses, usages, month), [expenses, usages, month]);
   const { showToast, askConfirm } = useToastAndConfirm();
   const selected = inventory.find(row => row.key === selectedKey);
   const filtered = inventory.filter(row => row.name.toLowerCase().includes(search.trim().toLowerCase()));
@@ -28,6 +33,7 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const amount = Number(quantity);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return showToast('اختر تاريخ حركة الخامة.', 'warning');
     if (!selected || !Number.isFinite(amount) || amount <= 0) return showToast('اختر خامة واكتب كمية صحيحة.', 'warning');
     if (amount > selected.remaining) return showToast(`الكمية أكبر من المتاح (${selected.remaining} ${selected.unit}).`, 'warning');
     onAddUsage({ materialKey: selected.key, materialName: selected.name, quantity: amount, unit: selected.unit, date, kind, note: note.trim() || undefined, unitCostAtUse: selected.averageUnitCost });
@@ -36,6 +42,19 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
   };
 
   return <section className="space-y-4">
+    <div className="rounded-2xl border bg-white p-4 space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h3 className="font-black text-slate-900">تقرير الخامات الشهري</h3>
+        <label className="text-sm flex flex-wrap items-center gap-2">الشهر<input aria-label="شهر تقرير الخامات" type="month" required value={month} onChange={e => e.target.value && setMonth(e.target.value)} className="border rounded-xl p-2 min-w-0 max-w-full" /></label>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs text-slate-600">قيمة المشتريات</span><strong>{money(monthly.purchases)}</strong></div>
+        <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs text-slate-600">تكلفة الاستهلاك</span><strong>{money(monthly.usedCost)}</strong></div>
+        <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs text-slate-600">تكلفة الهالك</span><strong>{money(monthly.wasteCost)}</strong></div>
+      </div>
+      <p className="text-xs text-slate-600">المشتريات هي قيمة الفواتير وليست بالضرورة المبلغ المسدّد. الاستهلاك والهالك محسوبان بسعر الوحدة المحفوظ عند تسجيل الحركة، ولا يُضافان مرة أخرى للمصروفات. أرصدة المخزون بالأسفل تشمل كل الشهور.</p>
+      {monthly.estimatedCount > 0 && <p className="text-xs text-amber-800">توجد {monthly.estimatedCount} حركة قديمة بدون تكلفة محفوظة؛ تكلفتها تقديرية بمتوسط المشتريات الحالي.</p>}
+    </div>
     <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
       <div className="flex flex-col sm:flex-row justify-between gap-2"><div><h3 className="font-black text-slate-900">مخزون واستهلاك الخامات</h3><p className="text-xs text-slate-600">المشتريات مأخوذة من بنود فواتير الخامات؛ الاستهلاك والهالك يخفضان الكمية فقط ولا ينشئان مصروفًا جديدًا.</p></div><strong className="text-sm text-indigo-800">تكلفة المستهلك: {money(totalConsumedCost)}</strong></div>
       <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2 mt-4">
@@ -61,3 +80,4 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
     {!!usages.length && <div className="rounded-2xl border overflow-hidden"><h4 className="font-bold p-3 bg-slate-50">آخر حركات المخزون</h4>{[...usages].sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`)).slice(0, 20).map(usage => <div key={usage.id} className="p-3 border-t flex flex-wrap justify-between gap-2 text-sm"><span><b>{usage.materialName}</b> · {usage.kind === 'waste' ? 'هالك' : 'استهلاك'} {usage.quantity} {usage.unit}<small className="block text-slate-500">{usage.date}{usage.note ? ` · ${usage.note}` : ''}</small></span><button type="button" className="text-rose-700 p-2" onClick={() => askConfirm({ title: 'حذف حركة خامة', message: 'سيتم إرجاع الكمية إلى المتاح. هل تريد المتابعة؟', confirmLabel: 'حذف الحركة', tone: 'danger', onConfirm: () => onDeleteUsage(usage.id) })}>حذف</button></div>)}</div>}
   </section>;
 }
+

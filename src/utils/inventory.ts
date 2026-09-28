@@ -33,6 +33,28 @@ export function getInventory(expenses: Expense[], usages: MaterialUsage[]) {
     remaining: Math.max(0, row.purchased - row.used - row.waste),
     rawRemaining: row.purchased - row.used - row.waste,
     averageUnitCost: row.purchased > 0 ? row.purchaseCost / row.purchased : 0,
-    consumedCost: row.purchased > 0 ? (row.used + row.waste) * (row.purchaseCost / row.purchased) : 0
+    consumedCost: usages.filter(usage => usage.materialKey === row.key).reduce((sum, usage) => sum + getUsageCost(usage, row.purchased > 0 ? row.purchaseCost / row.purchased : 0), 0)
   })).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
 }
+
+function getUsageCost(usage: MaterialUsage, fallbackUnitCost: number) {
+  const cost = Number.isFinite(usage.unitCostAtUse) && usage.unitCostAtUse >= 0 ? usage.unitCostAtUse : fallbackUnitCost;
+  return Math.max(0, Number(usage.quantity) || 0) * cost;
+}
+
+export function getMonthlyMaterials(expenses: Expense[], usages: MaterialUsage[], month: string) {
+  const inventory = getInventory(expenses, usages);
+  const movements = usages.filter(usage => usage.date.slice(0, 7) === month);
+  const result = { purchases: 0, usedCost: 0, wasteCost: 0, estimatedCount: 0, movements };
+  result.purchases = expenses.filter(expense => expense.category === 'supplies' && (expense.invoiceDate || expense.date).slice(0, 7) === month)
+    .reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0);
+  for (const usage of movements) {
+    const fallback = inventory.find(row => row.key === usage.materialKey)?.averageUnitCost ?? 0;
+    if (!Number.isFinite(usage.unitCostAtUse) || usage.unitCostAtUse < 0) result.estimatedCount++;
+    const cost = getUsageCost(usage, fallback);
+    if (usage.kind === 'waste') result.wasteCost += cost;
+    else result.usedCost += cost;
+  }
+  return result;
+}
+
