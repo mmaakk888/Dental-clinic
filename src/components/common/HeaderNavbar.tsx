@@ -183,7 +183,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   return (
     <>
       <header className="bg-white border-b border-slate-200 font-['Cairo',sans-serif] w-full shadow-2xs">
-        <div className="max-w-[1800px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
+        <div className="clinic-header-inner max-w-[1800px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
           
           {/* RTL Right Side: Brand/Back & Clickable Account Area Trigger */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -205,20 +205,20 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               <button
                 type="button"
                 onClick={() => setIsProfileMenuOpen(true)}
-                className="flex items-center gap-2 sm:gap-2.5 p-1 sm:p-1.5 px-2 sm:px-3 rounded-2xl bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 border border-slate-200/90 transition-all cursor-pointer shadow-2xs active:scale-98 min-h-[44px] group shrink-0"
+                className="clinic-account-trigger flex items-center gap-2 sm:gap-2.5 p-1 sm:p-1.5 px-2 sm:px-3 rounded-2xl bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 border border-slate-200/90 transition-all cursor-pointer shadow-2xs active:scale-98 min-h-[44px] group shrink-0"
                 title="قائمة الحساب والخيارات"
               >
                 {/* Circular User Avatar */}
-                <div className="w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white font-black text-xs sm:text-sm flex items-center justify-center border-2 border-indigo-200/90 shadow-2xs shrink-0 font-mono">
+                <div className="clinic-account-avatar w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white font-black text-xs sm:text-sm flex items-center justify-center border-2 border-indigo-200/90 shadow-2xs shrink-0 font-mono">
                   {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'د'}
                 </div>
 
                 {/* Account Details: Doctor Name & Clinic/Role Name */}
                 <div className="flex flex-col text-right min-w-0">
-                  <span className="text-xs sm:text-sm font-black text-slate-900 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight">
+                  <span className="clinic-account-name text-xs sm:text-sm font-black text-slate-900 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight">
                     {currentUser.name}
                   </span>
-                  <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight flex items-center gap-1">
+                  <span className="clinic-account-meta text-[10px] sm:text-[11px] font-bold text-slate-500 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight flex items-center gap-1">
                     <span className="text-indigo-700 font-extrabold">{getRoleLabel(currentUser.role)}</span>
                     <span className="text-slate-300">•</span>
                     <span>{clinicName || 'عيادة الأسنان'}</span>
@@ -253,7 +253,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
           </div>
 
           {/* RTL Left Side Actions: Privacy Toggle, Connection Status & Notification Bell */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="clinic-header-tools flex items-center gap-1.5 sm:gap-2 shrink-0">
             
             {/* Patient-facing privacy toggle for mirrored clinic displays */}
             <button
@@ -325,7 +325,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
             >
               <Bell className="w-4.5 h-4.5 text-slate-700" />
               {totalNotifCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center animate-pulse border border-white">
+                <span className="clinic-notification-count absolute -top-1 -right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center animate-pulse border border-white">
                   {totalNotifCount > 9 ? '9+' : totalNotifCount}
                 </span>
               )}

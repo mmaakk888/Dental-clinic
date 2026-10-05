@@ -13,6 +13,7 @@ interface Props {
 
 export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, onNavigate }: Props) => {
   const [open, setOpen] = useState(false);
+  const dock = useRef<HTMLElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const permissions = currentUser?.permissions;
@@ -43,21 +44,41 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
 
   useEffect(() => { setOpen(false); }, [activeView, currentUser?.id]);
 
+  useEffect(() => {
+    const element = dock.current;
+    if (!element) return;
+    const updateClearance = () => document.documentElement.style.setProperty('--clinic-dock-height', `${Math.ceil(element.getBoundingClientRect().height)}px`);
+    updateClearance();
+    const observer = new ResizeObserver(updateClearance);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--clinic-dock-height');
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    const wideWindow = window.matchMedia('(min-width: 768px)');
+    const closeMoreOnDesktop = () => { if (wideWindow.matches) setOpen(false); };
+    wideWindow.addEventListener('change', closeMoreOnDesktop);
+    return () => wideWindow.removeEventListener('change', closeMoreOnDesktop);
+  }, []);
+
   const navigate = (view: ActiveView) => { setOpen(false); onNavigate(view); };
   if (!currentUser) return null;
 
   return <>
-    <nav className="clinic-dock" aria-label="التنقل الرئيسي" dir="rtl">
+    <nav ref={dock} className="clinic-dock" aria-label="التنقل الرئيسي" dir="rtl">
       {items.map((item, index) => <button key={item.key} type="button"
         className={'clinic-dock-item ' + (index >= 4 ? 'clinic-dock-desktop' : '')}
         aria-current={selected === item.key ? 'page' : undefined} title={item.label}
         onClick={() => navigate(item.key)}>
-        <item.icon aria-hidden="true" /><span>{item.label}</span>
+        <span className="clinic-dock-icon" aria-hidden="true"><item.icon /></span><span className="clinic-dock-label">{item.label}</span>
       </button>)}
       {!!extra.length && <button ref={moreButton} type="button" className="clinic-dock-item clinic-dock-more"
         data-active={extra.some(item => item.key === selected) || undefined}
         aria-haspopup="dialog" aria-expanded={open} aria-controls="clinic-more-menu" onClick={() => setOpen(true)}>
-        <MoreHorizontal aria-hidden="true" /><span>المزيد</span>
+        <span className="clinic-dock-icon" aria-hidden="true"><MoreHorizontal /></span><span className="clinic-dock-label">المزيد</span>
       </button>}
     </nav>
     {open && <dialog ref={dialog} id="clinic-more-menu" aria-labelledby="clinic-more-title" className="clinic-dock-dialog" dir="rtl"

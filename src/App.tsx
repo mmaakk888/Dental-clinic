@@ -294,15 +294,15 @@ export function AppContent() {
     return (localStorage.getItem('dental_device_mode') as DeviceMode) || 'auto';
   });
 
-  // Automatically detect screen width & device type (Mobile vs Computer Browser vs Large TV 60")
+  // Responsive layout follows the window width; a large monitor is not necessarily a TV.
   const [isDetectedMobile, setIsDetectedMobile] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return window.innerWidth < 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    return window.innerWidth < 768;
   });
 
   const [isDetectedTv, setIsDetectedTv] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return window.innerWidth >= 1920 || (typeof window.screen !== 'undefined' && window.screen.width >= 1920);
+    return window.innerWidth >= 1920;
   });
 
   const handleNavigateWithSubTab = useCallback((view: ActiveView, subTab?: string) => {
@@ -328,8 +328,8 @@ export function AppContent() {
     const checkDevice = () => {
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
       animationFrameId = requestAnimationFrame(() => {
-        const isMobile = window.innerWidth < 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-        const isTv = window.innerWidth >= 1920 || (typeof window.screen !== 'undefined' && window.screen.width >= 1920);
+        const isMobile = window.innerWidth < 768;
+        const isTv = window.innerWidth >= 1920;
         setIsDetectedMobile(prev => prev !== isMobile ? isMobile : prev);
         setIsDetectedTv(prev => prev !== isTv ? isTv : prev);
       });
@@ -356,9 +356,7 @@ export function AppContent() {
     } else if (deviceMode === 'desktop') {
       document.body.classList.add('forced-desktop-mode');
     } else if (deviceMode === 'auto') {
-      if (isDetectedTv && !isDetectedMobile) {
-        document.body.classList.add('tv-mode');
-      } else if (isDetectedMobile) {
+      if (isDetectedMobile) {
         document.body.classList.add('forced-mobile-mode');
       }
     }
@@ -846,7 +844,7 @@ export function AppContent() {
         onSelectPatient={handleSelectPatient}
       />
 
-      <main className="flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-[calc(7rem+env(safe-area-inset-bottom,0px))]">
+      <main className="clinic-workspace flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6">
         <Suspense fallback={<ViewFallbackLoader />}>
           {activeView === 'home' && (
             <HomeView

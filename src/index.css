@@ -6,6 +6,7 @@
   --accent: #6366f1;
   --bg-main: #f8fafc;
   --app-font: 'Cairo', 'Tajawal', 'Alexandria', system-ui, -apple-system, sans-serif;
+  --clinic-dock-clearance: calc(var(--clinic-dock-height, 5rem) + 2rem + env(safe-area-inset-bottom, 0px));
 }
 
 html, body {
@@ -364,7 +365,8 @@ th, td { text-align: start; }
 .clinic-dock { position: fixed; z-index: 40; bottom: calc(.75rem + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); display: flex; width: calc(100% - 1.5rem); max-width: 760px; padding: .4rem; gap: .25rem; border: 1px solid #e2e8f0; border-radius: 1.35rem; background: #fff; box-shadow: 0 8px 32px rgb(15 23 42 / .16); isolation: isolate; }
 .clinic-dock-item { flex: 1; min-width: 0; min-height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .35rem; padding: .45rem .2rem; border-radius: .95rem; color: #64748b; font-size: .72rem; font-weight: 700; cursor: pointer; }
 .clinic-dock-item svg { width: 21px; height: 21px; stroke-width: 1.8; flex-shrink: 0; }
-.clinic-dock-item span { max-width: 100%; overflow-wrap: anywhere; line-height: 1.4; text-align: center; }
+.clinic-dock-icon { display: grid; place-items: center; flex: 0 0 auto; }
+.clinic-dock-label { max-width: 100%; overflow-wrap: anywhere; line-height: 1.4; text-align: center; }
 .clinic-dock-item:hover { background: #f1f5f9; color: #0f172a; }
 .clinic-dock-item[aria-current="page"], .clinic-dock-item[data-active="true"] { background: #eef2ff; color: #4338ca; }
 .clinic-dock-item:focus-visible, .clinic-dock-option:focus-visible, .clinic-dock-close:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
@@ -377,13 +379,71 @@ th, td { text-align: start; }
 .clinic-dock-option svg { width: 20px; height: 20px; flex-shrink: 0; color: #64748b; }
 .clinic-dock-option span { flex: 1; }
 .clinic-dock-option[aria-current="page"] { background: #eef2ff; color: #4338ca; }
-@media (max-width: 767px) {
+@media (width < 768px) {
   .clinic-dock-desktop { display: none; }
   .clinic-dock-more { display: flex; }
   .clinic-dock { gap: 0; width: calc(100% - 1rem); bottom: calc(.5rem + env(safe-area-inset-bottom, 0px)); }
   .clinic-dock-item { font-size: .72rem; }
 }
 @media print { .clinic-dock, .clinic-dock-dialog { display: none !important; } }
+
+.clinic-workspace { padding-block-end: var(--clinic-dock-clearance); }
+
+/* Use the available window width, not user-agent detection or browser zoom. */
+@media screen and (768px <= width < 1024px) {
+  .clinic-dock-item { min-height: 68px; font-size: .875rem; }
+  .clinic-dock-item svg { width: 24px; height: 24px; }
+}
+
+@media screen and (min-width: 1024px) {
+  html { font-size: 112.5%; }
+  .clinic-dock {
+    width: calc(100% - 3rem);
+    max-width: 1184px;
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+    padding: .55rem;
+    gap: .4rem;
+    border-radius: 1.5rem;
+    box-shadow: 0 12px 36px rgb(15 23 42 / .14), 0 2px 6px rgb(15 23 42 / .05);
+  }
+  .clinic-dock-item {
+    min-height: 82px;
+    padding: .6rem .4rem;
+    gap: .35rem;
+    font-size: .9rem;
+    color: #475569;
+    border: 1px solid transparent;
+    border-radius: 1rem;
+    transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .clinic-dock-item svg { width: 28px; height: 28px; stroke-width: 1.9; }
+  .clinic-dock-icon { width: 40px; height: 40px; border-radius: .75rem; }
+  .clinic-dock-item[aria-current="page"] {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, #fff);
+    border-color: color-mix(in srgb, var(--primary) 18%, #fff);
+  }
+  .clinic-dock-item[aria-current="page"] .clinic-dock-icon {
+    color: #fff;
+    background: var(--primary);
+    box-shadow: 0 4px 10px color-mix(in srgb, var(--primary) 20%, transparent);
+  }
+  .clinic-header-inner { min-height: 4.5rem; height: auto; padding-block: .5rem; }
+  .clinic-account-trigger { min-height: 56px; gap: .75rem; }
+  .clinic-account-avatar { width: 44px; height: 44px; font-size: 1rem; }
+  .clinic-account-name { max-width: 260px; font-size: .95rem; }
+  .clinic-account-meta { max-width: 260px; font-size: .75rem; }
+  .clinic-header-tools { gap: .6rem; }
+  .clinic-header-tools > button { min-width: 50px; min-height: 50px; height: auto; padding-block: .6rem; }
+  .clinic-header-tools > button svg { width: 23px; height: 23px; }
+  .clinic-header-tools > button > span:not(.clinic-notification-count):not(.rounded-full) { font-size: .8rem; }
+  .clinic-notification-count { width: 21px; height: 21px; font-size: 12px; }
+}
+
+@media screen and (min-width: 1280px) {
+  .clinic-dock-item { flex-direction: row; min-height: 64px; gap: .6rem; font-size: 1rem; }
+  .clinic-dock-label { min-width: 0; overflow-wrap: anywhere; }
+}
 
 .dashboard-hero {
   display: flex;
@@ -552,4 +612,16 @@ button.dashboard-card:hover { transform: translateY(-2px); box-shadow: 0 14px 30
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+@media screen and (min-width: 1024px) {
+  .dashboard-icon { width: 3rem; height: 3rem; }
+  .dashboard-icon svg { width: 1.6rem; height: 1.6rem; }
+  .dashboard-action { min-height: 4rem; padding: .8rem; gap: .8rem; }
+  .dashboard-action-icon { width: 2.8rem; height: 2.8rem; }
+  .dashboard-action-icon svg { width: 1.45rem; height: 1.45rem; }
+  .dashboard-action strong, .dashboard-section-title { font-size: 1rem; }
+  .dashboard-action small, .dashboard-empty span { font-size: .8rem; }
+  .dashboard-date { font-size: .85rem; }
+  .dashboard-date svg { width: 1.2rem; height: 1.2rem; }
 }
