@@ -11,15 +11,18 @@ export function materialKey(name: string, unit: string) {
 export function getInventory(expenses: Expense[], usages: MaterialUsage[]) {
   const map = new Map<string, { key: string; name: string; unit: string; purchased: number; purchaseCost: number; used: number; waste: number }>();
   expenses.filter(expense => expense.category === 'supplies').forEach(expense => {
-    const items = expense.items?.length ? expense.items : [{ itemName: expense.title, quantity: 1, unit: 'فاتورة', unitPrice: expense.amount, total: expense.amount }];
+    // An invoice amount is not a physical quantity. Keep unitemized expenses in
+    // purchase reports, without inventing stock that can be consumed.
+    const items = expense.items ?? [];
     items.forEach(item => {
       const quantity = Number(item.quantity) || 0;
-      if (!item.itemName.trim() || quantity <= 0) return;
+      if (!item.itemName.trim() || !Number.isFinite(quantity) || quantity <= 0) return;
       const unit = item.unit || 'قطعة';
       const key = materialKey(item.itemName, unit);
       const row = map.get(key) ?? { key, name: item.itemName.trim(), unit, purchased: 0, purchaseCost: 0, used: 0, waste: 0 };
       row.purchased += quantity;
-      row.purchaseCost += Number(item.total) || quantity * (Number(item.unitPrice) || 0);
+      const total = Number(item.total);
+      row.purchaseCost += Number.isFinite(total) && total >= 0 ? total : quantity * (Number(item.unitPrice) || 0);
       map.set(key, row);
     });
   });
@@ -57,4 +60,3 @@ export function getMonthlyMaterials(expenses: Expense[], usages: MaterialUsage[]
   }
   return result;
 }
-

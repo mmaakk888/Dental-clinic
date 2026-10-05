@@ -13,6 +13,7 @@ interface Props {
 
 export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddUsage, onDeleteUsage }: Props) {
   const inventory = useMemo(() => getInventory(expenses, usages), [expenses, usages]);
+  const unitemizedCount = expenses.filter(expense => expense.category === 'supplies' && !expense.items?.length).length;
   const [selectedKey, setSelectedKey] = useState('');
   const [quantity, setQuantity] = useState<number | ''>('');
   const [kind, setKind] = useState<MaterialUsage['kind']>('used');
@@ -42,6 +43,7 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
   };
 
   return <section className="space-y-4">
+    {unitemizedCount > 0 && <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">يوجد {unitemizedCount} فاتورة خامات بدون تفاصيل أصناف. قيمتها محسوبة ضمن المشتريات، لكنها لا تضيف كمية للمخزون حتى يتم تسجيل الأصناف والكميات. لا تسجل نفس الفاتورة مرة ثانية.</p>}
     <div className="rounded-2xl border bg-white p-4 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h3 className="font-black text-slate-900">تقرير الخامات الشهري</h3>
@@ -80,4 +82,3 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
     {!!usages.length && <div className="rounded-2xl border overflow-hidden"><h4 className="font-bold p-3 bg-slate-50">آخر حركات المخزون</h4>{[...usages].sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`)).slice(0, 20).map(usage => <div key={usage.id} className="p-3 border-t flex flex-wrap justify-between gap-2 text-sm"><span><b>{usage.materialName}</b> · {usage.kind === 'waste' ? 'هالك' : 'استهلاك'} {usage.quantity} {usage.unit}<small className="block text-slate-500">{usage.date}{usage.note ? ` · ${usage.note}` : ''}</small></span><button type="button" className="text-rose-700 p-2" onClick={() => askConfirm({ title: 'حذف حركة خامة', message: 'سيتم إرجاع الكمية إلى المتاح. هل تريد المتابعة؟', confirmLabel: 'حذف الحركة', tone: 'danger', onConfirm: () => onDeleteUsage(usage.id) })}>حذف</button></div>)}</div>}
   </section>;
 }
-

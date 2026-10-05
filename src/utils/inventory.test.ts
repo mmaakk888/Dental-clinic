@@ -46,10 +46,26 @@ test('monthly report separates purchases, consumption and waste with stable reco
 
 test('legacy missing costs are marked estimated while zero recorded cost is retained', () => {
   const usage: MaterialUsage = { id: 'u', materialKey: materialKey('خامة', 'فاتورة'), materialName: 'خامة', quantity: 1, unit: 'فاتورة', date: '2026-09-02', kind: 'used', unitCostAtUse: 0 };
-  const expenses: Expense[] = [{ id: 'e', title: 'خامة', category: 'supplies', amount: 50, date: '2026-08-01', invoiceDate: '2026-09-01' }];
+  const expenses: Expense[] = [{ id: 'e', title: 'خامة', category: 'supplies', amount: 50, date: '2026-08-01', invoiceDate: '2026-09-01', items: [{ id: 'i', itemName: 'خامة', quantity: 1, unit: 'فاتورة', unitPrice: 50, total: 50 }] }];
   const report = getMonthlyMaterials(expenses, [usage, { ...usage, id: 'old', unitCostAtUse: undefined } as unknown as MaterialUsage], '2026-09');
   assert.equal(report.estimatedCount, 1);
   assert.equal(report.usedCost, 50);
   assert.equal(report.purchases, 50);
 });
 
+test('unitemized invoices count as purchases but never create consumable stock', () => {
+  const expenses: Expense[] = [{ id: 'e', title: 'فاتورة خامات', category: 'supplies', amount: 500, date: '2026-10-05' }];
+  assert.deepEqual(getInventory(expenses, []), []);
+  assert.equal(getMonthlyMaterials(expenses, [], '2026-10').purchases, 500);
+});
+
+test('zero-cost items remain free and nonfinite quantities are excluded', () => {
+  const expenses: Expense[] = [{ id: 'e', title: 'خامات', category: 'supplies', amount: 0, date: '2026-10-05', items: [
+    { id: 'free', itemName: 'عينة مجانية', quantity: 2, unit: 'قطعة', unitPrice: 100, total: 0 },
+    { id: 'bad', itemName: 'غير صالح', quantity: Infinity, unit: 'قطعة', unitPrice: 1, total: 10 }
+  ] }];
+  const rows = getInventory(expenses, []);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].remaining, 2);
+  assert.equal(rows[0].averageUnitCost, 0);
+});
