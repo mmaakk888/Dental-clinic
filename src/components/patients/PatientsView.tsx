@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useDeferredValue, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { 
   Search, 
   UserPlus, 
@@ -30,6 +30,11 @@ import { Patient, NavigationOrigin, Appointment, LabCase, User, AppointmentStatu
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
 import { getPatientFinancialSummary } from '../../utils/financials';
+import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
+import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
+
+const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
 
 interface PatientsViewProps {
   patients: Patient[];
@@ -109,17 +114,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [activeFilter, setActiveFilter] = useState<FilterChip>('all');
   const [showAmounts, setShowAmounts] = useState(!isPrivacyMode);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-
-  // Smart Collapsing Header & Smart FAB State
-  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
-  const [isFabExpanded, setIsFabExpanded] = useState(true);
-  const [isFabVisible, setIsFabVisible] = useState(true);
-  const [isSpeedDialOpen, setIsSpeedDialOpen] = useState(false);
-
-  // Pull-To-Refresh State
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [pullDistance, setPullDistance] = useState(0);
-  const touchStartYRef = useRef<number>(0);
+  useEffect(() => { setShowAmounts(!isPrivacyMode); }, [isPrivacyMode]);
 
   // Modals & Bottom Sheets State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -132,137 +127,12 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     setVisibleCount(30);
   }, [deferredSearchQuery, activeFilter]);
 
-  // Scroll detection for Smart Collapsing Header & Smart FAB (High Performance 60FPS)
-  const headerCollapsedRef = useRef(false);
-  const fabExpandedRef = useRef(true);
-  const fabVisibleRef = useRef(true);
-  const rafScrollRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    let lastScrollY = window.scrollY;
-
-    const handleScroll = () => {
-      if (rafScrollRef.current !== null) return;
-
-      rafScrollRef.current = requestAnimationFrame(() => {
-        rafScrollRef.current = null;
-        const currentScrollY = window.scrollY;
-
-        // Smart Header collapse
-        const shouldCollapseHeader = currentScrollY > 45;
-        if (shouldCollapseHeader !== headerCollapsedRef.current) {
-          headerCollapsedRef.current = shouldCollapseHeader;
-          setIsHeaderCollapsed(shouldCollapseHeader);
-        }
-
-        // Smart FAB collapse & hide logic
-        if (currentScrollY > lastScrollY + 12 && currentScrollY > 50) {
-          if (fabExpandedRef.current) {
-            fabExpandedRef.current = false;
-            setIsFabExpanded(false);
-          }
-          if (currentScrollY > 320 && fabVisibleRef.current) {
-            fabVisibleRef.current = false;
-            setIsFabVisible(false);
-          }
-        } else if (currentScrollY < lastScrollY - 8 || currentScrollY < 30) {
-          if (!fabExpandedRef.current) {
-            fabExpandedRef.current = true;
-            setIsFabExpanded(true);
-          }
-          if (!fabVisibleRef.current) {
-            fabVisibleRef.current = true;
-            setIsFabVisible(true);
-          }
-        }
-
-        lastScrollY = currentScrollY;
-      });
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      if (rafScrollRef.current !== null) cancelAnimationFrame(rafScrollRef.current);
-    };
-  }, []);
-
-  // Optimized Native Pull-to-Refresh Gesture Handler
-  const rafTouchRef = useRef<number | null>(null);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (window.scrollY <= 2 && e.touches.length === 1) {
-      touchStartYRef.current = e.touches[0].clientY;
-    } else {
-      touchStartYRef.current = 0;
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartYRef.current > 0 && window.scrollY <= 2) {
-      const currentY = e.touches[0].clientY;
-      const diff = currentY - touchStartYRef.current;
-      if (diff > 0 && diff < 150) {
-        if (rafTouchRef.current === null) {
-          rafTouchRef.current = requestAnimationFrame(() => {
-            rafTouchRef.current = null;
-            setPullDistance(Math.round(diff));
-          });
-        }
-      }
-    }
-  };
-
-  const handleTouchEnd = () => {
-    if (pullDistance > 65 && !isRefreshing) {
-      triggerHaptic();
-      setIsRefreshing(true);
-      setPullDistance(60);
-      showToast('جاري تحديث سجلات وتزامن البيانات...', 'info');
-      setTimeout(() => {
-        setIsRefreshing(false);
-        setPullDistance(0);
-        showToast('تم تحديث فهرس المرضى بنجاح ✨', 'success');
-      }, 1000);
-    } else {
-      setPullDistance(0);
-    }
-    touchStartYRef.current = 0;
-  };
-
-  // Keyboard ESC listener to close speed dial
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isSpeedDialOpen) {
-        setIsSpeedDialOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSpeedDialOpen]);
-
-  // Haptic feedback trigger helper
-  const triggerHaptic = () => {
-    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
-      try {
-        navigator.vibrate(10);
-      } catch (e) {
-        // Safe fallback
-      }
-    }
-  };
-
-  const handleFabClick = () => {
-    triggerHaptic();
-    setIsSpeedDialOpen(!isSpeedDialOpen);
-  };
-
   // Options Bottom Sheet State
   const [activeBottomSheetPatient, setActiveBottomSheetPatient] = useState<Patient | null>(null);
 
   // Quick Appointment Modal State
   const [quickApptPatient, setQuickApptPatient] = useState<Patient | null>(null);
-  const [quickApptDate, setQuickApptDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [quickApptDate, setQuickApptDate] = useState<string>(clinicToday());
   const [quickApptTime, setQuickApptTime] = useState<string>('10:00');
   const [quickApptService, setQuickApptService] = useState<string>('كشف واستشارة أسنان');
 
@@ -290,7 +160,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const getNextFileNo = () => {
     const numericIds = patients
       .map(p => {
-        const match = p.id.match(/\d+/);
+        const match = normalizeDigits(p.id).match(/^\d+$/);
         return match ? parseInt(match[0], 10) : NaN;
       })
       .filter(n => !isNaN(n));
@@ -335,33 +205,36 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       return;
     }
 
-    const savedFileNo = fileNo.trim();
+    const savedFileNo = editingPatient?.id || normalizeDigits(fileNo.trim());
     const isDuplicate = patients.some(
-      p => p.id.trim() === savedFileNo && (!editingPatient || editingPatient.id !== p.id)
+      p => normalizeDigits(p.id.trim()) === normalizeDigits(savedFileNo) && (!editingPatient || editingPatient.id !== p.id)
     );
     if (isDuplicate) {
       validationFail('patientModal', 'input-fileNo', `رقم الملف (${savedFileNo}) مستخدم بالفعل لحالة أخرى`);
       return;
     }
 
-    if (mobile.trim() && !/^01[0125]\d{8}$/.test(mobile.trim())) {
+    const normalizedPhone = cleanEgyptianPhone(mobile);
+    const savedMobile = normalizedPhone.startsWith('20') ? `0${normalizedPhone.slice(2)}` : normalizedPhone;
+    if (mobile.trim() && !/^01[0125]\d{8}$/.test(savedMobile)) {
       validationFail('patientModal', 'input-mobile', 'رقم الموبايل يجب أن يتكون من 11 رقمًا ويبدأ بـ 01 (مثل 01012345678)');
       return;
     }
 
     const parsedAge = typeof age === 'number' ? age : parseInt(age as string, 10);
-    if (isNaN(parsedAge) || parsedAge < 0 || parsedAge > 120) {
+    if (!Number.isInteger(parsedAge) || parsedAge < 0 || parsedAge > 120) {
       validationFail('patientModal', 'input-age', 'يرجى إدخال سن صحيح (بين 0 و 120)');
       return;
     }
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = clinicToday();
 
     onSavePatient({
       id: savedFileNo,
       name: name.trim(),
-      mobile: mobile.trim(),
+      mobile: savedMobile,
       age: parsedAge,
+      gender: editingPatient?.gender,
       firstVisit: editingPatient ? editingPatient.firstVisit : todayStr,
       allergy: allergy.trim(),
       notes: notes.trim()
@@ -377,65 +250,72 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     setActiveBottomSheetPatient(null);
     askConfirm({
       title: 'حذف ملف الحالة',
-      message: `هل أنت تأكد من حذف ملف المريض (${p.name}) رقم (${p.id})؟ لن يتم إعادة ترقيم باقي الملفات.`,
+      message: `هل أنت متأكد من حذف ملف المريض (${p.name}) رقم (${p.id}) بكل جلساته ومدفوعاته؟ لن يتم إعادة ترقيم باقي الملفات.`,
       confirmLabel: 'حذف الملف',
       tone: 'danger',
       onConfirm: () => {
-        onDeletePatient(p.id);
-        showToast(`تم حذف ملف المريض ${p.name}`, 'warning', {
-          undoFn: () => {
-            onSavePatient({
-              id: p.id,
-              name: p.name,
-              mobile: p.mobile,
-              age: p.age,
-              firstVisit: p.firstVisit,
-              allergy: p.allergy,
-              notes: p.notes
-            });
-            showToast(`تم استعادة ملف المريض ${p.name}`, 'success');
-          }
-        });
+        try { onDeletePatient(p.id); } catch (error) {
+          showToast(error instanceof Error ? error.message : 'تعذر حذف الملف.', 'warning');
+          return;
+        }
+        showToast(`تم حذف ملف المريض ${p.name}`, 'warning');
       }
     });
   };
 
   const getWhatsAppUrl = (mobileNum: string, patientName: string) => {
-    let formatted = mobileNum.replace(/\D/g, '');
-    if (formatted.startsWith('01')) {
-      formatted = '20' + formatted.substring(1);
-    }
-    const msg = encodeURIComponent(`أهلاً بك أ. ${patientName}، نتواصل معك من عيادة الأسنان لمتابعة حالتكم الكريمة.`);
-    return `https://wa.me/${formatted}?text=${msg}`;
+    return buildWhatsAppUrl(mobileNum, `أهلاً ${patientName}، نتواصل معك من عيادة الأسنان لمتابعة حالتك. نتمنى لك دوام الصحة والعافية.`);
   };
 
-  const handleCopyPhone = (mobileNum: string, e?: React.MouseEvent) => {
+  const handleCopyPhone = async (mobileNum: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!mobileNum) return;
-    navigator.clipboard.writeText(mobileNum);
-    showToast(`تم نسخ رقم الهاتف (${mobileNum}) للذاكرة`, 'info');
+    try {
+      await navigator.clipboard.writeText(mobileNum);
+      showToast(`تم نسخ رقم الهاتف (${mobileNum})`, 'info');
+    } catch {
+      showToast('تعذر نسخ رقم الهاتف. يمكنك نسخه من ملف المريض.', 'warning');
+    }
   };
 
   const handleSaveQuickAppt = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickApptPatient || !onSaveAppointment) return;
+    if (!isValidAppointmentDate(quickApptDate) || appointmentTimeMinutes(quickApptTime) === null) {
+      showToast('حدد تاريخًا ووقتًا صحيحين للموعد', 'warning');
+      return;
+    }
 
-    onSaveAppointment({
+    const appointment: Omit<Appointment, 'id'> = {
       patientId: quickApptPatient.id,
+      fileNo: quickApptPatient.id,
       patientName: quickApptPatient.name,
-      patientPhone: quickApptPatient.mobile,
+      mobile: quickApptPatient.mobile,
       date: quickApptDate,
       time: quickApptTime,
-      service: quickApptService,
+      durationMinutes: 30,
+      appointmentType: quickApptService,
       status: 'scheduled',
-      notes: 'حجز سريع من فهرس المرضى'
-    });
+      note: 'حجز سريع من فهرس المرضى',
+      isFollowUp: false,
+      isWalkIn: false
+    };
 
-    showToast(`تم حجز موعد للمريض (${quickApptPatient.name}) بتاريخ ${quickApptDate}`, 'success');
-    setQuickApptPatient(null);
+    const saveAppointment = () => {
+      try {
+        onSaveAppointment(appointment);
+        showToast(`تم حجز موعد للمريض (${quickApptPatient.name}) بتاريخ ${quickApptDate}`, 'success');
+        setQuickApptPatient(null);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'تعذّر حفظ الموعد. راجع البيانات وحاول مرة أخرى.', 'error');
+      }
+    };
+    if (findAppointmentConflicts(appointments, quickApptDate, quickApptTime).length) {
+      askConfirm({ title: 'موعد متعارض', message: 'يتداخل وقت الحجز مع موعد آخر مسجل. هل تريد تأكيد الحجز رغم التعارض؟', confirmLabel: 'تأكيد الحجز', tone: 'warning', onConfirm: saveAppointment });
+    } else saveAppointment();
   };
 
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = clinicToday();
 
   // Helper getters for patient status flags
   const getPatientMetrics = (p: Patient) => {
@@ -444,8 +324,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     const totalPaid = financial.totalCollected;
     const totalRemain = financial.totalRemaining;
     const hasAllergy = Boolean(p.allergy && p.allergy.trim());
-    const hasTodayAppointment = appointments.some(a => a.patientId === p.id && a.date === todayStr);
-    const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.remain > 0 || s.visitStatus === 'follow_up') : false;
+    const hasTodayAppointment = appointments.some(a => (a.patientId === p.id || a.fileNo === p.id) && a.date === todayStr && !['cancelled', 'no_show', 'apologized'].includes(a.status));
+    const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
     const hasLabCase = labCases.some(c => c.patientId === p.id && c.status !== 'completed');
 
     return {
@@ -515,39 +395,16 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const isDoctor = currentUser?.role === 'doctor' || !currentUser?.role;
 
   return (
-    <div 
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
+    <div
       className="space-y-2 max-w-7xl mx-auto py-1 font-['Cairo',sans-serif] dir-rtl relative select-none"
     >
-      {/* Sleek Floating Pull-To-Refresh Pill Badge (No Layout Shift) */}
-      {(pullDistance > 0 || isRefreshing) && (
-        <div 
-          className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-purple-900/90 text-white backdrop-blur-md px-4 py-2 rounded-full shadow-xl flex items-center gap-2 text-xs font-extrabold dir-rtl border border-purple-400/30 transition-all duration-200 pointer-events-none animate-fadeIn"
-          style={{ 
-            opacity: Math.min(pullDistance / 40, 1),
-            transform: `translate(-50%, ${Math.min(pullDistance * 0.4, 24)}px) scale(${Math.min(0.85 + pullDistance * 0.003, 1)})`
-          }}
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-purple-300' : 'text-purple-200'}`} />
-          <span className="whitespace-nowrap font-tajawal">
-            {isRefreshing ? 'جاري مزامنة وسجلات المرضى...' : pullDistance > 60 ? 'اترك لتأكيد التحديث' : 'اسحب لتحديث الفهرس'}
-          </span>
-        </div>
-      )}
-
       {/* 1. Smart Collapsing Top Bar Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm text-slate-600">اختر ملف المريض لحجز موعد أو تسجيل دفعة.</p>
         <button type="button" onClick={handleOpenAddModal} className="flex items-center gap-2 min-h-[44px] rounded-xl bg-purple-700 px-4 py-3 text-sm font-bold text-white"><UserPlus className="w-4 h-4" />إضافة مريض</button>
       </div>
       <div 
-        className={`flex items-center justify-between gap-2.5 bg-white px-3.5 rounded-2xl border border-slate-200/90 shadow-2xs transition-all duration-300 overflow-hidden ${
-          isHeaderCollapsed 
-            ? 'max-h-0 py-0 opacity-0 my-0 border-0 pointer-events-none' 
-            : 'max-h-20 py-2 opacity-100 mb-1.5'
-        }`}
+        className="flex flex-wrap items-center justify-between gap-2.5 bg-white px-3.5 py-3 rounded-2xl border border-slate-200/90 shadow-sm"
       >
         <div className="flex items-center gap-2">
           <button
@@ -571,7 +428,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
         <button
           type="button"
-          onClick={() => setShowAmounts(!showAmounts)}
+          onClick={() => !isPrivacyMode && setShowAmounts(!showAmounts)}
+          disabled={isPrivacyMode}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95 shrink-0 min-h-[36px]"
           title={showAmounts ? 'إخفاء المبالغ والمديونيات' : 'إظهار المبالغ والمديونيات'}
         >
@@ -612,7 +470,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
         </div>
 
         {/* Compact Horizontal Scroll Filter Chips (With Dynamic Counters) */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs font-medium">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
           <button
             type="button"
             onClick={() => setActiveFilter('all')}
@@ -634,8 +492,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-sky-50 text-sky-800 border border-sky-200/80 hover:bg-sky-100'
             }`}
           >
-            <Calendar className="w-3.5 h-3.5 text-sky-600" />
-            <span>🔵 موعد اليوم ({filterCounts.todayAppt})</span>
+            <Calendar className="w-3.5 h-3.5" />
+            <span>موعد اليوم ({filterCounts.todayAppt})</span>
           </button>
 
           <button
@@ -647,8 +505,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-emerald-50 text-emerald-800 border border-emerald-200/80 hover:bg-emerald-100'
             }`}
           >
-            <Activity className="w-3.5 h-3.5 text-emerald-600" />
-            <span>🟢 علاج جاري ({filterCounts.ongoing})</span>
+            <Activity className="w-3.5 h-3.5" />
+            <span>علاج جارٍ ({filterCounts.ongoing})</span>
           </button>
 
           <button
@@ -660,8 +518,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-amber-50 text-amber-800 border border-amber-200/80 hover:bg-amber-100'
             }`}
           >
-            <DollarSign className="w-3.5 h-3.5 text-amber-600" />
-            <span>🟠 مديونية ({filterCounts.debt})</span>
+            <DollarSign className="w-3.5 h-3.5" />
+            <span>رصيد متبقٍ ({filterCounts.debt})</span>
           </button>
 
           <button
@@ -673,8 +531,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-rose-50 text-rose-800 border border-rose-200/80 hover:bg-rose-100'
             }`}
           >
-            <ShieldAlert className="w-3.5 h-3.5 text-rose-600" />
-            <span>🔴 حساسية ({filterCounts.allergy})</span>
+            <ShieldAlert className="w-3.5 h-3.5" />
+            <span>حساسية ({filterCounts.allergy})</span>
           </button>
 
           <button
@@ -686,8 +544,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-purple-50 text-purple-800 border border-purple-200/80 hover:bg-purple-100'
             }`}
           >
-            <Microscope className="w-3.5 h-3.5 text-purple-600" />
-            <span>🟣 تركيبات ({filterCounts.lab})</span>
+            <Microscope className="w-3.5 h-3.5" />
+            <span>تركيبات ({filterCounts.lab})</span>
           </button>
 
           <button
@@ -699,7 +557,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 : 'bg-white text-slate-700 border border-slate-200/80 hover:bg-slate-100'
             }`}
           >
-            <span>بدون موعد ({filterCounts.noAppt})</span>
+            <span>بدون موعد اليوم ({filterCounts.noAppt})</span>
           </button>
 
           {(searchQuery || activeFilter !== 'all') && (
@@ -719,26 +577,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
       {/* 3. Patient Cards Grid */}
       <div className="pb-28 sm:pb-12">
-        {isRefreshing ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
-            {[1, 2, 3, 4, 5, 6].map(i => (
-              <div key={i} className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 space-y-3 animate-pulse">
-                <div className="flex items-center justify-between">
-                  <div className="h-4 bg-slate-200 rounded-md w-1/2" />
-                  <div className="h-4 bg-slate-100 rounded-md w-12" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="h-3 bg-slate-100 rounded-md w-1/3" />
-                  <div className="h-3 bg-slate-100 rounded-md w-1/4" />
-                </div>
-                <div className="flex gap-1.5 pt-1">
-                  <div className="h-5 bg-purple-100/60 rounded-md w-16" />
-                  <div className="h-5 bg-sky-100/60 rounded-md w-14" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : filteredPatients.length === 0 ? (
+        {filteredPatients.length === 0 ? (
           <EmptyState
             message={searchQuery || activeFilter !== 'all' ? 'لا توجد حالات تطابق فلاتر البحث الحالية' : 'لا توجد حالات مسجلة في الفهرس بعد'}
             description={searchQuery || activeFilter !== 'all' ? 'جرّب تغيير كلمات البحث أو اختر فلتر آخر' : 'ابدأ بإضافة أول ملف مريض لتنظيم العيادة'}
@@ -807,6 +646,10 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               return (
                 <div
                   key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`فتح ملف ${p.name}، رقم ${p.id}`}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onSelectPatient(p.id, 'patients'); } }}
                   onClick={() => onSelectPatient(p.id, 'patients')}
                   className="group relative bg-white hover:bg-purple-50/30 active:bg-purple-100/40 rounded-2xl border border-slate-200/90 hover:border-purple-300/80 p-2.5 sm:p-3 shadow-2xs hover:shadow-xs transition-all duration-150 cursor-pointer touch-manipulation flex flex-col justify-between space-y-1.5 active:scale-[0.985] content-visibility-auto"
                 >
@@ -836,7 +679,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   </div>
 
                   {/* Card Row 2: Direct Call Phone + Age + Last Visit Info */}
-                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 font-medium">
                     <div className="flex items-center gap-1.5 min-w-0">
                       {p.mobile ? (
                         <a
@@ -860,7 +703,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
                     {p.firstVisit && (
                       <span className="text-[10px] text-slate-500 font-tajawal truncate shrink-0 font-medium">
-                        آخر زيارة: {p.firstVisit}
+                        أول زيارة: {p.firstVisit}
                       </span>
                     )}
                   </div>
@@ -966,11 +809,14 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </button>
 
               {/* 3. Book New Appointment */}
-              <button
+              {onSaveAppointment && <button
                 type="button"
                 onClick={() => {
                   const p = activeBottomSheetPatient;
                   setActiveBottomSheetPatient(null);
+                  setQuickApptDate(clinicToday());
+                  setQuickApptTime('10:00');
+                  setQuickApptService('كشف واستشارة أسنان');
                   setQuickApptPatient(p);
                 }}
                 className="w-full text-right p-3 rounded-2xl bg-slate-50 hover:bg-sky-50 text-slate-900 hover:text-sky-900 flex items-center gap-3 transition-colors cursor-pointer font-bold text-xs sm:text-sm font-tajawal min-h-[48px] active:scale-[0.99] border border-slate-200/60"
@@ -979,7 +825,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   <Calendar className="w-4.5 h-4.5" />
                 </div>
                 <span>حجز موعد جديد</span>
-              </button>
+              </button>}
 
               {/* 4. Record Payment / Account */}
               <button
@@ -994,7 +840,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
                   <CreditCard className="w-4.5 h-4.5" />
                 </div>
-                <span>تسجيل دفعة / كشف حساب</span>
+                <span>فتح الملف لمراجعة الحساب</span>
               </button>
 
               {/* 5. Phone Call & WhatsApp options if mobile exists */}
@@ -1162,6 +1008,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   <input
                     id="input-fileNo"
                     type="text"
+                    readOnly={Boolean(editingPatient)}
+                    inputMode="numeric"
                     value={fileNo}
                     onChange={e => setFileNo(e.target.value)}
                     placeholder="مثال: 106"
@@ -1176,7 +1024,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   <input
                     type="text"
                     disabled
-                    value={editingPatient ? editingPatient.firstVisit : new Date().toISOString().split('T')[0]}
+                    value={editingPatient ? editingPatient.firstVisit : clinicToday()}
                     className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-500 cursor-not-allowed"
                   />
                 </div>
@@ -1203,7 +1051,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   </label>
                   <input
                     id="input-mobile"
-                    type="text"
+                    type="tel"
                     value={mobile}
                     onChange={e => setMobile(e.target.value)}
                     placeholder="01012345678"
@@ -1218,8 +1066,11 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   <input
                     id="input-age"
                     type="number"
+                    min="0"
+                    max="120"
+                    step="1"
                     value={age}
-                    onChange={e => setAge(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+                    onChange={e => setAge(e.target.value === '' ? '' : Number(e.target.value))}
                     placeholder="مثال: 32"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-purple-600 focus:bg-white"
                   />

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { CheckCircle2, AlertTriangle, XCircle, Trash2, RotateCcw, AlertCircle } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning';
@@ -39,6 +39,27 @@ export function useToastAndConfirm() {
 export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [confirmState, setConfirmState] = useState<ConfirmOptions | null>(null);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!confirmState) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const elements = (): HTMLElement[] => Array.from(confirmRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]') || []) as HTMLElement[];
+    elements()[0]?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setConfirmState(null); }
+      if (event.key === 'Tab') {
+        const list = elements();
+        const first = list[0], last = list[list.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener('keydown', handleKey, true);
+    return () => { document.removeEventListener('keydown', handleKey, true); document.body.style.overflow = previousOverflow; if (previous?.isConnected) previous.focus(); };
+  }, [confirmState]);
 
   const showToast = useCallback((
     message: string,
@@ -104,7 +125,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
       {children}
 
       {/* Toast Stack */}
-      <div id="toastStack" className="fixed top-5 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2.5 max-w-md w-full px-4 pointer-events-none">
+      <div id="toastStack" aria-live="polite" className="fixed top-5 left-1/2 -translate-x-1/2 z-[120] flex flex-col gap-2.5 max-w-md w-full px-4 pointer-events-none">
         {toasts.map(toast => {
           let bg = 'bg-[#0f3d3e] text-white border-[#c9a227]/40';
           let icon = <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />;
@@ -124,7 +145,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 {icon}
-                <span className="truncate">{toast.message}</span>
+                <span className="break-words leading-relaxed">{toast.message}</span>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
@@ -141,6 +162,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                   </button>
                 )}
                 <button
+                  aria-label="إغلاق التنبيه"
                   onClick={() => removeToast(toast.id)}
                   className="p-1 rounded-md hover:bg-black/10 transition-colors opacity-70 hover:opacity-100"
                 >
@@ -154,8 +176,8 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
 
       {/* Confirm Modal */}
       {confirmState && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div ref={confirmRef} role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message" className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
             <div className="flex items-start gap-4">
               <div className={`p-3 rounded-xl shrink-0 ${
                 confirmState.tone === 'danger'
@@ -173,10 +195,10 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                 )}
               </div>
               <div className="space-y-1">
-                <h3 className="text-lg font-bold text-slate-900 font-tajawal">
+                <h3 id="confirmation-title" className="text-lg font-bold text-slate-900 font-tajawal">
                   {confirmState.title}
                 </h3>
-                <p className="text-sm text-slate-600 leading-relaxed">
+                <p id="confirmation-message" className="text-sm text-slate-600 leading-relaxed">
                   {confirmState.message}
                 </p>
               </div>
@@ -213,3 +235,4 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
     </ToastAndConfirmContext.Provider>
   );
 };
+

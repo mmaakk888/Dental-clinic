@@ -190,6 +190,8 @@ export interface GeneralPayment {
   createdAt?: string;
   voidedAt?: string;
   voidReason?: string;
+  /** Display-only cumulative total in the original demo fixtures, not a receipt. */
+  legacyAggregate?: boolean;
 }
 
 export interface Patient {

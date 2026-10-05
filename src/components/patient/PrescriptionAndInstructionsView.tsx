@@ -2,19 +2,22 @@ import React, { useState } from 'react';
 import { Patient, DrugCatalogItem, PrescriptionItem } from '../../types';
 import { Printer, Copy, MessageCircle, Plus, Trash2, FileText, Phone, MapPin, Edit3, Settings, Sparkles } from 'lucide-react';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { cleanEgyptianPhone, getWhatsAppUrl } from '../../utils/whatsappUtils';
 
 interface PrescriptionAndInstructionsViewProps {
   patient: Patient;
   clinicName: string;
   clinicLogo: string | null;
   drugCatalog: DrugCatalogItem[];
+  canSendWhatsApp?: boolean;
 }
 
 export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructionsViewProps> = ({
   patient,
   clinicName,
   clinicLogo,
-  drugCatalog
+  drugCatalog,
+  canSendWhatsApp = true
 }) => {
   const { showToast } = useToastAndConfirm();
 
@@ -44,7 +47,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     {
       id: 'ext',
       title: 'تعليمات ما بعد الخلع الجراحي أو العادي',
-      content: `1. الضغط المباشر على الشاشة فوق موضع الخلع لمدة ساعة كاملة وعدم التحدث.
+      content: `1. الضغط المباشر على الشاش فوق موضع الخلع لمدة ساعة كاملة وعدم التحدث.
 2. البصق المستمر ممنوع نهائياً؛ بل يجب بلع الريق طبيعياً.
 3. تجنب المأكولات والمشروبات الساخنة والتدخين لمدة 24 ساعة.
 4. عدم المضمضة بالماء والملح إلا بعد مرور 24 ساعة من الخلع.
@@ -72,7 +75,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   // Quick Add from catalog
   const handleAddCatalogDrug = (drug: DrugCatalogItem) => {
     const newItem: PrescriptionItem = {
-      id: Math.random().toString(),
+      id: crypto.randomUUID(),
       drugName: drug.name,
       dosage: drug.defaultDosage,
       duration: drug.defaultDuration
@@ -84,10 +87,13 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   // Add custom drug
   const handleAddCustomDrug = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customDrugName.trim()) return;
+    if (!customDrugName.trim()) {
+      showToast('اكتب اسم الدواء أولًا', 'warning');
+      return;
+    }
 
     const newItem: PrescriptionItem = {
-      id: Math.random().toString(),
+      id: crypto.randomUUID(),
       drugName: customDrugName.trim(),
       dosage: customDosage.trim() || 'حسب إرشادات الطبيب',
       duration: customDuration.trim()
@@ -104,19 +110,34 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   };
 
   // Copy Instruction to clipboard
-  const handleCopyInstruction = () => {
-    navigator.clipboard.writeText(selectedInstruction);
-    showToast('تم نسخ التعليمات إلى الحافظة بنجاح', 'success');
+  const handleCopyInstruction = async () => {
+    if (!selectedInstruction.trim()) { showToast('اكتب التعليمات أولًا', 'warning'); return; }
+    try {
+      await navigator.clipboard.writeText(selectedInstruction);
+      showToast('تم نسخ التعليمات إلى الحافظة', 'success');
+    } catch {
+      showToast('تعذر النسخ. حدد النص وانسخه يدويًا.', 'warning');
+    }
   };
 
-  // WhatsApp Instruction
-  const handleSendWhatsAppInstruction = () => {
-    let formatted = patient.mobile.replace(/\D/g, '');
-    if (formatted.startsWith('01')) {
-      formatted = '20' + formatted.substring(1);
+  const openWhatsApp = (text: string) => {
+    if (!canSendWhatsApp) return;
+    if (!/^[1-9]\d{7,14}$/.test(cleanEgyptianPhone(patient.mobile))) {
+      showToast('راجع رقم هاتف المريض قبل فتح واتساب', 'warning');
+      return;
     }
-    const msg = encodeURIComponent(`أهلاً بك أ. ${patient.name}، نتمنى لك الشفاء العاجل! نرفق لك التعليمات الطبية المهمة:\n\n${selectedInstruction}\n\nمع تحيات: ${clinicName}`);
-    window.open(`https://wa.me/${formatted}?text=${msg}`, '_blank');
+    window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleSendWhatsAppInstruction = () => {
+    if (!selectedInstruction.trim()) { showToast('اكتب التعليمات أولًا', 'warning'); return; }
+    openWhatsApp(`أهلاً ${patient.name}، نتمنى لك الشفاء العاجل. إليك تعليمات الطبيب:\n\n${selectedInstruction}\n\nمع تحيات ${clinicName}`);
+  };
+
+  const handleSendPrescription = () => {
+    if (!rxItems.length) { showToast('أضف الأدوية إلى الروشتة أولًا', 'warning'); return; }
+    const medicines = rxItems.map((item, index) => `${index + 1}. ${item.drugName}\n${item.dosage}${item.duration ? ` — ${item.duration}` : ''}`).join('\n\n');
+    openWhatsApp(`أهلاً ${patient.name}، هذه الروشتة التي أعدّها لك الطبيب:\n\n${medicines}${doctorNotes.trim() ? `\n\nإرشادات الطبيب: ${doctorNotes.trim()}` : ''}\n\nمع تحيات ${clinicName}`);
   };
 
   // Print Prescription Window
@@ -135,7 +156,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
       
       {/* Sub Tabs Toggle */}
       <div className="flex items-center justify-between border-b border-slate-200 pb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setSubTab('prescription')}
@@ -145,7 +166,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            💊 روشتة طبية A5 (Prescription)
+            الروشتة الطبية
           </button>
           <button
             type="button"
@@ -156,7 +177,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            📋 تعليمات ما بعد العلاج (Post-Op)
+            تعليمات بعد العلاج
           </button>
         </div>
 
@@ -178,7 +199,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
           <div className="flex items-center justify-between pb-2 border-b border-indigo-100">
             <h4 className="font-extrabold text-indigo-950 font-tajawal flex items-center gap-2">
               <Settings className="w-4 h-4 text-indigo-600" />
-              تعديل بيانات الهيدر والفوتر بالروشتة
+              بيانات الطبيب والعيادة
             </h4>
             <button
               type="button"
@@ -265,9 +286,9 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
           <div className="lg:col-span-6 space-y-5">
             {/* Catalog Quick Add Deck */}
             <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3 shadow-2xs">
-              <h3 className="text-xs font-bold text-slate-800 font-tajawal flex items-center justify-between">
-                <span>فهرس الأدوية الشائعة (ضغط للإضافة الفورية)</span>
-                <span className="text-[11px] text-slate-400 font-normal">اختر الدواء لإضافته مباشرة</span>
+              <h3 className="text-xs font-bold text-slate-800 font-tajawal flex flex-wrap items-center justify-between gap-2">
+                <span>فهرس الأدوية</span>
+                <span className="text-[11px] text-slate-500 font-normal">اختر الدواء، ثم راجع الجرعة والمدة</span>
               </h3>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -371,12 +392,14 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
 
           {/* Right Live Printable A5 Prescription Preview (6 Cols) */}
           <div className="lg:col-span-6 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-sm font-bold text-slate-800 font-tajawal flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-[#1a4388]" />
-                معاينة الروشتة الطباعية (مقاس A5)
+                معاينة الروشتة (A5)
               </h3>
 
+              <div className="flex flex-wrap gap-2">
+              {canSendWhatsApp && <button type="button" onClick={handleSendPrescription} className="flex items-center gap-1.5 min-h-[44px] px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-bold"><MessageCircle className="w-4 h-4" />فتح الروشتة في واتساب</button>}
               <button
                 type="button"
                 onClick={handlePrintPrescription}
@@ -385,22 +408,23 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 <Printer className="w-4 h-4" />
                 <span>طباعة الروشتة (A5)</span>
               </button>
+              </div>
             </div>
 
             {/* Printable Paper Canvas (A5 Ratio: 1 : 1.414) */}
-            <div id="printable-prescription-wrapper" className="w-full overflow-x-auto">
+            <div id="printable-prescription-wrapper" className="w-full min-w-0">
               <div 
                 id="printable-prescription" 
-                className="bg-white rounded-3xl p-5 border-2 border-slate-200 shadow-xl text-slate-900 font-tajawal relative min-h-[620px] flex flex-col justify-between overflow-hidden select-none"
+                className="bg-white rounded-2xl p-3 sm:p-5 border border-slate-200 shadow-sm text-slate-900 font-tajawal relative min-h-[620px] flex flex-col justify-between min-w-0"
               >
                 
                 {/* 1. TOP HEADER BANNER (EXACT DR. MOHAMED OSAMA STYLE) */}
-                <div className="flex items-stretch justify-between gap-2 overflow-hidden rounded-2xl">
+                <div className="flex flex-col sm:flex-row items-stretch justify-between gap-2 rounded-2xl">
                   
                   {/* LEFT: Tooth Logo + English Name */}
-                  <div className="flex items-center gap-2.5 p-2 pl-3">
+                  <div className="flex items-center gap-2.5 p-2 pl-3 min-w-0">
                     <div className="relative w-12 h-12 shrink-0 flex items-center justify-center">
-                      <svg className="w-12 h-12" viewBox="0 0 100 100" fill="none">
+                      {clinicLogo ? <img src={clinicLogo} alt={clinicName} className="h-12 w-12 object-contain" /> : <svg className="w-12 h-12" viewBox="0 0 100 100" fill="none">
                         <path
                           d="M25 20 C35 10, 45 22, 50 25 C55 22, 65 10, 75 20 C85 30, 85 50, 80 65 C76 77, 65 92, 58 92 C54 92, 53 82, 50 82 C47 82, 46 92, 42 92 C35 92, 24 77, 20 65 C15 50, 15 30, 25 20 Z"
                           stroke="#1a4388"
@@ -417,25 +441,16 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                           strokeLinejoin="round"
                           fill="none"
                         />
-                      </svg>
+                      </svg>}
                     </div>
 
-                    <div className="flex flex-col font-mono text-left leading-none">
-                      <div className="flex items-center gap-1 font-black text-[13px] text-[#1a4388] tracking-wider">
-                        <span>DR</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#c59d5f] inline-block" />
-                      </div>
-                      <span className="font-black text-[15px] text-[#1a4388] tracking-wider uppercase font-sans">
-                        {rxDocEnglish.split(' ')[1] || 'MOHAMED'}
-                      </span>
-                      <span className="font-black text-[13px] text-[#1a4388] tracking-widest uppercase font-sans">
-                        {rxDocEnglish.split(' ')[2] || 'OSAMA'}
-                      </span>
+                    <div className="min-w-0 font-sans text-left">
+                      <span dir="ltr" className="block font-bold text-sm text-[#1a4388] break-words">{rxDocEnglish}</span>
                     </div>
                   </div>
 
                   {/* RIGHT: Royal Blue Banner Box */}
-                  <div className="bg-[#1a4388] text-white p-3.5 px-5 rounded-bl-[36px] text-right flex flex-col justify-center min-w-[55%] shadow-sm">
+                  <div className="bg-[#1a4388] text-white p-3.5 px-4 rounded-2xl text-right flex flex-col justify-center min-w-0 flex-1 shadow-sm">
                     <span className="text-[11px] font-bold text-slate-200 leading-tight block">
                       {rxDocTitle}
                     </span>
@@ -453,16 +468,16 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 </div>
 
                 {/* 2. PATIENT INFO STRIP (GOLD PILL BORDER) */}
-                <div className="mt-3 border-2 border-[#c59d5f] rounded-full px-4 py-1.5 grid grid-cols-3 gap-1 text-[11px] font-black text-[#1a4388] bg-amber-50/30">
-                  <div className="text-right truncate">
+                <div className="mt-3 border border-[#c59d5f] rounded-xl px-3 py-2 grid grid-cols-2 gap-2 text-[11px] font-black text-[#1a4388] bg-amber-50/30">
+                  <div className="text-right col-span-2 break-words">
                     <span className="text-[#1a4388] font-black">الاسم: </span>
                     <span className="text-slate-900 font-bold">{patient.name}</span>
                   </div>
-                  <div className="text-center truncate">
+                  <div className="text-right">
                     <span className="text-[#1a4388] font-black">السن: </span>
                     <span className="text-slate-900 font-bold">{patient.age} سنة</span>
                   </div>
-                  <div className="text-left truncate font-mono">
+                  <div className="text-left font-mono">
                     <span className="text-[#1a4388] font-black">التاريخ: </span>
                     <span className="text-slate-900 font-bold">{todayDateStr}</span>
                   </div>
@@ -556,41 +571,10 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                   
                   {/* QR Code Row */}
                   <div className="flex items-end justify-between px-1">
-                    <div className="flex items-center gap-2 bg-white border-2 border-[#1a4388] rounded-2xl p-1.5 px-2.5 shadow-2xs">
-                      {/* Stylized QR Code SVG */}
-                      <svg className="w-10 h-10 shrink-0" viewBox="0 0 100 100" fill="#1a4388">
-                        <rect x="0" y="0" width="100" height="100" fill="white" />
-                        <rect x="10" y="10" width="25" height="25" fill="#1a4388" />
-                        <rect x="15" y="15" width="15" height="15" fill="white" />
-                        <rect x="18" y="18" width="9" height="9" fill="#1a4388" />
-
-                        <rect x="65" y="10" width="25" height="25" fill="#1a4388" />
-                        <rect x="70" y="15" width="15" height="15" fill="white" />
-                        <rect x="73" y="18" width="9" height="9" fill="#1a4388" />
-
-                        <rect x="10" y="65" width="25" height="25" fill="#1a4388" />
-                        <rect x="15" y="70" width="15" height="15" fill="white" />
-                        <rect x="18" y="73" width="9" height="9" fill="#1a4388" />
-
-                        <rect x="42" y="12" width="8" height="8" />
-                        <rect x="52" y="18" width="8" height="8" />
-                        <rect x="42" y="28" width="8" height="8" />
-                        <rect x="38" y="42" width="12" height="12" />
-                        <rect x="54" y="42" width="8" height="8" />
-                        <rect x="68" y="42" width="12" height="8" />
-                        <rect x="82" y="48" width="8" height="12" />
-                        <rect x="42" y="62" width="8" height="12" />
-                        <rect x="54" y="68" width="12" height="8" />
-                        <rect x="68" y="62" width="8" height="8" />
-                        <rect x="78" y="72" width="12" height="12" />
-                      </svg>
-                      <span className="text-[10px] font-extrabold text-[#1a4388] leading-tight font-tajawal">
-                        تابعونا على<br />فيسبوك
-                      </span>
-                    </div>
+                    <span className="text-xs font-bold text-[#1a4388] break-words">{clinicName}</span>
 
                     <div className="text-left font-sans text-[10px] text-slate-400 font-semibold">
-                      Rx #{patient.id.substring(0, 6)}
+                      ملف #{patient.id}
                     </div>
                   </div>
 
@@ -605,9 +589,9 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                     </div>
 
                     {/* Location Pin & Address */}
-                    <div className="flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-slate-100 truncate">
+                    <div className="flex items-start gap-1 text-[10px] sm:text-[11px] font-bold text-slate-100 min-w-0">
                       <MapPin className="w-3.5 h-3.5 text-rose-300 shrink-0" />
-                      <span className="truncate">{rxAddress}</span>
+                      <span className="break-words">{rxAddress}</span>
                     </div>
                   </div>
 
@@ -629,11 +613,11 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 نماذج تعليمات ما بعد الإجراء والعمليات
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                اختر النموذج المناسب لإرساله للمريض عبر الواتساب أو طباعته
+                اختر النموذج وراجع تعليماته، ثم افتح الرسالة في واتساب
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleCopyInstruction}
@@ -643,14 +627,14 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
                 نسخ النص
               </button>
 
-              <button
+              {canSendWhatsApp && <button
                 type="button"
                 onClick={handleSendWhatsAppInstruction}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-xs"
               >
                 <MessageCircle className="w-4 h-4" />
-                إرسال واتساب مباشر
-              </button>
+                فتح التعليمات في واتساب
+              </button>}
             </div>
           </div>
 
@@ -687,3 +671,4 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     </div>
   );
 };
+

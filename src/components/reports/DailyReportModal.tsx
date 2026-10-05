@@ -5,6 +5,8 @@ import {
   CreditCard, TrendingUp, AlertCircle, FileText, Filter, Search, Tag, Percent
 } from 'lucide-react';
 import { calculateDailyCollections } from '../../utils/financials';
+import { localDateISO } from '../appointments/appointmentScheduling';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 
 interface DailyReportModalProps {
   isOpen: boolean;
@@ -12,6 +14,8 @@ interface DailyReportModalProps {
   patients: Patient[];
   appointments: Appointment[];
   isPrivacyMode?: boolean;
+  canViewRemainingBalance?: boolean;
+  canViewHistory?: boolean;
   onSelectPatientFile?: (patientId: string) => void;
 }
 
@@ -23,34 +27,40 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
   patients,
   appointments,
   isPrivacyMode = false,
+  canViewRemainingBalance = true,
+  canViewHistory = true,
   onSelectPatientFile
 }) => {
   const [filterRange, setFilterRange] = useState<ReportFilterRange>('today');
-  const [customDate, setCustomDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [customDate, setCustomDate] = useState<string>(localDateISO());
   const [searchQuery, setSearchQuery] = useState('');
+  const dialogRef = useAppointmentDialog(isOpen, onClose);
+  const effectiveRange = canViewHistory ? filterRange : 'today';
 
   // Helper date strings
-  const todayStr = new Date().toISOString().split('T')[0];
-  const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const todayStr = localDateISO();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = localDateISO(yesterday);
 
   // Helper date filter evaluator
   const isDateInFilter = (dateStr: string) => {
     if (!dateStr) return false;
-    if (filterRange === 'today') return dateStr === todayStr;
-    if (filterRange === 'yesterday') return dateStr === yesterdayStr;
-    if (filterRange === 'custom') return dateStr === customDate;
+    if (effectiveRange === 'today') return dateStr === todayStr;
+    if (effectiveRange === 'yesterday') return dateStr === yesterdayStr;
+    if (effectiveRange === 'custom') return dateStr === customDate;
     
     const d = new Date(dateStr);
     const now = new Date();
     
-    if (filterRange === 'week') {
+    if (effectiveRange === 'week') {
       const oneWeekAgo = new Date();
-      oneWeekAgo.setDate(now.getDate() - 7);
-      return d >= oneWeekAgo && d <= now;
+      oneWeekAgo.setDate(now.getDate() - 6);
+      return dateStr >= localDateISO(oneWeekAgo) && dateStr <= todayStr;
     }
     
-    if (filterRange === 'month') {
-      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (effectiveRange === 'month') {
+      return dateStr.slice(0, 7) === todayStr.slice(0, 7);
     }
     
     return true;
@@ -59,7 +69,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
   // Compile Financial & Collection Metrics using financials.ts engine
   const metrics = useMemo(() => {
     return calculateDailyCollections(patients, isDateInFilter);
-  }, [patients, filterRange, customDate]);
+  }, [patients, effectiveRange, customDate, todayStr]);
 
   // Filter visit list by search query
   const filteredRows = useMemo(() => {
@@ -78,7 +88,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl font-['Cairo',sans-serif]">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-auto flex flex-col max-h-[92vh]">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="تقرير التحصيل" tabIndex={-1} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-auto flex flex-col max-h-[92dvh]">
         
         {/* Header */}
         <div className="bg-linear-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 flex items-center justify-between shrink-0 shadow-sm">
@@ -88,13 +98,10 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-black font-tajawal flex items-center gap-2">
-                تقرير المحصلة اليومية والإيرادات
-                <span className="text-xs font-normal bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-400/30">
-                  تحصيل مباشر 📊
-                </span>
+                تقرير التحصيل
               </h3>
               <p className="text-xs text-slate-300 font-medium">
-                تقرير مالي شامل يجمع كل ما تم تحصيله فعلياً بدون الحاجة لخزنة مفردة
+                راجع الخدمات والدفعات المسجلة في الفترة المختارة
               </p>
             </div>
           </div>
@@ -111,7 +118,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
 
         {/* Filter Controls Bar */}
         <div className="bg-slate-50 border-b border-slate-200 p-3 sm:p-4 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             <span className="text-xs font-black text-slate-700 font-tajawal shrink-0 ml-1">
               الفترة الزمنية للتقرير:
             </span>
@@ -131,6 +138,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             <button
               type="button"
               onClick={() => setFilterRange('yesterday')}
+              disabled={!canViewHistory}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer touch-manipulation shrink-0 ${
                 filterRange === 'yesterday'
                   ? 'bg-indigo-600 text-white shadow-2xs font-black'
@@ -143,6 +151,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             <button
               type="button"
               onClick={() => setFilterRange('week')}
+              disabled={!canViewHistory}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer touch-manipulation shrink-0 ${
                 filterRange === 'week'
                   ? 'bg-indigo-600 text-white shadow-2xs font-black'
@@ -155,6 +164,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             <button
               type="button"
               onClick={() => setFilterRange('month')}
+              disabled={!canViewHistory}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer touch-manipulation shrink-0 ${
                 filterRange === 'month'
                   ? 'bg-indigo-600 text-white shadow-2xs font-black'
@@ -167,6 +177,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             <button
               type="button"
               onClick={() => setFilterRange('custom')}
+              disabled={!canViewHistory}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer touch-manipulation shrink-0 ${
                 filterRange === 'custom'
                   ? 'bg-indigo-600 text-white shadow-2xs font-black'
@@ -177,7 +188,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             </button>
           </div>
 
-          {filterRange === 'custom' && (
+          {effectiveRange === 'custom' && (
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold text-slate-600">اختر التاريخ:</label>
               <input
@@ -199,14 +210,14 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             {/* Total Income Collected */}
             <div className="bg-emerald-600 text-white p-4 rounded-2xl shadow-md border border-emerald-500">
               <div className="flex items-center justify-between mb-1 opacity-90">
-                <span className="text-xs font-black font-tajawal">إجمالي المحصلة اليومية (المتحصل)</span>
+                <span className="text-xs font-black font-tajawal">التحصيل الفعلي للفترة</span>
                 <TrendingUp className="w-5 h-5" />
               </div>
               <div className="text-2xl sm:text-3xl font-black font-mono tracking-tight my-1">
                 {mask(metrics.totalIncomeCollected)}
               </div>
               <div className="text-[10px] opacity-80 font-bold">
-                المبالغ التي تم تحصيلها نقدًا/إلكترونيًا بالفعل
+                كل الدفعات مسجلة نقدًا حسب نظام العيادة
               </div>
             </div>
 
@@ -231,7 +242,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                 <AlertCircle className="w-5 h-5 text-rose-600" />
               </div>
               <div className="text-2xl sm:text-3xl font-black text-rose-800 font-mono tracking-tight my-1">
-                {mask(metrics.totalOutstandingRemain)}
+                {canViewRemainingBalance ? mask(metrics.totalOutstandingRemain) : 'غير متاح'}
               </div>
               <div className="text-[10px] text-rose-600 font-bold">
                 متبقي غير مسدد على جلسات الفترة
@@ -281,25 +292,16 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             {/* Payment Methods Breakdown */}
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
               <h4 className="text-xs font-black text-slate-900 font-tajawal flex items-center justify-between border-b border-slate-100 pb-2">
-                <span>توزيع التحصيل حسب طريقة الدفع:</span>
+                <span>طريقة تسجيل التحصيل:</span>
                 <CreditCard className="w-4 h-4 text-indigo-600" />
               </h4>
 
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="text-center">
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                  <span className="text-[11px] font-bold text-slate-600 block mb-1">💵 نقدًا (Cash)</span>
+                  <span className="text-[11px] font-bold text-slate-600 block mb-1">نقدًا</span>
                   <span className="text-sm sm:text-base font-black font-mono text-slate-900 block">{mask(metrics.cashTotal)}</span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-indigo-50/50 border border-indigo-100">
-                  <span className="text-[11px] font-bold text-indigo-700 block mb-1">💳 بطاقة (Card)</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-indigo-900 block">{mask(metrics.cardTotal)}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-purple-50/50 border border-purple-100">
-                  <span className="text-[11px] font-bold text-purple-700 block mb-1">📲 تحويل إلكتروني</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-purple-900 block">{mask(metrics.transferTotal)}</span>
-                </div>
               </div>
             </div>
 
@@ -336,13 +338,13 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             {/* Visit Table */}
             {filteredRows.length > 0 ? (
               <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs font-medium text-slate-700 border-collapse">
+                <table className="daily-report-table w-full text-right text-xs font-medium text-slate-700 border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-900 font-black font-tajawal border-b border-slate-200">
                       <th className="p-2.5">المريض / الملف</th>
                       <th className="p-2.5">الوقت والتاريخ</th>
                       <th className="p-2.5">الخدمات المنفذة</th>
-                      <th className="p-2.5">إجمالي المطلوبة</th>
+                      <th className="p-2.5">إجمالي المطلوب</th>
                       <th className="p-2.5 text-emerald-700">المحصل فعلياً</th>
                       <th className="p-2.5 text-amber-700">الخصم/الإعفاء</th>
                       <th className="p-2.5 text-rose-700">المتبقي</th>
@@ -366,7 +368,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                             <span className="font-mono text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
                               #{row.fileNo}
                             </span>
-                            <span className="font-tajawal text-xs">{row.patientName}</span>
+                            {onSelectPatientFile ? <button type="button" className="font-tajawal text-xs text-indigo-700 hover:underline min-h-11" aria-label={`فتح ملف ${row.patientName}`}>{row.patientName}</button> : <span className="font-tajawal text-xs">{row.patientName}</span>}
                             {row.isWalkIn && (
                               <span className="text-[9px] font-black bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full shrink-0">
                                 زائر
@@ -396,7 +398,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                         </td>
 
                         <td className="p-2.5 font-mono font-bold">
-                          {row.remainAmount > 0 ? (
+                          {!canViewRemainingBalance ? <span className="text-slate-400">غير متاح</span> : row.remainAmount > 0 ? (
                             <span className="text-rose-600 font-black">{mask(row.remainAmount)}</span>
                           ) : (
                             <span className="text-slate-400">0</span>
@@ -426,7 +428,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
         {/* Footer */}
         <div className="bg-slate-50 border-t border-slate-200 p-3 sm:p-4 flex items-center justify-between shrink-0">
           <div className="text-xs font-bold text-slate-500 font-mono">
-            المحصلة اليومية: {new Date().toLocaleDateString('ar-EG')}
+            تقرير التحصيل: {new Date().toLocaleDateString('ar-EG')}
           </div>
 
           <button
@@ -442,3 +444,4 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
     </div>
   );
 };
+

@@ -13,6 +13,8 @@ interface GlobalSearchModalProps {
   appointments: Appointment[];
   labCases: LabCase[];
   expenses: Expense[];
+  showFinancials?: boolean;
+  showLabCosts?: boolean;
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
   onNavigate: (view: ActiveView) => void;
 }
@@ -70,7 +72,9 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   labCases,
   expenses,
   onSelectPatient,
-  onNavigate
+  onNavigate,
+  showFinancials = true,
+  showLabCosts = false
 }) => {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | 'patients' | 'appointments' | 'lab' | 'expenses'>('all');
@@ -463,7 +467,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                                   </span>
                                 )}
 
-                                {remain > 0 ? (
+                                {showFinancials && (remain > 0 ? (
                                   <span className="text-[10px] font-extrabold bg-rose-50 text-rose-700 px-2 py-0.5 rounded-md font-mono border border-rose-200/60">
                                     متبقي: {remain.toLocaleString()} ج.م
                                   </span>
@@ -471,7 +475,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                                   <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md font-mono border border-emerald-200/60">
                                     خالص الحساب
                                   </span>
-                                )}
+                                ))}
                               </div>
                             </div>
                           </div>
@@ -546,7 +550,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                               {l.labName} - {l.type}
                             </span>
                           </div>
-                          <span className="text-xs text-slate-500 block mt-0.5">إجمالي المعمل: {l.labTotal} ج.م</span>
+                          {showLabCosts && <span className="text-xs text-slate-500 block mt-0.5">إجمالي المعمل: {l.labTotal} ج.م</span>}
                         </div>
                         <ChevronLeft className="w-5 h-5 text-purple-600 group-hover:-translate-x-1 transition-transform shrink-0" />
                       </button>

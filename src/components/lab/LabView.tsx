@@ -47,6 +47,11 @@ export const LabView: React.FC<LabViewProps> = ({
   const [bulkAmount, setBulkAmount] = useState('');
   const [caseSessionId, setCaseSessionId] = useState('');
 
+  React.useEffect(() => { setBulkAmount(''); }, [selectedLabId]);
+  React.useEffect(() => {
+    if (!canViewFinancials && (statusFilter === 'paid' || statusFilter === 'unpaid')) setStatusFilter('all');
+  }, [canViewFinancials, statusFilter]);
+
   // Modals
   const [isLabModalOpen, setIsLabModalOpen] = useState(false);
   const [isCaseModalOpen, setIsCaseModalOpen] = useState(false);
@@ -78,11 +83,12 @@ export const LabView: React.FC<LabViewProps> = ({
   // Form State for Lab Case
   const [casePatientId, setCasePatientId] = useState('');
   const [caseServiceId, setCaseServiceId] = useState('');
-  const [caseUnits, setCaseUnits] = useState<number>(1);
+  const [caseUnits, setCaseUnits] = useState<number | ''>(1);
   const [caseDeliveryDate, setCaseDeliveryDate] = useState<string>('');
   const [caseNote, setCaseNote] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const localDateKey = (value: Date = new Date()) => new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+  const todayStr = localDateKey();
 
   const getCaseStatusInfo = (c: LabCase) => {
     const isDelayed = c.status !== 'delivered' && c.status !== 'completed' && c.deliveryExpectedDate && c.deliveryExpectedDate < todayStr;
@@ -140,8 +146,14 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleSaveLabForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canViewFinancials) return;
     if (!labName.trim()) {
       validationFail('labModal', 'input-lab-name', 'يرجى كتابة اسم المعمل');
+      return;
+    }
+    if (!labServices.length || labServices.some(service => !service.name.trim() || !service.unitLabel.trim()
+      || !Number.isFinite(service.price) || service.price < 0)) {
+      showToast('راجع أسماء خدمات المعمل ووحداتها وأسعارها، ثم احفظ البيانات', 'warning');
       return;
     }
 
@@ -151,7 +163,7 @@ export const LabView: React.FC<LabViewProps> = ({
       phone: labPhone.trim(),
       address: labAddress.trim(),
       notes: labNotes.trim(),
-      services: labServices
+      services: labServices.map(service => ({ ...service, name: service.name.trim(), unitLabel: service.unitLabel.trim() }))
     });
 
     setIsLabModalOpen(false);
@@ -159,9 +171,14 @@ export const LabView: React.FC<LabViewProps> = ({
   };
 
   const handleDeleteLabConfirmed = (lab: Lab) => {
+    if (!canViewFinancials) return;
+    if (labCases.some(item => item.labId === lab.id)) {
+      showToast('لا يمكن حذف معمل له حالات مسجلة، للحفاظ على حساباته وسجل التركيبات', 'warning');
+      return;
+    }
     askConfirm({
       title: 'حذف المعمل',
-      message: `هل أنت تأكد من حذف المعمل (${lab.name}) وكافة الخدمات المسجلة لديه؟`,
+      message: `هل أنت متأكد من حذف المعمل (${lab.name}) وخدماته المسجلة؟`,
       confirmLabel: 'حذف المعمل',
       tone: 'danger',
       onConfirm: () => {
@@ -174,13 +191,17 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleOpenAddCaseModal = () => {
     if (!selectedLab) return;
+    if (!patients.length || !selectedLab.services.length) {
+      showToast(!patients.length ? 'أضف ملف المريض أولًا قبل تسجيل حالة معمل' : 'أضف خدمات المعمل أولًا من تعديل بياناته', 'warning');
+      return;
+    }
     setCaseSessionId('');
     setCasePatientId(patients[0]?.id || '');
     setCaseServiceId(selectedLab.services[0]?.id || '');
     setCaseUnits(1);
     const inAWeek = new Date();
     inAWeek.setDate(inAWeek.getDate() + 7);
-    setCaseDeliveryDate(inAWeek.toISOString().split('T')[0]);
+    setCaseDeliveryDate(localDateKey(inAWeek));
     setCaseNote('');
     setIsCaseModalOpen(true);
   };
@@ -201,14 +222,35 @@ export const LabView: React.FC<LabViewProps> = ({
       return;
     }
 
-    const labTotal = targetService.price * caseUnits;
-    if (!Number.isInteger(caseUnits) || caseUnits < 1) return;
+    const units = typeof caseUnits === 'number' ? caseUnits : 0;
+    if (!Number.isInteger(units) || units < 1) {
+      showToast('أدخل عدد وحدات صحيحًا أكبر من صفر', 'warning');
+      return;
+    }
+    if (!Number.isFinite(targetService.price) || targetService.price < 0) {
+      showToast('تكلفة خدمة المعمل غير صحيحة، راجع أسعار المعمل', 'warning');
+      return;
+    }
+    const labTotal = targetService.price * units;
     if (caseSessionId && labCases.some(c => c.patientId === targetPatient.id && c.linkedSessionId === caseSessionId)) {
       showToast('هذه الخدمة مرتبطة بالفعل بطلب معمل', 'warning');
       return;
     }
-    const patientUnitPrice = crownPrices[targetService.name] || 2200;
-    const patientTotal = patientUnitPrice * caseUnits;
+    const linkedSession = targetPatient.sessions.find(session => session.id === caseSessionId);
+    if (caseSessionId && !linkedSession) {
+      showToast('الخدمة المحددة غير موجودة في ملف المريض، اختر الخدمة مرة أخرى', 'warning');
+      return;
+    }
+    const patientUnitPrice = crownPrices[targetService.name] ?? 0;
+    const patientTotal = linkedSession ? Math.max(0, linkedSession.amount - (linkedSession.discount || 0)) : patientUnitPrice * units;
+    if (!Number.isFinite(labTotal) || !Number.isFinite(patientTotal) || patientTotal < 0) {
+      showToast('راجع أسعار الخدمة وعدد الوحدات قبل الحفظ', 'warning');
+      return;
+    }
+    if (caseDeliveryDate && caseDeliveryDate < todayStr) {
+      showToast('تاريخ الاستلام المتوقع يجب ألا يسبق تاريخ الطلب', 'warning');
+      return;
+    }
 
     onSaveLabCase({
       linkedSessionId: caseSessionId || undefined,
@@ -219,13 +261,13 @@ export const LabView: React.FC<LabViewProps> = ({
       fileNo: targetPatient.id,
       type: targetService.category === 'fixed' ? 'تركيبات - ثابتة' : 'تركيبات - أخرى',
       subType: targetService.name,
-      units: caseUnits,
+      units,
       unitLabel: targetService.unitLabel,
       labTotal,
       labPaid: 0,
       patientTotal,
       patientPaid: 0,
-      date: new Date().toISOString().split('T')[0],
+      date: todayStr,
       deliveryExpectedDate: caseDeliveryDate || undefined,
       note: caseNote.trim(),
       status: 'pending'
@@ -237,15 +279,17 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleSaveLabPayment = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canViewFinancials) return;
     if (!selectedCaseForPayment) return;
 
     const amt = typeof paymentAmount === 'number' ? paymentAmount : 0;
-    if (amt <= 0) {
+    if (!Number.isFinite(amt) || amt <= 0) {
       validationFail('labPaymentModal', 'input-lab-payment', 'يرجى إدخال مبلغ دفع صحيح للمعمل');
       return;
     }
 
-    if (!Number.isFinite(amt) || amt > selectedCaseForPayment.labTotal - selectedCaseForPayment.labPaid) {
+    const currentCase = labCases.find(item => item.id === selectedCaseForPayment.id);
+    if (!currentCase || amt > Math.max(0, currentCase.labTotal - currentCase.labPaid)) {
       showToast('المبلغ أكبر من المتبقي للمعمل أو غير صحيح', 'warning');
       return;
     }
@@ -257,6 +301,11 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleSaveCrownPricesForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canViewFinancials) return;
+    if ((Object.values(tempCrownPrices) as number[]).some(price => !Number.isFinite(price) || price < 0)) {
+      showToast('أسعار البيع يجب أن تكون أرقامًا صحيحة غير سالبة', 'warning');
+      return;
+    }
     onSaveCrownPrices(tempCrownPrices);
     setIsCrownPricingModalOpen(false);
     showToast('تم تحديث أسعار بيع التركيبات للمرضى بنجاح', 'success');
@@ -269,7 +318,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const currentLabTotal = currentLabCases.reduce((acc, c) => acc + c.labTotal, 0);
   const currentLabPaid = currentLabCases.reduce((acc, c) => acc + c.labPaid, 0);
-  const currentLabRemain = currentLabTotal - currentLabPaid;
+  const currentLabRemain = currentLabCases.reduce((sum, item) => sum + Math.max(0, item.labTotal - item.labPaid), 0);
 
   // Filtered Lab Cases
   const filteredCases = useMemo(() => {
@@ -307,7 +356,7 @@ export const LabView: React.FC<LabViewProps> = ({
     });
   }, [labCases, selectedLabId, labFilter, searchQuery, statusFilter, todayStr]);
 
-  const totalNetProfit = labCases.reduce((acc, c) => acc + (c.patientTotal - c.labTotal), 0);
+  const totalNetProfit = labCases.reduce((acc, c) => acc + getLabCaseFinancials(c, patients).collected - c.labTotal, 0);
 
   const renderReservation = (item: LabCase) => {
     if (!canViewFinancials) return null;
@@ -316,6 +365,7 @@ export const LabView: React.FC<LabViewProps> = ({
     return <div className="w-full rounded-xl border border-teal-200 bg-teal-50 p-3 space-y-2 text-xs">
       <label className="block font-bold">الخدمة المرتبطة بحساب المريض</label>
       <select className="w-full min-h-11 rounded-lg border border-slate-200 bg-white px-2" value={item.linkedSessionId || ''}
+        disabled={!onUpdateLabCase}
         onChange={e => onUpdateLabCase?.({ ...item, linkedSessionId: e.target.value || undefined })}>
         <option value="">اختر الخدمة لحساب المحجوز</option>
         {(patient?.sessions || []).filter(s => s.id === item.linkedSessionId || !labCases.some(c => c.patientId === item.patientId && c.linkedSessionId === s.id)).map(s =>
@@ -382,7 +432,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
       {/* View Selection Tabs */}
       {!selectedLabId && (
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-1">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-1">
           <button
             onClick={() => setActiveTab('labs')}
             className={`px-5 py-2.5 rounded-xl font-tajawal font-bold text-xs sm:text-sm transition-all cursor-pointer ${
@@ -575,6 +625,9 @@ export const LabView: React.FC<LabViewProps> = ({
       ) : activeTab === 'labs' ? (
         /* LAB CARDS VIEW WITH VISUAL BALANCE METERS */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {!labs.length && <div className="col-span-full"><EmptyState icon={<Microscope className="h-8 w-8" />} title="لا توجد معامل مسجلة بعد"
+            description={canViewFinancials ? 'أضف المعامل وأسعار خدماتها، ثم اربط طلبات التركيبات بملفات المرضى.' : 'تظهر المعامل هنا بعد إضافتها من حساب الطبيب.'}
+            ctaLabel={canViewFinancials ? 'إضافة معمل' : undefined} onCtaClick={canViewFinancials ? handleOpenAddLabModal : undefined} /></div>}
           {labs.map(lab => {
             const cases = labCases.filter(c => c.labId === lab.id);
             const total = cases.reduce((acc, c) => acc + c.labTotal, 0);
@@ -585,7 +638,11 @@ export const LabView: React.FC<LabViewProps> = ({
             return (
               <div
                 key={lab.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`عرض تفاصيل معمل ${lab.name}`}
                 onClick={() => setSelectedLabId(lab.id)}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedLabId(lab.id); } }}
                 className="group bg-white rounded-3xl p-6 border border-slate-200/90 shadow-sm hover:shadow-xl hover:border-[#c9a227]/50 transition-all duration-300 text-right flex flex-col justify-between min-h-72 cursor-pointer relative overflow-hidden transform hover:-translate-y-1 space-y-4"
               >
                 <div className="space-y-3">
@@ -641,8 +698,8 @@ export const LabView: React.FC<LabViewProps> = ({
         <div className="space-y-5 animate-fadeIn">
           {/* Net Profit Visual Financial Card */}
           {canViewFinancials && <VisualFinancialCard
-            title="صافي أرباح التركيبات الكلي"
-            subtitle="تحصيل المريض الإجمالي − تكلفة المعمل المباشرة"
+            title="المحصل بعد تكاليف المعمل"
+            subtitle="تحصيل الخدمات المرتبطة − إجمالي تكلفة المعمل"
             amount={totalNetProfit}
             icon={<TrendingUp className="w-6 h-6 text-[#c9a227]" />}
             gradient="teal"
@@ -677,7 +734,7 @@ export const LabView: React.FC<LabViewProps> = ({
           </div>
 
           {/* Status Filter Badges */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none text-xs">
+          <div className="flex flex-wrap items-center gap-2 pb-2 text-xs">
             <button
               onClick={() => setStatusFilter('all')}
               className={`px-3.5 py-2 rounded-xl font-bold whitespace-nowrap cursor-pointer transition-all ${
@@ -818,7 +875,8 @@ export const LabView: React.FC<LabViewProps> = ({
                         </div>
 
                         <select
-                          value={c.status}
+                          value={c.status === 'completed' ? 'delivered' : c.status === 'delayed' ? 'pending' : c.status}
+                          disabled={!onUpdateLabCase}
                           onChange={e => handleUpdateStatus(c, e.target.value as LabCase['status'])}
                           className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-600"
                           title="تغيير حالة التركيبة"
@@ -934,6 +992,48 @@ export const LabView: React.FC<LabViewProps> = ({
                 </div>
               </div>
 
+              <label className="block text-xs font-bold text-slate-700">ملاحظات المعمل
+                <textarea value={labNotes} onChange={event => setLabNotes(event.target.value)} rows={2}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm" />
+              </label>
+
+              <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-slate-800">خدمات المعمل وتكلفتها</h3>
+                  <button type="button" onClick={() => setLabServices(services => [...services, {
+                    id: crypto.randomUUID(), category: 'fixed', name: '', unitLabel: 'طربوش', price: 0
+                  }])} className="rounded-xl bg-white border border-slate-300 px-3 py-2 text-xs font-bold text-indigo-700">إضافة خدمة</button>
+                </div>
+                <p className="text-xs text-slate-500">تعديل الأسعار يطبّق على الطلبات الجديدة، وتظل تكلفة الحالات السابقة محفوظة.</p>
+                {labServices.map((service, index) => <div key={service.id} className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-500">الخدمة {index + 1}</span>
+                    <button type="button" aria-label={`حذف خدمة ${service.name || index + 1}`} onClick={() => setLabServices(services => services.filter(item => item.id !== service.id))}
+                      className="min-h-11 min-w-11 rounded-lg text-rose-700 hover:bg-rose-50"><Trash2 className="mx-auto h-4 w-4" /></button>
+                  </div>
+                  <label className="block text-xs font-bold">اسم الخدمة
+                    <input required value={service.name} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, name: event.target.value } : item))}
+                      placeholder="مثال: زيركون" className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
+                  </label>
+                  <label className="block text-xs font-bold">التصنيف
+                    <select value={service.category} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, category: event.target.value as LabService['category'] } : item))}
+                      className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm">
+                      <option value="fixed">تركيبات ثابتة</option><option value="removable">تركيبات متحركة</option><option value="other">خدمات أخرى</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs font-bold">الوحدة
+                      <input required value={service.unitLabel} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, unitLabel: event.target.value } : item))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
+                    </label>
+                    <label className="block text-xs font-bold">تكلفة الوحدة (ج.م)
+                      <input type="number" min="0" step="0.01" required value={service.price} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, price: Number(event.target.value) } : item))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
+                    </label>
+                  </div>
+                </div>)}
+              </section>
+
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -1016,8 +1116,10 @@ export const LabView: React.FC<LabViewProps> = ({
                 <input
                   type="number"
                   value={caseUnits}
-                  onChange={e => setCaseUnits(parseInt(e.target.value, 10) || 1)}
+                  onChange={e => setCaseUnits(e.target.value === '' ? '' : Number(e.target.value))}
                   min={1}
+                  step={1}
+                  required
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono"
                 />
               </div>
@@ -1088,6 +1190,9 @@ export const LabView: React.FC<LabViewProps> = ({
                   </label>
                   <input
                     type="number"
+                    min="0"
+                    step="0.01"
+                    required
                     value={tempCrownPrices[crownKey]}
                     onChange={e => setTempCrownPrices({ ...tempCrownPrices, [crownKey]: parseFloat(e.target.value) || 0 })}
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono"
@@ -1136,6 +1241,9 @@ export const LabView: React.FC<LabViewProps> = ({
                 <input
                   id="input-lab-payment"
                   type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
                   value={paymentAmount}
                   onChange={e => setPaymentAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
                   placeholder="أكتب المبلغ"

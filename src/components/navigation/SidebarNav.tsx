@@ -146,7 +146,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
           <ClinicLogo
             size="header"
             showText={false}
-            customLogoUrl={clinicLogo || '/src/assets/images/clinic_logo_hd_1784964208393.jpg'}
+            customLogoUrl={clinicLogo}
           />
           {!isCollapsed && (
             <div className="animate-fadeIn overflow-hidden">
@@ -343,3 +343,4 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
 });
 
 SidebarNav.displayName = 'SidebarNav';
+

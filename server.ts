@@ -33,56 +33,7 @@ async function startServer() {
 
       const ai = getGeminiClient();
       if (!ai) {
-        // Fallback realistic ERP demo response if API key not available
-        return res.json({
-          supplierName: 'شركة النصر للمستلزمات والمعدات الطبية',
-          invoiceNumber: 'INV-2026-8841',
-          invoiceDate: new Date().toISOString().split('T')[0],
-          invoiceTime: '14:30',
-          supplierAddress: 'القاهرة - مدينة نصر - شارع الطيران',
-          supplierPhone: '01001234567',
-          taxNumber: '482-910-332',
-          commercialRecord: '109842',
-          paymentMethod: 'cash',
-          category: 'supplies',
-          subtotal: 1000,
-          discount: 50,
-          tax: 133,
-          totalAmount: 1083,
-          paidAmount: 1083,
-          remainingAmount: 0,
-          currency: 'ج.م',
-          notes: 'استلام عاجل بالعيادة مع شهادة الضمان للمواد الطبية',
-          lineItems: [
-            {
-              itemName: 'حشو كامبوزيت Z350 XT Filtek 4g',
-              quantity: 2,
-              unit: 'محقنة',
-              unitPrice: 350,
-              discount: 20,
-              tax: 95.2,
-              total: 775.2,
-              notes: 'درجة A2 حشو تجميلي أمامي'
-            },
-            {
-              itemName: 'حامل حمض إتشنج Acid Etch Gel 37%',
-              quantity: 3,
-              unit: 'محقنة',
-              unitPrice: 100,
-              discount: 10,
-              tax: 37.8,
-              total: 307.8,
-              notes: 'تركيز 37% أزرق'
-            }
-          ],
-          fieldConfidence: {
-            supplierName: 98,
-            invoiceNumber: 95,
-            totalAmount: 99,
-            taxNumber: 92,
-            lineItems: 96
-          }
-        });
+        return res.status(503).json({ error: 'خدمة تحليل الصور غير مفعّلة. يمكنك إدخال البيانات يدويًا حتى يتم إعداد الخدمة.' });
       }
 
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
@@ -251,11 +202,18 @@ async function startServer() {
       const defaultDurations: Record<string, number> = {
         'علاج عصب': 60,
         'خلع': 30,
+        'خلع أسنان': 30,
+        'علاج عصب (Root Canal)': 60,
+        'تركيب طربوش': 45,
+        'طربوش زيركون / PFM': 45,
         'طربوش زيركون': 45,
         'حشو ليزر': 35,
+        'حشو ليزر تجميلي': 35,
         'تنظيف وتلميع': 30,
+        'تنظيف وتلميع أسنان': 30,
         'كشف واستشارة': 20,
         'متابعة': 15,
+        'جلسة متابعة': 15,
       };
 
       const estimatedMinutes = defaultDurations[procedureType] || 30;
@@ -272,7 +230,7 @@ async function startServer() {
           suggestedSlots: ['17:30', '18:30', '19:15'],
           workloadStatus: isOverloaded ? 'busy' : 'balanced',
           warningNote: isOverloaded ? 'اليوم به إشغال مرتفع في العيادة، يُنصح بتخفيف المواعيد المعقدة.' : undefined,
-          recommendation: `الموعد المقترح لإجراء ${procedureType} يستغرق حوالي ${estimatedMinutes} دقيقة.`,
+          recommendation: `اقتراح محلي بمدة تقديرية ${estimatedMinutes} دقيقة. راجع الوقت والمدة قبل الحجز.`,
         });
       }
 
@@ -364,18 +322,9 @@ async function startServer() {
       const { imageBase64, toothNumber } = req.body;
       const ai = getGeminiClient();
 
-      if (!ai || !imageBase64) {
-        return res.json({
-          toothNumber: toothNumber || '21',
-          canals: [
-            { name: 'MB (Mesiobuccal)', estimatedLengthMm: 21.5, confidence: 'عالية' },
-            { name: 'DB (Distobuccal)', estimatedLengthMm: 20.0, confidence: 'متوسطة' },
-            { name: 'Palatal', estimatedLengthMm: 22.0, confidence: 'عالية' },
-          ],
-          apicalLimitNote: 'الذروة واضحة، المقياس المقترح آمن 0.5 ملم قبل الذروة الشعاعية.',
-          autoCleanupFlag: true,
-          recommendation: 'تم حفظ الصورة مؤقتاً في ملف الجلسة وسيتم تنظيف الصورة المؤقتة بعد المتابعة.',
-        });
+      if (!imageBase64) return res.status(400).json({ error: 'أرفق صورة للتحليل.' });
+      if (!ai) {
+        return res.status(503).json({ error: 'خدمة تحليل الصور غير مفعّلة. يمكنك إدخال البيانات يدويًا حتى يتم إعداد الخدمة.' });
       }
 
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
@@ -496,3 +445,4 @@ async function startServer() {
 }
 
 startServer();
+

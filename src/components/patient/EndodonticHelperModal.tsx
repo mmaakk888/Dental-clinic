@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Camera, Sparkles, Check, AlertCircle, X, Trash2, Image as ImageIcon, Ruler } from 'lucide-react';
 import { AiService, EndodonticAnalysis } from '../../services/aiService';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
 
 interface EndodonticHelperModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
   patientName,
   onSaveWorkingLength,
 }) => {
+  const { showToast } = useToastAndConfirm();
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<EndodonticAnalysis | null>(null);
@@ -38,9 +40,13 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
 
   const runAiAnalysis = async (base64Img: string) => {
     setIsAnalyzing(true);
-    const result = await AiService.analyzeEndoWorkingLength(base64Img, toothNumber);
-    setAnalysis(result);
-    setIsAnalyzing(false);
+    setAnalysis(null);
+    try {
+      const result = await AiService.analyzeEndoWorkingLength(base64Img, toothNumber);
+      setAnalysis(result);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذر تحليل الصورة.', 'error');
+    } finally { setIsAnalyzing(false); }
   };
 
   const handleSave = () => {
@@ -181,3 +187,4 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
     </div>
   );
 };
+

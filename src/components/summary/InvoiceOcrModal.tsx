@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Sparkles, Check, Trash2, X, FileText, Upload, Plus, Copy, AlertTriangle, HelpCircle, Calculator, Building2, Phone, CreditCard, DollarSign, Layers, Calendar, Clock, RefreshCw, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
 import { AiService, ExtractedInvoice } from '../../services/aiService';
 import { Expense, ExpenseItem, PriceVarianceAlert } from '../../types';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { localDateISO, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 
 interface InvoiceOcrModalProps {
   isOpen: boolean;
@@ -16,6 +18,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   onSaveExpense,
   existingExpenses = [],
 }) => {
+  const { showToast } = useToastAndConfirm();
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractedData, setExtractedData] = useState<ExtractedInvoice | null>(null);
@@ -28,7 +31,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   const [taxNumber, setTaxNumber] = useState('');
   const [commercialRecord, setCommercialRecord] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [invoiceDate, setInvoiceDate] = useState<string>(localDateISO());
   const [invoiceTime, setInvoiceTime] = useState<string>('12:00');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer' | 'credit' | 'deferred'>('cash');
   const [category, setCategory] = useState<'supplies' | 'fixed' | 'maintenance' | 'other'>('supplies');
@@ -54,22 +57,37 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
 
-  if (!isOpen) return null;
+  const extractionRequest = useRef(0);
+  useEffect(() => {
+    if (!isOpen) { extractionRequest.current += 1; setIsExtracting(false); }
+  }, [isOpen]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) return showToast('اختر صورة JPG أو PNG أو WebP بحجم أقل من ٨ ميجابايت.', 'warning');
+      const requestId = ++extractionRequest.current;
+      setIsExtracting(true);
+      setSupplierName(''); setSupplierPhone(''); setSupplierAddress(''); setInvoiceNumber('');
+      setTaxNumber(''); setCommercialRecord(''); setNotes(''); setTitle('');
+      setLineItems([]); setFieldConfidence({}); setExtractedData(null);
+      setSubtotal(''); setTotalAmount(''); setDiscount(''); setTax(''); setPaidAmount(''); setRemainingAmount('');
+      setInvoiceDate(localDateISO()); setInvoiceTime('12:00'); setPaymentMethod('cash'); setCategory('supplies'); setCurrency('ج.م');
       const reader = new FileReader();
-      reader.onloadend = async () => {
+      reader.onerror = () => { if (requestId === extractionRequest.current) { setIsExtracting(false); showToast('تعذر فتح الصورة. جرّب اختيارها مرة أخرى.', 'warning'); } };
+      reader.onload = async () => {
+        if (requestId !== extractionRequest.current) return;
         const base64 = reader.result as string;
         setImagePreview(base64);
         setIsExtracting(true);
 
+        try {
         const data = await AiService.extractInvoice(base64, file.type || 'image/jpeg');
+        if (requestId !== extractionRequest.current) return;
         setExtractedData(data);
 
         // Populate fields
-        setSupplierName(data.supplierName || 'شركة توريدات طبيّة');
+        setSupplierName(data.supplierName || '');
         setTitle(data.supplierName || 'فاتورة توريد مستلزمات');
         if (data.supplierPhone) setSupplierPhone(data.supplierPhone);
         if (data.supplierAddress) setSupplierAddress(data.supplierAddress);
@@ -86,49 +104,44 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
         // Amounts
         const netTotal = data.totalAmount || 0;
         setTotalAmount(netTotal);
-        setSubtotal(data.subtotal || netTotal);
+        setSubtotal(data.subtotal ?? netTotal);
         setDiscount(data.discount || 0);
         setTax(data.tax || 0);
-        setPaidAmount(data.paidAmount ?? netTotal);
-        setRemainingAmount(data.remainingAmount ?? 0);
+        const extractedPaid = data.paidAmount ?? (data.remainingAmount !== undefined ? Math.max(0, netTotal - data.remainingAmount) : ['credit', 'deferred'].includes(data.paymentMethod || '') ? 0 : netTotal);
+        setPaidAmount(extractedPaid);
+        setRemainingAmount(Math.max(0, netTotal - extractedPaid));
 
         // Line Items
         if (data.lineItems && data.lineItems.length > 0) {
           const formattedItems: ExpenseItem[] = data.lineItems.map((item, idx) => ({
             id: `item-${Date.now()}-${idx}`,
             itemName: item.itemName,
-            quantity: item.quantity || 1,
+            quantity: item.quantity ?? 0,
             unit: item.unit || 'علبة',
-            unitPrice: item.unitPrice || item.total || 0,
+            unitPrice: item.unitPrice ?? 0,
             discount: item.discount || 0,
             tax: item.tax || 0,
-            total: item.total || (item.quantity * item.unitPrice) || 0,
+            total: item.total ?? ((item.quantity ?? 0) * (item.unitPrice ?? 0)),
             notes: item.notes || '',
-            confidence: item.confidence || 90,
+            confidence: item.confidence,
           }));
           setLineItems(formattedItems);
         } else {
-          // Default initial single line item
-          setLineItems([
-            {
-              id: `item-${Date.now()}-0`,
-              itemName: data.supplierName || 'توريدات ومعدات عيادة',
-              quantity: 1,
-              unit: 'دفعة',
-              unitPrice: netTotal,
-              discount: 0,
-              tax: 0,
-              total: netTotal,
-              confidence: 85,
-            },
-          ]);
+          setLineItems([]);
         }
 
         if (data.fieldConfidence) {
           setFieldConfidence(data.fieldConfidence);
         }
 
-        setIsExtracting(false);
+        } catch (error) {
+          if (requestId !== extractionRequest.current) return;
+          setExtractedData(null);
+          setLineItems([]);
+          showToast(error instanceof Error ? error.message : 'تعذر قراءة الفاتورة. أدخل التفاصيل يدويًا.', 'warning');
+        } finally {
+          if (requestId === extractionRequest.current) setIsExtracting(false);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -140,7 +153,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       if (item.id !== id) return item;
       const updated = { ...item, [field]: val };
       
-      const qty = Number(updated.quantity) || 1;
+      const qty = Number(updated.quantity) || 0;
       const price = Number(updated.unitPrice) || 0;
       const disc = Number(updated.discount) || 0;
       const tx = Number(updated.tax) || 0;
@@ -208,7 +221,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       existingExpenses.forEach(exp => {
         if (exp.items && exp.items.length > 0) {
           exp.items.forEach(past => {
-            if (past.itemName.trim().toLowerCase() === item.itemName.trim().toLowerCase() && past.unitPrice > 0) {
+            if (past.itemName.trim().toLowerCase() === item.itemName.trim().toLowerCase() && (past.unit || 'علبة') === (item.unit || 'علبة') && past.unitPrice > 0) {
               matchedPastItems.push({ price: past.unitPrice, date: exp.invoiceDate || exp.date });
             }
           });
@@ -236,8 +249,15 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   }, [lineItems, existingExpenses]);
 
   const handleSave = () => {
+    if (isExtracting) return showToast('انتظر انتهاء قراءة الصورة أو أدخل الفاتورة بعد توقف القراءة.', 'warning');
+    if (!isValidAppointmentDate(invoiceDate)) return showToast('اختر تاريخ فاتورة صحيحًا.', 'warning');
     const finalAmount = typeof totalAmount === 'number' ? totalAmount : itemsSum;
-    if (finalAmount <= 0) return;
+    if (!Number.isFinite(finalAmount) || finalAmount <= 0) return showToast('أدخل إجمالي فاتورة صحيحًا أكبر من صفر.', 'warning');
+    const finalPaid = typeof paidAmount === 'number' ? paidAmount : ['credit', 'deferred'].includes(paymentMethod) ? 0 : finalAmount;
+    if (!Number.isFinite(finalPaid) || finalPaid < 0 || finalPaid > finalAmount) return showToast('المبلغ المسدّد يجب أن يكون بين صفر وإجمالي الفاتورة.', 'warning');
+    if ([subtotal, discount, tax].some(value => value !== '' && (!Number.isFinite(value) || value < 0))) return showToast('راجع الإجمالي والخصم والضريبة؛ لا تقبل مبالغ سالبة أو غير صحيحة.', 'warning');
+    if (lineItems.some(item => !item.itemName.trim() || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0 || !Number.isFinite(item.total) || item.total < 0)) return showToast('راجع أسماء الأصناف والكميات والأسعار قبل الحفظ.', 'warning');
+    if (invoiceNumber.trim() && supplierName.trim() && existingExpenses.some(expense => expense.invoiceNumber?.trim() === invoiceNumber.trim() && expense.supplierName?.trim() === supplierName.trim())) return showToast('رقم الفاتورة مسجّل بالفعل لهذا المورّد. راجع الفاتورة الموجودة لتجنب تكرار المصروف.', 'warning');
 
     const finalSupplier = supplierName.trim() || title.trim() || 'مورد مستلزمات طبية';
 
@@ -257,8 +277,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       subtotal: typeof subtotal === 'number' ? subtotal : finalAmount,
       discount: typeof discount === 'number' ? discount : 0,
       tax: typeof tax === 'number' ? tax : 0,
-      paidAmount: typeof paidAmount === 'number' ? paidAmount : finalAmount,
-      remainingAmount: typeof remainingAmount === 'number' ? remainingAmount : 0,
+      paidAmount: finalPaid,
+      remainingAmount: finalAmount - finalPaid,
       currency,
       date: invoiceDate,
       note: notes.trim() || undefined,
@@ -270,7 +290,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       auditLog: [
         {
           id: `log-${Date.now()}`,
-          action: 'إنشاء واستخراج مسح الفاتورة بالذكاء الاصطناعي',
+          action: extractedData ? 'تسجيل فاتورة بعد مراجعة بيانات الاستخراج' : 'تسجيل فاتورة يدويًا',
           user: 'الطبيب / مسؤول العيادة',
           timestamp: new Date().toLocaleString('ar-EG'),
         }
@@ -298,6 +318,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     );
   };
 
+  if (!isOpen) return null;
   return (
     <div onClick={onClose} className="fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
       <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
@@ -309,8 +330,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
               <Camera className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-base sm:text-lg font-black">المسح والتصنيف الذكي لفواتير الموردين (ERP Invoice OCR)</h3>
-              <p className="text-xs text-emerald-200/80">تصوير الفاتورة واستخراج جميع البنود، الضريبة، والمورد آلياً</p>
+              <h3 className="text-base sm:text-lg font-black">إضافة فاتورة مشتريات</h3>
+              <p className="text-xs text-emerald-200/80">ارفع الصورة، ثم راجع الأصناف والمبالغ قبل الحفظ</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer">
@@ -377,7 +398,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                       <Trash2 className="w-3.5 h-3.5" /> تغيير الصورة
                     </button>
                   </div>
-                  <p className="text-xs text-slate-300">تم حفظ صورة الفاتورة عالية الجودة داخل النظام. يمكنك مراجعة وتعديل البيانات المستخرجة أدناه قبل الاعتماد.</p>
+                  <p className="text-xs text-slate-300">الصورة مرفقة للمعاينة. راجع البنود والمبالغ ثم اضغط حفظ لتسجيل الفاتورة.</p>
                 </div>
               </div>
 
@@ -543,7 +564,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                 </div>
 
                 <div className="overflow-x-auto rounded-2xl border border-slate-200 shadow-2xs bg-white">
-                  <table className="w-full text-right text-xs min-w-[700px]">
+                  <table className="invoice-items-table w-full text-right text-xs min-w-[700px]">
                     <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                       <tr>
                         <th className="p-2.5">#</th>
@@ -560,8 +581,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                     <tbody className="divide-y divide-slate-100 font-medium">
                       {lineItems.map((item, idx) => (
                         <tr key={item.id} className="hover:bg-slate-50/90 transition-colors">
-                          <td className="p-2.5 text-center font-mono text-slate-400">{idx + 1}</td>
-                          <td className="p-2">
+                          <td data-label="الصنف" className="p-2.5 text-center font-mono text-slate-400">{idx + 1}</td>
+                          <td data-label="اسم الصنف" className="p-2">
                             <input
                               type="text"
                               value={item.itemName}
@@ -570,7 +591,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                               className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 focus:ring-1 focus:ring-indigo-500 font-bold text-slate-900"
                             />
                           </td>
-                          <td className="p-2">
+                          <td data-label="الكمية" className="p-2">
                             <input
                               type="number"
                               min="1"
@@ -579,7 +600,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                               className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 text-center font-bold"
                             />
                           </td>
-                          <td className="p-2">
+                          <td data-label="الوحدة" className="p-2">
                             <select
                               value={item.unit || 'علبة'}
                               onChange={e => updateLineItem(item.id, 'unit', e.target.value)}
@@ -595,7 +616,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                               <option value="دفعة">دفعة</option>
                             </select>
                           </td>
-                          <td className="p-2">
+                          <td data-label="سعر الوحدة" className="p-2">
                             <input
                               type="number"
                               min="0"
@@ -604,7 +625,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                               className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 text-center font-mono font-bold text-slate-900"
                             />
                           </td>
-                          <td className="p-2">
+                          <td data-label="الخصم" className="p-2">
                             <input
                               type="number"
                               min="0"
@@ -613,7 +634,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                               className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 text-center font-mono text-amber-700"
                             />
                           </td>
-                          <td className="p-2">
+                          <td data-label="الضريبة" className="p-2">
                             <input
                               type="number"
                               min="0"
@@ -717,6 +738,16 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-200">
+                    <div>
+                      <label htmlFor="invoice-paid-amount" className="block font-bold text-slate-600 mb-1">المسدّد فعليًا</label>
+                      <input id="invoice-paid-amount" type="number" min="0" max={totalVal || undefined} step="0.01" value={paidAmount} onChange={e => setPaidAmount(e.target.value === '' ? '' : Number(e.target.value))} className="w-full px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-mono" placeholder={['credit', 'deferred'].includes(paymentMethod) ? '0' : 'كامل الإجمالي'} />
+                    </div>
+                    <div className="rounded-xl bg-amber-50 border border-amber-200 p-2">
+                      <span className="block font-bold text-slate-600">المتبقي للمورّد</span>
+                      <strong>{Math.max(0, totalVal - (typeof paidAmount === 'number' ? paidAmount : ['credit', 'deferred'].includes(paymentMethod) ? 0 : totalVal)).toLocaleString('ar-EG')} {currency}</strong>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
@@ -744,6 +775,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
+              disabled={isExtracting}
               className="px-6 py-2.5 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-2xl shadow-md transition flex items-center gap-2 cursor-pointer active:scale-95"
             >
               <Check className="w-4 h-4" />
@@ -755,3 +787,4 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     </div>
   );
 };
+

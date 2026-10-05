@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { extraMessageTemplates } from '../../utils/whatsappUtils';
 import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown } from 'lucide-react';
 import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
-import { saveBackupToFirebase, fetchFirebaseBackups, fetchSingleFirebaseBackup, removeFirebaseBackup, FirebaseBackupMeta } from '../../utils/firebaseService';
+import type { FirebaseBackupMeta } from '../../utils/firebaseService';
 import { ClinicLogo } from '../common/ClinicLogo';
 import { AuditTrailView } from './AuditTrailView';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
-import * as XLSX from 'xlsx';
+import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 
 interface SettingsViewProps {
   activeSubTab?: string;
@@ -114,6 +114,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newServiceInput, setNewServiceInput] = useState('');
 
   // Excel Export Column Checkboxes
+  const excelBusyRef = useRef(false);
   const [exportCols, setExportCols] = useState({
     id: true,
     name: true,
@@ -263,29 +264,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Excel Export Handler
-  const handleExportExcel = () => {
-    const exportData = patients.map(p => {
-      const row: Record<string, any> = {};
-      const req = p.sessions.reduce((a, s) => a + s.amount, 0);
-      const pd = p.sessions.reduce((a, s) => a + s.paid, 0);
-
-      if (exportCols.id) row['رقم الملف'] = p.id;
-      if (exportCols.name) row['اسم المريض'] = p.name;
-      if (exportCols.mobile) row['الموبايل'] = p.mobile;
-      if (exportCols.age) row['السن'] = p.age;
-      if (exportCols.firstVisit) row['تاريخ الدخول'] = p.firstVisit;
-      if (exportCols.totalRequired) row['إجمالي المطلوبات'] = req;
-      if (exportCols.totalPaid) row['إجمالي المدفوع'] = pd;
-      if (exportCols.totalRemain) row['المتبقي'] = req - pd;
-
-      return row;
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'مرضى العيادة');
-    XLSX.writeFile(workbook, `مرضى_عيادة_الأسنان_${new Date().toISOString().split('T')[0]}.xlsx`);
-    showToast('تم تصدير ملف الإكسيل بنجاح', 'success');
+  const handleExportExcel = async () => {
+    if (excelBusyRef.current) { showToast('انتظر حتى تنتهي عملية الإكسيل الحالية', 'info'); return; }
+    if (!Object.values(exportCols).some(Boolean)) { showToast('اختر عمودًا واحدًا على الأقل للتصدير', 'warning'); return; }
+    if (!patients.length) { showToast('لا توجد بيانات مرضى لتصديرها', 'warning'); return; }
+    excelBusyRef.current = true;
+    try {
+      const XLSX = await import('xlsx');
+      const exportData = patients.map(p => {
+        const row: Record<string, string | number> = {};
+        const financial = getPatientFinancialSummary(p);
+        if (exportCols.id) row['رقم الملف'] = p.id;
+        if (exportCols.name) row['اسم المريض'] = p.name;
+        if (exportCols.mobile) row['الموبايل'] = p.mobile;
+        if (exportCols.age) row['السن'] = p.age;
+        if (exportCols.firstVisit) row['تاريخ الدخول'] = p.firstVisit;
+        if (exportCols.totalRequired) row['إجمالي المطلوبات بعد الخصم'] = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+        if (exportCols.totalPaid) row['إجمالي المدفوع'] = financial.totalCollected;
+        if (exportCols.totalRemain) row['المتبقي'] = financial.totalRemaining;
+        return row;
+      });
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'مرضى العيادة');
+      XLSX.writeFile(workbook, `مرضى_عيادة_الأسنان_${new Date().toISOString().split('T')[0]}.xlsx`);
+      showToast('تم تجهيز ملف الإكسيل للتنزيل', 'success');
+    } catch {
+      showToast('تعذر تجهيز ملف الإكسيل. أعد المحاولة بعد التأكد من اتصال الموقع.', 'error');
+    } finally {
+      excelBusyRef.current = false;
+    }
   };
 
   // Helper for downloading CSV with UTF-8 BOM for Arabic compatibility
@@ -316,10 +324,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // CSV Export Handlers
   const handleExportPatientsCSV = () => {
-    const headers = ['رقم الملف', 'اسم المريض', 'رقم الموبايل', 'السن', 'تاريخ الدخول', 'الحساسية والإنذارات', 'إجمالي المطلوب (ج.م)', 'إجمالي المدفوع (ج.م)', 'المتبقي (ج.م)'];
+    const headers = ['رقم الملف', 'اسم المريض', 'الموبايل', 'السن', 'تاريخ الدخول', 'الحساسية والإنذارات', 'إجمالي المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'المتبقي (ج.م)'];
     const rows = patients.map(p => {
-      const req = p.sessions.reduce((a, s) => a + s.amount, 0);
-      const pd = p.sessions.reduce((a, s) => a + s.paid, 0);
+      const financial = getPatientFinancialSummary(p);
       return [
         p.id,
         p.name,
@@ -327,9 +334,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         p.age,
         p.firstVisit,
         p.allergy || 'لا يوجد',
-        req,
-        pd,
-        req - pd
+        Math.max(0, financial.totalRequired - financial.totalDiscounts),
+        financial.totalCollected,
+        financial.totalRemaining
       ];
     });
 
@@ -338,37 +345,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleExportFinancialReportCSV = () => {
-    const headers = ['تاريخ الحركة', 'نوع الحركة', 'رقم الملف', 'اسم المريض', 'الخدمة / الملاحظة', 'المبلغ المطلوب (ج.م)', 'المبلغ المدفوع (ج.م)', 'طريقة الدفع / تفاصيل'];
-    const rows: (string | number)[][] = [];
-
-    patients.forEach(p => {
-      // Treatments / Sessions
-      p.sessions.forEach(s => {
-        rows.push([
-          s.date,
-          'جلسة علاجية',
-          p.id,
-          p.name,
-          `${s.type}${s.toothNo ? ` (سن #${s.toothNo})` : ''}`,
-          s.amount,
-          s.paid,
-          s.notes || '-'
-        ]);
-      });
-
-      // Payments
-      p.payments?.forEach(pay => {
-        rows.push([
-          pay.date,
-          'دفعة مسددة',
-          p.id,
-          p.name,
-          'تسديد مستحقات',
-          0,
-          pay.amount,
-          `${pay.method || 'نقداً'} ${pay.note ? `- ${pay.note}` : ''}`
-        ]);
-      });
+    const headers = ['تاريخ الخدمة / الدفعة', 'نوع السجل', 'رقم الملف', 'اسم المريض', 'الخدمة / الملاحظة', 'المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'طريقة الدفع'];
+    const rows: (string | number)[][] = calculateDailyCollections(patients, () => true).rows.map(row => {
+      const patient = patients.find(p => p.id === row.patientId);
+      const session = patient?.sessions.find(s => s.id === row.sessionId);
+      return [row.date, session ? 'ملخص سداد خدمة' : 'دفعة عامة', row.fileNo, row.patientName, row.proceduresText,
+        session ? Math.max(0, row.totalValue - row.discountAmount) : 0, row.paidAmount, 'نقدي'];
     });
 
     // Chronological order descending
@@ -379,55 +361,89 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Excel Import Handler
-  const handleImportExcelFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
     if (!file) return;
+    if (excelBusyRef.current) { showToast('انتظر حتى تنتهي عملية الإكسيل الحالية', 'info'); return; }
+    excelBusyRef.current = true;
+    try {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!sheet) throw new Error('empty-workbook');
+      const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      if (!data.length) { showToast('الملف لا يحتوي على صفوف مرضى لاستيرادها', 'warning'); return; }
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const workbook = XLSX.read(bstr, { type: 'binary' });
-        const wsname = workbook.SheetNames[0];
-        const ws = workbook.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json<any>(ws);
-
-        let importedCount = 0;
-        const existingIds = new Set(patients.map(p => p.id));
-        const newPatientsList: Patient[] = [];
-
-        data.forEach((row, idx) => {
-          const rawId = row['رقم الملف'] || row['FileNo'] || row['ID'] || (1000 + idx).toString();
-          const pId = String(rawId).trim();
-
-          if (!existingIds.has(pId)) {
-            existingIds.add(pId);
-            importedCount++;
-            newPatientsList.push({
-              id: pId,
-              name: row['اسم المريض'] || row['Name'] || 'مريض مستورد',
-              mobile: String(row['الموبايل'] || row['Mobile'] || ''),
-              age: parseInt(row['السن'] || row['Age'] || '30', 10),
-              firstVisit: row['تاريخ الدخول'] || row['FirstVisit'] || new Date().toISOString().split('T')[0],
-              notes: 'تم استيراده من ملف إكسيل',
-              allergy: '',
-              sessions: [],
-              payments: []
-            });
-          }
-        });
-
-        if (importedCount > 0) {
-          onImportPatients(newPatientsList);
-          showToast(`تم استيراد ${importedCount} حالة جديدة بنجاح`, 'success');
-        } else {
-          showToast('لم يتم إضافة أية حالات جديدة (قد تكون أرقام الملفات مكررة)', 'warning');
+      const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+      const readCell = (row: Record<string, unknown>, keys: string[]) => {
+        for (const key of keys) { if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; }
+        return '';
+      };
+      const parseVisitDate = (value: unknown): string => {
+        if (value instanceof Date && Number.isFinite(value.getTime())) {
+          return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
         }
-      } catch (err) {
-        showToast('حدث خطأ أثناء قراءة ملف الإكسيل، يرجى التأكد من المخطط', 'error');
+        const text = normalizeDigits(String(value ?? '').trim());
+        const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+        const local = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/.exec(text);
+        if (!iso && !local) return '';
+        const year = Number(iso ? iso[1] : local![3]);
+        const month = Number(iso ? iso[2] : local![2]);
+        const day = Number(iso ? iso[3] : local![1]);
+        const date = new Date(Date.UTC(year, month - 1, day));
+        if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return '';
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      };
+      const existingIds = new Set(patients.map(p => normalizeDigits(p.id.trim())));
+      const newPatientsList: Patient[] = [];
+      let duplicateCount = 0;
+      let invalidCount = 0;
+
+      data.forEach(row => {
+        const rawId = readCell(row, ['رقم الملف', 'FileNo', 'ID']);
+        const id = normalizeDigits(String(rawId).trim());
+        const rawName = readCell(row, ['اسم المريض', 'Name']);
+        const name = typeof rawName === 'string' ? rawName.trim() : '';
+        const rawAge = readCell(row, ['السن', 'Age']);
+        const age = rawAge === '' ? 0 : typeof rawAge === 'number' || typeof rawAge === 'string' ? Number(normalizeDigits(String(rawAge))) : NaN;
+        const numericIdInvalid = typeof rawId === 'number' && (!Number.isSafeInteger(rawId) || rawId <= 0);
+        if (!id || !['string', 'number'].includes(typeof rawId) || numericIdInvalid || /[\r\n\t]/.test(id) || !name || !Number.isInteger(age) || age < 0 || age > 120) {
+          invalidCount++;
+          return;
+        }
+        if (existingIds.has(id)) { duplicateCount++; return; }
+        existingIds.add(id);
+        const rawAllergy = String(readCell(row, ['الحساسية والإنذارات', 'الحساسية', 'Allergy'])).trim();
+        const gender = String(readCell(row, ['الجنس', 'Gender'])).trim().toLowerCase();
+        newPatientsList.push({
+          id,
+          name,
+          mobile: normalizeDigits(String(readCell(row, ['الموبايل', 'رقم الموبايل', 'Mobile'])).trim()),
+          age,
+          gender: ['female', 'أنثى'].includes(gender) ? 'female' : ['male', 'ذكر'].includes(gender) ? 'male' : undefined,
+          firstVisit: parseVisitDate(readCell(row, ['تاريخ الدخول', 'FirstVisit'])),
+          notes: String(readCell(row, ['ملاحظات', 'Notes'])).trim(),
+          allergy: rawAllergy === 'لا يوجد' ? '' : rawAllergy,
+          sessions: [],
+          payments: []
+        });
+      });
+
+      const ignored = duplicateCount + invalidCount;
+      const detail = ignored ? `؛ تم تجاهل ${ignored} صف (${duplicateCount} مكرر و${invalidCount} بيانات غير صالحة)` : '';
+      if (newPatientsList.length) {
+        await onImportPatients(newPatientsList);
+        showToast(`تم استيراد ${newPatientsList.length} مريض${detail}`, ignored ? 'warning' : 'success');
+      } else {
+        showToast(`لم تتم إضافة مرضى${detail}. راجع رقم الملف والاسم والسن.`, 'warning');
       }
-    };
-    reader.readAsBinaryString(file);
+    } catch {
+      showToast('تعذر استيراد الملف. راجع صيغته وعناوين أعمدته ثم أعد المحاولة.', 'error');
+    } finally {
+      excelBusyRef.current = false;
+    }
   };
 
   // User Save
@@ -498,6 +514,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
+    const normalizedUsername = userUsername.trim().toLowerCase();
+    if (users.some(user => user.id !== editingUser?.id && user.username.toLowerCase() === normalizedUsername)) {
+      validationFail('userModal', 'input-user-username', 'اسم المستخدم مستخدم بالفعل. اختر اسمًا مختلفًا.');
+      return;
+    }
+    if (!editingUser && !userPassword.trim()) {
+      showToast('اكتب كلمة سر للحساب الجديد.', 'warning');
+      return;
+    }
+    const nextPassword = userPassword.trim() || editingUser?.password || '';
+    const grantsAdminAccess = (user: User) => user.isActive !== false && (user.role === 'doctor' || user.role === 'admin' || user.permissions?.controlPanel === true);
+    if (editingUser && grantsAdminAccess(editingUser) && !(userIsActive && (userRole === 'doctor' || userRole === 'admin' || userPermissions.controlPanel)) && !users.some(user => user.id !== editingUser.id && grantsAdminAccess(user))) {
+      showToast('احتفظ بحساب مدير نشط واحد على الأقل قبل تغيير هذه الصلاحيات.', 'warning');
+      return;
+    }
+
     if (userScheduleEnabled && (!userScheduleDays.length || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleEnd) || userScheduleStart === userScheduleEnd)) {
       showToast('اختر يوم عمل واحدًا على الأقل ووقت بداية ونهاية صحيحين ومختلفين.', 'warning');
       return;
@@ -507,7 +539,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       id: editingUser ? editingUser.id : `u_${Date.now()}`,
       name: userName.trim(),
       username: userUsername.trim().toLowerCase(),
-      password: userPassword.trim() || '123',
+      password: nextPassword,
       email: userEmail.trim(),
       phone: userPhone.trim(),
       role: userRole,
@@ -521,7 +553,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         timezone: 'Africa/Cairo'
       },
       credentialVersion: editingUser
-        ? (editingUser.credentialVersion ?? 1) + (editingUser.password !== (userPassword.trim() || '123') ? 1 : 0)
+        ? (editingUser.credentialVersion ?? 1) + (editingUser.password !== nextPassword ? 1 : 0)
         : 1
     };
 
@@ -543,8 +575,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
     const updated = users.filter(u => u.id !== uId);
-    onSaveUsers(updated);
-    showToast('تم حذف حساب المستخدم', 'warning');
+    if (!updated.some(user => user.isActive !== false && (user.role === 'doctor' || user.role === 'admin' || user.permissions?.controlPanel === true))) {
+      showToast('لا يمكن حذف آخر حساب مدير نشط.', 'warning');
+      return;
+    }
+    askConfirm({ title: 'حذف حساب المستخدم', message: 'سيُلغى دخول هذا الحساب. هل تريد المتابعة؟', tone: 'danger', confirmLabel: 'حذف الحساب', onConfirm: () => {
+      onSaveUsers(updated);
+      showToast('تم حذف حساب المستخدم', 'warning');
+    } });
   };
 
   const handleSaveWhatsappForm = (e: React.FormEvent) => {
@@ -565,7 +603,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSaveDrugForm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!drugName.trim()) {
-      showToast('يرجى أكتب اسم الدواء', 'warning');
+      showToast('يرجى كتابة اسم الدواء', 'warning');
       return;
     }
 
@@ -601,6 +639,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [cloudBackups, setCloudBackups] = useState<FirebaseBackupMeta[]>([]);
   const [isUploadingCloud, setIsUploadingCloud] = useState(false);
   const [isFetchingCloud, setIsFetchingCloud] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'verified' | 'error'>('idle');
 
   useEffect(() => {
     if (activeSubTab === 'firebase') {
@@ -611,10 +650,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const loadCloudBackups = async () => {
     setIsFetchingCloud(true);
     try {
+      const { fetchFirebaseBackups } = await import('../../utils/firebaseService');
       const list = await fetchFirebaseBackups();
       setCloudBackups(list);
+      setCloudStatus('verified');
     } catch (err) {
       console.error('Error fetching firebase backups:', err);
+      setCloudStatus('error');
     } finally {
       setIsFetchingCloud(false);
     }
@@ -638,6 +680,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         clinicLogo
       };
 
+      const { saveBackupToFirebase } = await import('../../utils/firebaseService');
       const meta = await saveBackupToFirebase(fullData, clinicName);
       showToast(`تم رفع النسخة الاحتياطية بنجاح إلى Firebase (${meta.timestamp})`, 'success');
       await loadCloudBackups();
@@ -657,6 +700,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       tone: 'warning',
       onConfirm: async () => {
         try {
+          const { fetchSingleFirebaseBackup } = await import('../../utils/firebaseService');
           const fullData = await fetchSingleFirebaseBackup(backupId);
           if (fullData) {
             onRestoreFullData(fullData);
@@ -680,6 +724,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       tone: 'danger',
       onConfirm: async () => {
         try {
+          const { removeFirebaseBackup } = await import('../../utils/firebaseService');
           await removeFirebaseBackup(backupId);
           setCloudBackups(prev => prev.filter(b => b.id !== backupId));
           showToast('تم حذف النسخة الاحتياطية من السحابة', 'info');
@@ -810,7 +855,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="flex items-center gap-4 flex-wrap bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <ClinicLogo
                     size="lg"
-                    customLogoUrl={tempLogo || '/src/assets/images/clinic_logo_hd_1784964208393.jpg'}
+                    customLogoUrl={tempLogo}
                   />
                   <div className="flex items-center gap-2">
                     <label className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs">
@@ -1362,10 +1407,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-sm font-tajawal">الاتصال المباشر بـ Firebase Cloud Database</span>
+                    <span className="font-extrabold text-sm font-tajawal">النسخ الاحتياطية على Firebase</span>
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                      متصل ونشط
+                      {isFetchingCloud ? 'جارٍ التحقق' : cloudStatus === 'verified' ? 'قائمة النسخ متاحة' : cloudStatus === 'error' ? 'تعذر التحقق' : 'لم يتم التحقق'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-1">
@@ -1440,6 +1484,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <RefreshCw className="w-4 h-4 animate-spin text-indigo-600" />
                   جاري جلب النسخ الاحتياطية من السحابة...
                 </div>
+              ) : cloudStatus === 'error' ? (
+                <div role="alert" className="p-5 bg-amber-50 rounded-2xl border border-amber-200 text-sm text-amber-900">تعذر تحميل قائمة النسخ. راجع الاتصال وإعدادات المصادقة وقواعد المشروع؛ لا يمكن تأكيد وجود نسخ أو غيابها الآن.</div>
               ) : cloudBackups.length === 0 ? (
                 <div className="p-8 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-center space-y-2">
                   <Server className="w-8 h-8 text-slate-400 mx-auto" />

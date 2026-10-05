@@ -1,15 +1,24 @@
 import React, { useState, useMemo } from 'react';
 import { 
-  Calendar, Users, DollarSign, Plus, CheckCircle2, XCircle, Clock, 
-  Search, UserPlus, Phone, ShieldCheck, ArrowRight, MessageCircle, 
-  CreditCard, Microscope, Smartphone, AlertCircle, Receipt, ChevronLeft, User as UserIcon,
+  Calendar, Users, DollarSign, Plus, Clock,
+  Search, UserPlus, Phone, ArrowRight, MessageCircle,
+  Microscope, AlertCircle, ChevronLeft, User as UserIcon,
   Eye, EyeOff, FolderOpen, X, ChevronDown
 } from 'lucide-react';
-import { Patient, Appointment, LabCase, User, NavigationOrigin, ActiveView, AppointmentStatus } from '../../types';
+import { Patient, Appointment, LabCase, User, NavigationOrigin, ActiveView, AppointmentStatus, Session, UserPermission } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
-import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBadge';
-import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
-import { getPatientFinancialSummary } from '../../utils/financials';
+import { BalanceProgressMeter } from '../common/FinancialBadge';
+import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS, format12HourTime } from '../appointments/AppointmentStatusModal';
+import { calculateDailyCollections, getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
+import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate, localDateISO } from '../appointments/appointmentScheduling';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { cleanEgyptianPhone, getWhatsAppUrl } from '../../utils/whatsappUtils';
+
+const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
+const sessionRemaining = (session: Session) => Math.max(0,
+  (Number.isFinite(session.amount) ? Math.max(0, session.amount) : 0)
+  - (Number.isFinite(session.discount) ? Math.max(0, session.discount || 0) : 0)
+  - getSessionCollected(session));
 
 interface SecretaryDeskViewProps {
   currentUser: User | null;
@@ -22,7 +31,7 @@ interface SecretaryDeskViewProps {
   onSavePatient: (patient: Patient) => void;
   onSaveAppointment: (appt: Omit<Appointment, 'id'>) => void;
   onUpdateApptStatus: (apptId: string, status: AppointmentStatus) => void;
-  onAddPaymentInstallment: (patientId: string, sessionId: string, amount: number) => void;
+  onAddPaymentInstallment: (patientId: string, sessionId: string, installment: { amount: number; date: string }) => void;
   onBackToHome: () => void;
   onNavigate?: (view: ActiveView) => void;
 }
@@ -42,24 +51,27 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   onBackToHome,
   onNavigate
 }) => {
-  const { showToast } = useToastAndConfirm();
-  const permissions = currentUser?.permissions || {
-    patientView: true,
-    patientEdit: true,
+  const { showToast, askConfirm } = useToastAndConfirm();
+  const permissions: UserPermission = currentUser?.permissions || {
+    patientView: false,
+    patientEdit: false,
     deletePatients: false,
-    patientFinance: true,
-    appointments: true,
-    lab: true,
+    patientFinance: false,
+    appointments: false,
+    lab: false,
     labProfit: false,
     summary: false,
     controlPanel: false
   };
+  const canRegisterPayments = permissions.patientFinance && permissions.registerPayment !== false;
+  const canViewRemaining = permissions.patientFinance && permissions.viewRemainingBalance !== false;
+  const canViewCollections = permissions.patientFinance && permissions.viewTodayCollections !== false
+    && (permissions.viewTodayCollections === true || permissions.summary);
 
-  const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayStr = localDateISO();
 
   // Active Mobile Tab
-  const [activeTab, setActiveTab] = useState<'today' | 'payments' | 'new-patient' | 'lab'>('today');
+  const [activeTab, setActiveTab] = useState<'today' | 'payments' | 'lab'>(permissions.appointments ? 'today' : permissions.patientView ? 'payments' : 'lab');
 
   // Today's Collection Privacy Toggle
   const [showCollection, setShowCollection] = useState<boolean>(false);
@@ -72,22 +84,12 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   const [isNewPatientModalOpen, setIsNewPatientModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
-  React.useEffect(() => {
-    const isAnyModalOpen = isApptModalOpen || isNewPatientModalOpen || isPaymentModalOpen;
-    if (isAnyModalOpen) {
-      document.body.classList.add('modal-open');
-    } else {
-      document.body.classList.remove('modal-open');
-    }
-    return () => {
-      document.body.classList.remove('modal-open');
-    };
-  }, [isApptModalOpen, isNewPatientModalOpen, isPaymentModalOpen]);
+  const appointmentDialogRef = useAppointmentDialog(isApptModalOpen && permissions.appointments, () => setIsApptModalOpen(false));
+  const newPatientDialogRef = useAppointmentDialog(isNewPatientModalOpen && permissions.patientEdit, () => setIsNewPatientModalOpen(false));
+  const paymentDialogRef = useAppointmentDialog(isPaymentModalOpen && canRegisterPayments, () => setIsPaymentModalOpen(false));
 
   // New Appointment Form State
   const [apptPatientId, setApptPatientId] = useState('');
-  const [apptPatientName, setApptPatientName] = useState('');
-  const [apptMobile, setApptMobile] = useState('');
   const [apptDate, setApptDate] = useState(todayStr);
   const [apptTime, setApptTime] = useState('17:00');
   const [apptNote, setApptNote] = useState('');
@@ -97,7 +99,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   const [secStatusModalAppt, setSecStatusModalAppt] = useState<Appointment | null>(null);
 
   const handleSecSelectStatus = (newStatus: AppointmentStatus) => {
-    if (!secStatusModalAppt) return;
+    if (!secStatusModalAppt || !permissions.appointments) return;
     onUpdateApptStatus(secStatusModalAppt.id, newStatus);
     const cfg = APPOINTMENT_STATUS_CONFIGS[newStatus];
     showToast(`تم تحديث حالة الموعد إلى (${cfg ? cfg.label : newStatus}) بنجاح`, 'success');
@@ -107,13 +109,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   // Auto suggest next file number
   const getNextFileNo = () => {
     const numericIds = patients
-      .map(p => {
-        const match = p.id.match(/\d+/);
-        return match ? parseInt(match[0], 10) : NaN;
-      })
-      .filter(n => !isNaN(n));
+      .map(p => /^\d+$/.test(normalizeDigits(p.id.trim())) ? Number(normalizeDigits(p.id.trim())) : NaN)
+      .filter(n => Number.isSafeInteger(n) && n >= 0);
     if (numericIds.length === 0) return '101';
-    return (Math.max(...numericIds) + 1).toString();
+    return (numericIds.reduce((largest, value) => Math.max(largest, value), 0) + 1).toString();
   };
 
   // New Patient Form State
@@ -124,6 +123,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   const [newPatientNotes, setNewPatientNotes] = useState('');
 
   const handleOpenNewPatientModal = () => {
+    if (!permissions.patientEdit) return;
     setNewPatientFileNo(getNextFileNo());
     setNewPatientName('');
     setNewPatientMobile('');
@@ -137,10 +137,28 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   const [paySessionId, setPaySessionId] = useState('');
   const [payAmount, setPayAmount] = useState<number | ''>('');
   const [paySearchQuery, setPaySearchQuery] = useState('');
+  const handleOpenAppointmentModal = () => {
+    if (!permissions.appointments) return;
+    setApptPatientId('');
+    setApptDate(todayStr);
+    setApptTime('17:00');
+    setApptNote('');
+    setApptIsWalkIn(false);
+    setIsApptModalOpen(true);
+  };
+  const handleOpenPaymentModal = (patient?: Patient) => {
+    if (!canRegisterPayments) return;
+    const unpaidSession = patient?.sessions.find(session => sessionRemaining(session) > 0);
+    setPayPatientId(patient?.id || '');
+    setPaySessionId(unpaidSession?.id || '');
+    setPayAmount('');
+    setPaySearchQuery('');
+    setIsPaymentModalOpen(true);
+  };
 
   // Today's Appointments
   const todayAppointments = useMemo(() => {
-    return appointments.filter(a => a.date === todayStr);
+    return appointments.filter(a => a.date === todayStr).sort((a, b) => a.time.localeCompare(b.time));
   }, [appointments, todayStr]);
 
   // Selected Patient for Payment
@@ -161,14 +179,15 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 
   // Patient Search Results
   const filteredPatients = useMemo(() => {
-    const q = patientSearch.trim().toLowerCase();
+    if (!permissions.patientView) return [];
+    const q = normalizeDigits(patientSearch.trim().toLowerCase());
     if (!q) return patients.slice(0, 15);
     return patients.filter(p =>
       p.name.toLowerCase().includes(q) ||
       p.id.includes(q) ||
       p.mobile.includes(q)
     );
-  }, [patients, patientSearch]);
+  }, [patients, patientSearch, permissions.patientView]);
 
   // Handlers
   const handleSaveNewAppointment = (e: React.FormEvent) => {
@@ -177,29 +196,40 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       showToast('ليس لديك صلاحية تسجيل المواعيد', 'error');
       return;
     }
-    if (!apptPatientName.trim()) {
-      showToast('يرجى كتابة اسم المريض', 'warning');
+    const patient = patients.find(item => item.id === apptPatientId);
+    if (!patient) {
+      showToast('اختر ملف مريض موجودًا. أضف ملف المريض الجديد أولًا من قسم المرضى.', 'warning');
       return;
     }
-
-    onSaveAppointment({
-      patientId: apptPatientId || `p_${Date.now()}`,
-      fileNo: apptPatientId || 'جديد',
-      patientName: apptPatientName.trim(),
-      mobile: apptMobile.trim(),
+    if (!isValidAppointmentDate(apptDate) || appointmentTimeMinutes(apptTime) === null) {
+      showToast('حدد تاريخًا ووقتًا صحيحين للموعد', 'warning');
+      return;
+    }
+    const appointment: Omit<Appointment, 'id'> = {
+      patientId: patient.id,
+      fileNo: patient.id,
+      patientName: patient.name,
+      mobile: patient.mobile,
       date: apptDate,
       time: apptTime,
-      note: apptNote.trim(),
+      note: apptNote.trim() || 'كشف ومتابعة',
+      durationMinutes: 30,
       isFollowUp: false,
       isWalkIn: apptIsWalkIn,
-      status: 'scheduled'
-    });
-
-    setIsApptModalOpen(false);
-    setApptPatientName('');
-    setApptMobile('');
-    setApptNote('');
-    showToast('تم حجز الموعد بنجاح في جدول المواعيد', 'success');
+      status: apptIsWalkIn ? 'waiting' : 'scheduled'
+    };
+    const saveAppointment = () => {
+      try {
+        onSaveAppointment(appointment);
+        setIsApptModalOpen(false);
+        showToast('تم حجز الموعد بنجاح في جدول المواعيد', 'success');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'تعذّر حفظ الموعد. راجع البيانات وحاول مرة أخرى.', 'error');
+      }
+    };
+    if (findAppointmentConflicts(appointments, apptDate, apptTime).length) {
+      askConfirm({ title: 'موعد متعارض', message: 'يتداخل وقت الحجز مع موعد آخر. هل تريد تأكيد الحجز رغم التعارض؟', confirmLabel: 'تأكيد الحجز', tone: 'warning', onConfirm: saveAppointment });
+    } else saveAppointment();
   };
 
   const handleCreateNewPatient = (e: React.FormEvent) => {
@@ -213,8 +243,20 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       return;
     }
 
-    const fileNo = newPatientFileNo.trim() || getNextFileNo();
-    const isDuplicate = patients.some(p => p.id.trim() === fileNo);
+    const fileNo = normalizeDigits(newPatientFileNo.trim() || getNextFileNo());
+    if (!/^\d+$/.test(fileNo) || !Number.isSafeInteger(Number(fileNo)) || Number(fileNo) <= 0) {
+      showToast('رقم الملف يجب أن يكون رقمًا صحيحًا أكبر من صفر', 'warning');
+      return;
+    }
+    if (newPatientAge !== '' && (!Number.isFinite(newPatientAge) || !Number.isInteger(newPatientAge) || newPatientAge < 0 || newPatientAge > 130)) {
+      showToast('راجع العمر؛ أدخل عدد سنوات صحيحًا من صفر إلى ١٣٠ أو اتركه فارغًا.', 'warning');
+      return;
+    }
+    if (newPatientMobile.trim() && !/^[1-9]\d{7,14}$/.test(cleanEgyptianPhone(newPatientMobile))) {
+      showToast('راجع رقم الهاتف أو اتركه فارغًا إذا لم يكن متاحًا.', 'warning');
+      return;
+    }
+    const isDuplicate = patients.some(p => normalizeDigits(p.id.trim()) === fileNo);
     if (isDuplicate) {
       showToast(`رقم الملف (${fileNo}) مستخدم بالفعل لحالة أخرى`, 'warning');
       return;
@@ -224,29 +266,34 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       id: fileNo,
       name: newPatientName.trim(),
       mobile: newPatientMobile.trim(),
-      age: typeof newPatientAge === 'number' ? newPatientAge : 25,
+      age: typeof newPatientAge === 'number' ? newPatientAge : 0,
       firstVisit: todayStr,
       notes: newPatientNotes.trim(),
-      allergy: 'لا يوجد',
+      allergy: '',
       sessions: [],
       payments: []
     };
 
-    onSavePatient(newPatient);
+    try {
+      onSavePatient(newPatient);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذّر إنشاء الملف. راجع البيانات وحاول مرة أخرى.', 'error');
+      return;
+    }
     setIsNewPatientModalOpen(false);
     setNewPatientName('');
     setNewPatientMobile('');
     setNewPatientAge('');
     setNewPatientNotes('');
-    showToast(`تم فتح الملف برقم #${fileNo} والدخول للملف مباشرة`, 'success');
+    showToast(`تم فتح الملف برقم #${fileNo}`, 'success');
 
     // Automatically open patient file!
-    onSelectPatient(fileNo, { view: 'secretary' });
+    if (permissions.patientView) onSelectPatient(fileNo, 'patients');
   };
 
   const handleConfirmQuickPayment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!permissions.patientFinance) {
+    if (!canRegisterPayments) {
       showToast('ليس لديك صلاحية التحصيل والتحكم المالي', 'error');
       return;
     }
@@ -255,21 +302,30 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       return;
     }
     const targetPatient = patients.find(p => p.id === payPatientId);
-    let targetSessionId = paySessionId;
-    if (!targetSessionId && targetPatient && targetPatient.sessions.length > 0) {
-      targetSessionId = targetPatient.sessions[0].id;
-    }
-    if (!targetSessionId) {
-      showToast('لا توجد جلسات علاجية مسجلة بهذا الملف بعد', 'warning');
+    const targetSession = targetPatient?.sessions.find(session => session.id === paySessionId);
+    if (!targetPatient || !targetSession) {
+      showToast('اختر جلسة موجودة في ملف المريض لتحصيل الدفعة', 'warning');
       return;
     }
     const amt = typeof payAmount === 'number' ? payAmount : 0;
-    if (amt <= 0) {
+    if (!Number.isFinite(amt) || amt <= 0) {
       showToast('يرجى كتابة مبلغ تحصيل صحيح أكبر من صفر', 'warning');
       return;
     }
 
-    onAddPaymentInstallment(payPatientId, targetSessionId, amt);
+    const maximumPayment = Math.min(sessionRemaining(targetSession), getPatientFinancialSummary(targetPatient).totalRemaining);
+    if (amt > maximumPayment) {
+      showToast(canViewRemaining
+        ? `المبلغ أكبر من المتبقي المستحق (${maximumPayment.toLocaleString()} ج.م). راجع الجلسة المختارة.`
+        : 'المبلغ أكبر من المستحق للجلسة. راجع طبيب العيادة قبل التحصيل.', 'warning');
+      return;
+    }
+    try {
+      onAddPaymentInstallment(payPatientId, targetSession.id, { amount: amt, date: localDateISO() });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذّر حفظ الدفعة. حاول مرة أخرى.', 'error');
+      return;
+    }
     setIsPaymentModalOpen(false);
     setPayAmount('');
     setPaySearchQuery('');
@@ -277,29 +333,26 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
   };
 
   const openWhatsAppReminder = (mobile: string, name: string, time: string) => {
-    if (!mobile) {
-      showToast('لا يوجد رقم موبايل مسجل لهذا المريض', 'warning');
+    const phone = cleanEgyptianPhone(mobile || '');
+    if (!/^[1-9]\d{7,14}$/.test(phone)) {
+      showToast('لا يوجد رقم هاتف صحيح مسجل لهذا المريض', 'warning');
       return;
     }
-    const cleanNum = mobile.replace(/[^0-9]/g, '');
-    const num = cleanNum.startsWith('0') ? `20${cleanNum.slice(1)}` : cleanNum;
     const msg = `أهلاً بك أستاذ/ة ${name}، نذكركم بموعدكم اليوم بـ ${clinicName} الساعة ${time}. نتمنى لكم السلامة دائماً.`;
-    window.open(`https://wa.me/${num}?text=${encodeURIComponent(msg)}`, '_blank');
+    window.open(getWhatsAppUrl(phone, msg), '_blank', 'noopener,noreferrer');
+    showToast('راجع الرسالة داخل واتساب وأرسلها يدويًا.', 'info');
   };
 
   // Today's Calculations for Stats Bar
   const todayPatientsCount = new Set([
-    ...todayAppointments.map(a => a.patientName || a.patientId),
-    ...patients.filter(p => p.firstVisit === todayStr).map(p => p.name)
+    ...todayAppointments.map(a => a.patientId || a.fileNo),
+    ...patients.filter(p => p.firstVisit === todayStr).map(p => p.id)
   ]).size;
 
-  const todayCollectionTotal = patients.reduce((acc, p) => {
-    const todayPays = p.payments?.filter(pay => pay.date === todayStr) || [];
-    return acc + todayPays.reduce((sum, item) => sum + item.amount, 0);
-  }, 0);
+  const todayCollectionTotal = useMemo(() => calculateDailyCollections(patients, date => date === todayStr).totalIncomeCollected, [patients, todayStr]);
 
   return (
-    <div className="space-y-3.5 max-w-5xl mx-auto py-2 font-tajawal select-none">
+    <div className="space-y-3.5 max-w-5xl mx-auto py-2 font-tajawal" dir="rtl">
       {/* 1. Ultra-Compact Streamlined Welcome Bar (No bloated permissions tags) */}
       <div className="bg-white border border-slate-200/90 rounded-2xl p-3 sm:p-3.5 shadow-2xs">
         <div className="flex items-center justify-between gap-2.5">
@@ -309,6 +362,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
               onClick={onBackToHome}
               className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer shrink-0 active:scale-95 touch-manipulation"
               title="العودة لشاشة الرئيسية"
+              aria-label="العودة للرئيسية"
             >
               <ArrowRight className="w-4 h-4" />
             </button>
@@ -361,27 +415,29 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
         {/* Today Collection (With Tap-to-Reveal Privacy Toggle for Patient Privacy) */}
         <button
           type="button"
-          onClick={() => setShowCollection(prev => !prev)}
+          onClick={() => { if (canViewCollections) setShowCollection(prev => !prev); }}
+          disabled={!canViewCollections}
+          aria-pressed={canViewCollections && showCollection}
           className="bg-white hover:bg-emerald-50/40 border border-slate-200/90 hover:border-emerald-300 rounded-2xl p-3 shadow-2xs flex flex-col justify-between min-h-[76px] text-right transition-all cursor-pointer active:scale-96 touch-manipulation"
-          title={showCollection ? 'إخفاء المبلغ للخصوصية' : 'اضغط لإظهار التحصيل المالي'}
+          title={!canViewCollections ? 'عرض تحصيل اليوم غير مسموح لهذا الحساب' : showCollection ? 'إخفاء المبلغ للخصوصية' : 'اضغط لإظهار التحصيل المالي'}
         >
           <div className="flex items-center justify-between text-slate-500 text-[11px] font-bold w-full">
             <span className="flex items-center gap-1 text-slate-700">
               تحصيل اليوم
             </span>
             <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              {showCollection ? <EyeOff className="w-3.5 h-3.5 text-white" /> : <Eye className="w-3.5 h-3.5 text-white" />}
+              {canViewCollections && showCollection ? <EyeOff className="w-3.5 h-3.5 text-white" /> : <Eye className="w-3.5 h-3.5 text-white" />}
             </div>
           </div>
           <div className="mt-1 font-mono">
-            {showCollection ? (
+            {canViewCollections && showCollection ? (
               <div className="text-sm sm:text-base font-black text-emerald-700 truncate">
                 {todayCollectionTotal.toLocaleString()} <span className="text-[10px] font-sans text-slate-500 font-normal">ج.م</span>
               </div>
             ) : (
               <div className="text-xs sm:text-sm font-bold text-slate-400 tracking-widest flex items-center gap-1">
                 <span>•••••</span>
-                <span className="text-[9px] font-sans text-slate-400 font-normal">(اضغط)</span>
+                <span className="text-[10px] font-sans text-slate-400 font-normal">{canViewCollections ? '(اضغط)' : 'غير متاح'}</span>
               </div>
             )}
           </div>
@@ -410,6 +466,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
           
           <button
             type="button"
+            disabled={!permissions.patientView}
             onClick={() => {
               if (onNavigate) {
                 onNavigate('patients');
@@ -495,7 +552,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                         </div>
                         <div className="text-[11px] text-slate-500 font-medium flex items-center gap-2 flex-wrap">
                           <span>📱 {patient.mobile || '—'}</span>
-                          {remain > 0 ? (
+                          {canViewRemaining && (remain > 0 ? (
                             <span className="text-rose-700 font-bold bg-rose-50 px-1.5 py-0.2 rounded border border-rose-200/60">
                               متبقي: {remain.toLocaleString()} ج.م
                             </span>
@@ -503,7 +560,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                             <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/60">
                               خالص الحساب
                             </span>
-                          )}
+                          ))}
                         </div>
                       </div>
 
@@ -526,7 +583,6 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span>الإجراءات السريعة الرئيسية</span>
           </span>
-          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">تصميم سهل بيد واحدة 📱</span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
@@ -534,10 +590,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
           <button
             type="button"
             disabled={!permissions.appointments}
-            onClick={() => {
-              setApptDate(todayStr);
-              setIsApptModalOpen(true);
-            }}
+            onClick={handleOpenAppointmentModal}
             className={`p-3.5 sm:p-4 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-2 cursor-pointer touch-manipulation group relative overflow-hidden ${
               permissions.appointments
                 ? 'bg-white hover:bg-emerald-50/50 border-slate-200/90 hover:border-emerald-400 shadow-2xs hover:shadow-xs text-slate-900 active:scale-95'
@@ -549,7 +602,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
             </div>
             <div className="text-center w-full">
               <span className="font-black text-xs sm:text-sm block text-slate-900 group-hover:text-emerald-900 transition-colors">حجز موعد</span>
-              <span className="text-[10px] sm:text-[11px] text-slate-500 font-medium block leading-tight mt-0.5">تسجيل كشف جديد</span>
+              <span className="text-[10px] sm:text-[11px] text-slate-500 font-medium block leading-tight mt-0.5">اختيار المريض ووقت الحضور</span>
             </div>
           </button>
 
@@ -576,10 +629,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
           {/* Action 3: Quick Payment */}
           <button
             type="button"
-            disabled={!permissions.patientFinance}
-            onClick={() => setIsPaymentModalOpen(true)}
+            disabled={!canRegisterPayments}
+            onClick={() => handleOpenPaymentModal()}
             className={`p-3.5 sm:p-4 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-2 cursor-pointer touch-manipulation group relative overflow-hidden ${
-              permissions.patientFinance
+              canRegisterPayments
                 ? 'bg-white hover:bg-amber-50/50 border-slate-200/90 hover:border-amber-400 shadow-2xs hover:shadow-xs text-slate-900 active:scale-95'
                 : 'bg-slate-50 text-slate-400 border-slate-200 opacity-60 cursor-not-allowed'
             }`}
@@ -596,6 +649,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
           {/* Action 4: Lab Cases */}
           <button
             type="button"
+            disabled={!permissions.lab}
             onClick={() => setActiveTab('lab')}
             className="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 hover:border-purple-400 bg-white hover:bg-purple-50/50 shadow-2xs hover:shadow-xs text-slate-900 transition-all duration-200 flex flex-col items-center justify-center gap-2 cursor-pointer active:scale-95 touch-manipulation group relative overflow-hidden"
           >
@@ -611,32 +665,38 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       </div>
 
       {/* Main Mobile Navigation Tabs */}
-      <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex items-center justify-between text-xs font-bold gap-1">
+      <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs grid grid-cols-3 text-xs font-bold gap-1">
         <button
           type="button"
           onClick={() => setActiveTab('today')}
+          disabled={!permissions.appointments}
+          aria-pressed={activeTab === 'today'}
           className={`flex-1 py-2.5 rounded-xl transition-all text-center cursor-pointer flex items-center justify-center gap-1.5 ${
             activeTab === 'today' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
           <Clock className="w-4 h-4 text-emerald-400" />
-          <span>جدول اليوم ({todayAppointments.length})</span>
+          <span>مواعيد اليوم</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('payments')}
+          disabled={!permissions.patientView}
+          aria-pressed={activeTab === 'payments'}
           className={`flex-1 py-2.5 rounded-xl transition-all text-center cursor-pointer flex items-center justify-center gap-1.5 ${
             activeTab === 'payments' ? 'bg-indigo-900 text-white shadow-xs' : 'text-slate-700 hover:bg-indigo-50 font-black'
           }`}
         >
           <Users className="w-4 h-4 text-indigo-400" />
-          <span>📋 فهرس المرضى والبحث</span>
+          <span>المرضى</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('lab')}
+          disabled={!permissions.lab}
+          aria-pressed={activeTab === 'lab'}
           className={`flex-1 py-2.5 rounded-xl transition-all text-center cursor-pointer flex items-center justify-center gap-1.5 ${
             activeTab === 'lab' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
@@ -647,17 +707,17 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       </div>
 
       {/* TAB 1: TODAY'S QUEUE & APPOINTMENTS */}
-      {activeTab === 'today' && (
+      {activeTab === 'today' && permissions.appointments && (
         <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
             <div className="space-y-0.5">
               <h2 className="text-base font-extrabold text-slate-900">جدول كشوفات ومواعيد اليوم ({todayStr})</h2>
-              <p className="text-xs text-slate-500 font-medium">تأكيد حضور المرضى أو إرسال تذكير واتساب بلمسة واحدة</p>
+              <p className="text-xs text-slate-500 font-medium">متابعة الحضور وفتح رسالة تذكير للمراجعة والإرسال من واتساب</p>
             </div>
             {permissions.appointments && (
               <button
                 type="button"
-                onClick={() => setIsApptModalOpen(true)}
+                onClick={handleOpenAppointmentModal}
                 className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-extrabold cursor-pointer transition-all shadow-xs flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 active:scale-98"
               >
                 <Plus className="w-4 h-4" />
@@ -695,22 +755,22 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-extrabold text-slate-900 text-sm">{appt.patientName}</span>
                         <span className="font-mono bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-[11px]">
-                          ⏰ {appt.time}
+                          {format12HourTime(appt.time)}
                         </span>
                         {appt.isWalkIn && (
                           <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded-md">
-                            كشف بدون حجز مسبق (Walk-in)
+                            حضور بدون حجز مسبق
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-500">
-                        {appt.mobile && <span className="dir-ltr font-mono text-slate-600">📱 {appt.mobile}</span>}
-                        {appt.note && <span>📝 {appt.note}</span>}
+                      <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                        {appt.mobile && <span dir="ltr" className="font-mono text-slate-600">{appt.mobile}</span>}
+                        {appt.note && <span className="break-words">{appt.note}</span>}
                       </div>
                     </div>
 
                     {/* Actions Bar */}
-                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end border-t sm:border-t-0 pt-2 sm:pt-0">
+                    <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap justify-end border-t sm:border-t-0 pt-2 sm:pt-0">
                       {/* Status Selector Pill Button */}
                       {permissions.appointments && (
                         <button
@@ -729,10 +789,11 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       <button
                         type="button"
                         onClick={() => {
-                          if (appt.mobile && appt.mobile.trim()) {
-                            window.location.href = `tel:${appt.mobile.replace(/\D/g, '')}`;
+                          const phone = cleanEgyptianPhone(appt.mobile || '');
+                          if (/^[1-9]\d{7,14}$/.test(phone)) {
+                            window.location.href = `tel:+${phone}`;
                           } else {
-                            showToast('لا يوجد رقم هاتف مسجل للمريض', 'warning');
+                            showToast('لا يوجد رقم هاتف صحيح مسجل للمريض', 'warning');
                           }
                         }}
                         className="px-3 py-2 min-h-[44px] rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs flex items-center justify-center gap-1 transition-all border border-indigo-200 cursor-pointer active:scale-95 touch-manipulation"
@@ -740,6 +801,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       >
                         <Phone className="w-3.5 h-3.5 text-indigo-600" />
                         <span>اتصال</span>
+                      </button>
+                      <button type="button" disabled={['cancelled', 'apologized', 'no_show', 'attended'].includes(appt.status)} onClick={() => openWhatsAppReminder(appt.mobile, appt.patientName, format12HourTime(appt.time))} className="px-3 py-2 min-h-[44px] rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center justify-center gap-1 border border-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed">
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>تذكير واتساب</span>
                       </button>
                     </div>
                   </div>
@@ -751,12 +816,12 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       )}
 
       {/* TAB 2: PATIENT SEARCH & QUICK FINANCIAL PAYMENTS */}
-      {activeTab === 'payments' && (
+      {activeTab === 'payments' && permissions.patientView && (
         <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
-                <span>📋 فهرس سجلات المرضى والحالات</span>
+                <span>فهرس المرضى</span>
                 <span className="bg-indigo-100 text-indigo-900 text-xs px-2.5 py-0.5 rounded-full font-bold">
                   {filteredPatients.length} من أصل {patients.length}
                 </span>
@@ -783,6 +848,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
               type="text"
               value={patientSearch}
               onChange={e => setPatientSearch(e.target.value)}
+                aria-label="البحث في ملفات المرضى"
               placeholder="ابحث باسم المريض أو رقم الموبايل أو رقم الملف..."
               className="w-full pr-10 pl-9 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs sm:text-sm font-bold focus:outline-none focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 transition-all"
             />
@@ -790,6 +856,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
               <button
                 type="button"
                 onClick={() => setPatientSearch('')}
+                aria-label="مسح البحث"
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer hover:bg-slate-200/60 rounded-lg transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -824,7 +891,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-3 w-full md:w-auto border-t md:border-t-0 pt-2 md:pt-0">
-                      <div className="w-full sm:w-60">
+                      {canViewRemaining && <div className="w-full sm:w-60">
                         <BalanceProgressMeter
                           total={totalReq}
                           paid={totalPaid}
@@ -832,18 +899,13 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                           size="sm"
                           type="patient"
                         />
-                      </div>
+                      </div>}
 
                       <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-                        {permissions.patientFinance && remain > 0 && (
+                        {canRegisterPayments && remain > 0 && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setPayPatientId(patient.id);
-                              const unpaidSession = patient.sessions.find(s => s.remain > 0);
-                              if (unpaidSession) setPaySessionId(unpaidSession.id);
-                              setIsPaymentModalOpen(true);
-                            }}
+                            onClick={() => handleOpenPaymentModal(patient)}
                             className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-[11px] cursor-pointer shadow-2xs flex items-center gap-1 transition-all active:scale-95 touch-manipulation"
                           >
                             <DollarSign className="w-3.5 h-3.5 text-amber-100" />
@@ -872,12 +934,12 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       )}
 
       {/* TAB 3: LAB CASES & PICKUPS */}
-      {activeTab === 'lab' && (
+      {activeTab === 'lab' && permissions.lab && (
         <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-base font-bold text-slate-900">متابعة تركيبات وحالات المعمل</h2>
-              <p className="text-xs text-slate-500">استلام التركيبات وتسليمها للمرضى بالطابق</p>
+              <p className="text-xs text-slate-500">متابعة استلام التركيبات وحالة تسليمها للمرضى</p>
             </div>
           </div>
 
@@ -907,7 +969,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                         ? 'bg-emerald-100 text-emerald-800'
                         : 'bg-amber-100 text-amber-800'
                     }`}>
-                      {lc.status === 'completed' ? 'تم التسليم والإنهاء' : lc.status === 'delivered' ? 'وصلت العيادة' : 'في المعمل'}
+                      {{ completed: 'تم تسليمها للمريض', delivered: 'وصلت العيادة', ready: 'جاهزة للاستلام', delayed: 'متأخرة', pending: 'قيد العمل في المعمل' }[lc.status] || 'قيد المتابعة'}
                     </span>
                   </div>
                 </div>
@@ -918,11 +980,11 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       )}
 
       {/* MODAL 1: ADD APPOINTMENT */}
-      {isApptModalOpen && (
+      {isApptModalOpen && permissions.appointments && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll">
+          <div ref={appointmentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-appointment-title" tabIndex={-1} className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-base font-extrabold text-slate-900">حجز موعد مريض جديد</h3>
+              <h3 id="secretary-appointment-title" className="text-base font-extrabold text-slate-900">حجز موعد جديد</h3>
               <button
                 type="button"
                 onClick={() => setIsApptModalOpen(false)}
@@ -934,33 +996,39 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 
             <form onSubmit={handleSaveNewAppointment} className="space-y-3.5 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">اسم المريض <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
+                <label htmlFor="secretary-appointment-patient" className="block font-bold text-slate-700 mb-1">ملف المريض <span className="text-rose-500">*</span></label>
+                <select
+                  id="secretary-appointment-patient"
+                  data-dialog-autofocus
                   required
-                  value={apptPatientName}
-                  onChange={e => setApptPatientName(e.target.value)}
-                  placeholder="أكتب اسم المريض..."
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold focus:outline-none focus:border-emerald-600"
-                />
+                  value={apptPatientId}
+                  onChange={e => setApptPatientId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 min-h-[44px] bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold focus:outline-none focus:border-emerald-600"
+                >
+                  <option value="">اختر المريض من الملفات المسجلة</option>
+                  {patients.map(patient => <option key={patient.id} value={patient.id}>{patient.name} — ملف #{patient.id}</option>)}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">إذا كان المريض جديدًا، سجّل ملفه أولًا من زر «تسجيل مريض».</p>
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">رقم الموبايل (للواتساب)</label>
+                <label htmlFor="secretary-appointment-mobile" className="block font-bold text-slate-700 mb-1">رقم الهاتف من ملف المريض</label>
                 <input
+                  id="secretary-appointment-mobile"
                   type="tel"
-                  value={apptMobile}
-                  onChange={e => setApptMobile(e.target.value)}
-                  placeholder="010xxxxxxx"
+                  value={patients.find(patient => patient.id === apptPatientId)?.mobile || ''}
+                  readOnly
+                  placeholder="اختر المريض لعرض رقمه"
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono focus:outline-none focus:border-emerald-600"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">تاريخ الحجز</label>
                   <input
                     type="date"
+                    required
                     value={apptDate}
                     onChange={e => setApptDate(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono focus:outline-none focus:border-emerald-600"
@@ -970,6 +1038,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                   <label className="block font-bold text-slate-700 mb-1">الوقت</label>
                   <input
                     type="time"
+                    required
                     value={apptTime}
                     onChange={e => setApptTime(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono focus:outline-none focus:border-emerald-600"
@@ -984,7 +1053,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                   onChange={e => setApptIsWalkIn(e.target.checked)}
                   className="w-4 h-4 rounded text-amber-600"
                 />
-                <span className="font-bold text-amber-950">حضر للعيادة فوراً بدون حجز مسبق (Walk-in)</span>
+                <span className="font-bold text-amber-950">وصل للعيادة بدون حجز مسبق</span>
               </label>
 
               <div>
@@ -1002,13 +1071,13 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 <button
                   type="button"
                   onClick={() => setIsApptModalOpen(false)}
-                  className="px-4 py-2 font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
+                  className="px-4 py-2 min-h-[44px] font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md cursor-pointer"
+                  className="px-5 py-2 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md cursor-pointer"
                 >
                   حفظ الموعد
                 </button>
@@ -1019,12 +1088,12 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       )}
 
       {/* MODAL 2: ADD NEW PATIENT */}
-      {isNewPatientModalOpen && (
+      {isNewPatientModalOpen && permissions.patientEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+          <div ref={newPatientDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-new-patient-title" tabIndex={-1} className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-900">فتح ملف مريض جديد بالاستقبال</h3>
-              <button onClick={() => setIsNewPatientModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+              <h3 id="secretary-new-patient-title" className="text-base font-bold text-slate-900">فتح ملف مريض جديد</h3>
+              <button type="button" onClick={() => setIsNewPatientModalOpen(false)} aria-label="إلغاء وإغلاق" className="text-slate-400 hover:text-slate-600 cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"><X className="w-5 h-5" /></button>
             </div>
 
             <form onSubmit={handleCreateNewPatient} className="space-y-3.5 text-xs">
@@ -1035,6 +1104,8 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 <input
                   type="text"
                   required
+                  data-dialog-autofocus
+                  inputMode="numeric"
                   value={newPatientFileNo}
                   onChange={e => setNewPatientFileNo(e.target.value)}
                   placeholder="مثال: 106"
@@ -1043,7 +1114,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">الاسم الثلاثي للمريض <span className="text-rose-500">*</span></label>
+                <label className="block font-bold text-slate-700 mb-1">اسم المريض <span className="text-rose-500">*</span></label>
                 <input
                   type="text"
                   required
@@ -1054,7 +1125,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">رقم الموبايل</label>
                   <input
@@ -1069,9 +1140,12 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                   <label className="block font-bold text-slate-700 mb-1">العمر (بالسنوات)</label>
                   <input
                     type="number"
+                    min="0"
+                    max="130"
+                    step="1"
                     value={newPatientAge}
-                    onChange={e => setNewPatientAge(e.target.value === '' ? '' : parseInt(e.target.value))}
-                    placeholder="25"
+                    onChange={e => setNewPatientAge(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="اختياري"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono focus:outline-none focus:border-indigo-600"
                   />
                 </div>
@@ -1092,13 +1166,13 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 <button
                   type="button"
                   onClick={() => setIsNewPatientModalOpen(false)}
-                  className="px-4 py-2 font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
+                  className="px-4 py-2 min-h-[44px] font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-md cursor-pointer"
+                  className="px-5 py-2 min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-md cursor-pointer"
                 >
                   إنشاء الملف
                 </button>
@@ -1109,15 +1183,15 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
       )}
 
       {/* MODAL 3: QUICK FINANCIAL COLLECTION */}
-      {isPaymentModalOpen && (
+      {isPaymentModalOpen && canRegisterPayments && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto">
+          <div ref={paymentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-payment-title" tabIndex={-1} className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
                   <DollarSign className="w-4 h-4" />
                 </div>
-                <h3 className="text-base font-bold text-slate-900">تحصيل قسط / دفعة مالية</h3>
+                <h3 id="secretary-payment-title" className="text-base font-bold text-slate-900">تحصيل دفعة نقدية</h3>
               </div>
               <button 
                 type="button"
@@ -1125,9 +1199,9 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                   setIsPaymentModalOpen(false);
                   setPaySearchQuery('');
                 }} 
-                className="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer font-bold text-xs"
+                className="px-3 py-2 min-h-[44px] shrink-0 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer font-bold text-xs"
               >
-                إلغاء وإغلاق ✕
+                إلغاء وإغلاق
               </button>
             </div>
 
@@ -1148,11 +1222,11 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                           ملف #{selectedPaymentPatient.id}
                         </span>
                       </div>
-                      <div className="text-[11px] text-slate-600 flex items-center gap-3">
+                      <div className="text-xs text-slate-600 flex items-center gap-3 flex-wrap">
                         <span>📱 {selectedPaymentPatient.mobile || 'بدون هاتف'}</span>
-                        <span className="font-bold text-amber-900">
-                          إجمالي المتبقي: {selectedPaymentPatient.sessions.reduce((acc, s) => acc + s.remain, 0).toLocaleString()} ج.م
-                        </span>
+                        {canViewRemaining && <span className="font-bold text-amber-900">
+                          إجمالي المتبقي: {getPatientFinancialSummary(selectedPaymentPatient).totalRemaining.toLocaleString()} ج.م
+                        </span>}
                       </div>
                     </div>
 
@@ -1161,6 +1235,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       onClick={() => {
                         setPayPatientId('');
                         setPaySessionId('');
+                        setPayAmount('');
                         setPaySearchQuery('');
                       }}
                       className="px-3 py-1.5 rounded-xl bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 font-bold text-[11px] cursor-pointer shrink-0 transition-colors shadow-2xs"
@@ -1175,7 +1250,7 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-amber-600 pointer-events-none" />
                       <input
                         type="text"
-                        autoFocus
+                        data-dialog-autofocus
                         value={paySearchQuery}
                         onChange={e => setPaySearchQuery(e.target.value)}
                         placeholder="ابحث برقم الملف (مثل 101)، الاسم، أو رقم الهاتف..."
@@ -1185,9 +1260,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                         <button
                           type="button"
                           onClick={() => setPaySearchQuery('')}
+                          aria-label="مسح البحث"
                           className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-xs"
                         >
-                          ✕
+                          <X className="w-4 h-4" />
                         </button>
                       )}
                     </div>
@@ -1200,21 +1276,18 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                         </div>
                       ) : (
                         matchedPayPatients.map(p => {
-                          const totalRemain = p.sessions.reduce((acc, s) => acc + s.remain, 0);
+                          const totalRemain = getPatientFinancialSummary(p).totalRemaining;
                           return (
-                            <div
+                            <button
                               key={p.id}
+                              type="button"
                               onClick={() => {
                                 setPayPatientId(p.id);
-                                const unpaidSession = p.sessions.find(s => s.remain > 0) || p.sessions[p.sessions.length - 1];
-                                if (unpaidSession) {
-                                  setPaySessionId(unpaidSession.id);
-                                  if (unpaidSession.remain > 0) {
-                                    setPayAmount(unpaidSession.remain);
-                                  }
-                                }
+                                const unpaidSession = p.sessions.find(s => sessionRemaining(s) > 0);
+                                setPaySessionId(unpaidSession?.id || '');
+                                setPayAmount('');
                               }}
-                              className="p-3 bg-white hover:bg-amber-100/70 cursor-pointer transition-colors flex items-center justify-between gap-2 active:bg-amber-200"
+                              className="w-full text-right p-3 bg-white hover:bg-amber-100/70 cursor-pointer transition-colors flex items-center justify-between gap-2 active:bg-amber-200"
                             >
                               <div className="flex items-center gap-2.5 overflow-hidden">
                                 <span className="font-mono bg-amber-100 text-amber-900 font-extrabold px-2.5 py-1 rounded-xl text-xs shrink-0 border border-amber-200">
@@ -1226,14 +1299,14 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                                 </div>
                               </div>
 
-                              <div className="text-left shrink-0">
+                              {canViewRemaining && <div className="text-left shrink-0">
                                 <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg block ${
                                   totalRemain > 0 ? 'bg-amber-100 text-amber-900 border border-amber-200' : 'bg-emerald-100 text-emerald-800'
                                 }`}>
                                   {totalRemain > 0 ? `متبقي: ${totalRemain.toLocaleString()} ج.م` : 'خالص الحساب'}
                                 </span>
-                              </div>
-                            </div>
+                              </div>}
+                            </button>
                           );
                         })
                       )}
@@ -1248,10 +1321,10 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                   <label className="block font-bold text-slate-700 mb-1">
                     الجلسة المستحقة <span className="text-rose-500">*</span>
                   </label>
-                  {selectedPaymentPatient.sessions.length === 0 ? (
+                  {selectedPaymentPatient.sessions.filter(session => sessionRemaining(session) > 0).length === 0 ? (
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>لا توجد جلسات مسجلة لهذا المريض بعد.</span>
+                      <span>لا توجد جلسات بمبالغ مستحقة للتحصيل لهذا المريض.</span>
                     </div>
                   ) : (
                     <select
@@ -1259,14 +1332,15 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                       onChange={e => {
                         setPaySessionId(e.target.value);
                         const s = selectedPaymentPatient.sessions.find(x => x.id === e.target.value);
-                        if (s && s.remain > 0) setPayAmount(s.remain);
+                        if (s && canViewRemaining && sessionRemaining(s) > 0) setPayAmount(Math.min(sessionRemaining(s), getPatientFinancialSummary(selectedPaymentPatient).totalRemaining));
+                        else setPayAmount('');
                       }}
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold focus:outline-none focus:border-amber-600 text-xs"
                     >
                       <option value="">-- اختر الجلسة المراد تحصيل قسطها --</option>
-                      {selectedPaymentPatient.sessions.map(s => (
+                      {selectedPaymentPatient.sessions.filter(session => sessionRemaining(session) > 0).map(s => (
                         <option key={s.id} value={s.id}>
-                          {s.type} (تاريخ {s.date}) - متبقي: {s.remain.toLocaleString()} ج.م
+                          {s.type} (تاريخ {s.date}){canViewRemaining ? ` — متبقي: ${sessionRemaining(s).toLocaleString()} ج.م` : ''}
                         </option>
                       ))}
                     </select>
@@ -1282,12 +1356,15 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 <input
                   type="number"
                   required
+                  min="0.01"
+                  step="0.01"
                   value={payAmount}
                   onChange={e => setPayAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
                   placeholder="0"
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono font-bold focus:outline-none focus:border-amber-600 text-sm"
                 />
               </div>
+              <p className="text-xs text-slate-500">تاريخ التحصيل: {todayStr}. تُسجّل هذه الدفعة نقديًا في تحصيلات اليوم.</p>
 
               {/* Action Buttons */}
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -1303,8 +1380,8 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
                 </button>
                 <button
                   type="submit"
-                  disabled={!payPatientId}
-                  className={`px-5 py-2.5 rounded-xl text-white font-extrabold text-xs shadow-md transition-all cursor-pointer ${
+                  disabled={!payPatientId || !paySessionId || !canRegisterPayments}
+                  className={`px-5 py-2.5 rounded-xl text-white font-extrabold text-xs shadow-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                     payPatientId
                       ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20 active:scale-98'
                       : 'bg-slate-300 cursor-not-allowed'

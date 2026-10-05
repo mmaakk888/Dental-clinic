@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Patient, Session } from '../types';
-import { calculateDailyCollections, getPatientFinancialSummary } from './financials';
+import { calculateDailyCollections, getPatientFinancialSummary, appendSessionReceipt } from './financials';
 
 const makeSession = (overrides: Partial<Session> = {}): Session => ({
   id: 'session-1',
@@ -31,6 +31,39 @@ const makePatient = (overrides: Partial<Patient> = {}): Patient => ({
   sessions: [makeSession()],
   payments: [],
   ...overrides
+});
+
+test('adding a receipt retains legacy paid amounts and their original collection date', () => {
+  const legacy = makeSession({ paid: 500, remain: 700, paymentsLog: [], payDate: '2026-09-20' });
+  const updated = appendSessionReceipt(legacy, { id: 'new', amount: 200, date: '2026-09-22' });
+  assert.equal(updated.paid, 700);
+  assert.equal(updated.remain, 500);
+  assert.equal(calculateDailyCollections([makePatient({ sessions: [updated] })], date => date === '2026-09-20').totalIncomeCollected, 500);
+  assert.equal(calculateDailyCollections([makePatient({ sessions: [updated] })], date => date === '2026-09-22').totalIncomeCollected, 200);
+});
+
+test('display-only legacy aggregate is retained but never counted as another receipt', () => {
+  const patient = makePatient({ payments: [{ id: 'summary', amount: 1200, date: '2026-09-22', legacyAggregate: true }] });
+  assert.equal(getPatientFinancialSummary(patient).totalCollected, 1200);
+  assert.equal(calculateDailyCollections([patient], () => true).totalIncomeCollected, 1200);
+  assert.equal(patient.payments.length, 1);
+});
+
+test('adding a receipt to a voided log does not resurrect the voided amount', () => {
+  const original = makeSession({ paid: 500, paymentsLog: [{ id: 'void', amount: 500, date: '2026-09-20', voidedAt: '2026-09-21' }] });
+  assert.equal(appendSessionReceipt(original, { id: 'new', amount: 100, date: '2026-09-22' }).paid, 100);
+});
+
+test('exam fee is allocated once across installment dates, not again on every payment', () => {
+  const patient = makePatient({ sessions: [makeSession({ amount: 500, examinationFee: 50,
+    services: [{ id: 'filling', name: 'حشو', price: 450 }],
+    paymentsLog: [{ id: 'first', amount: 100, date: '2026-09-20' }, { id: 'second', amount: 200, date: '2026-09-22' }]
+  })] });
+  const first = calculateDailyCollections([patient], date => date === '2026-09-20');
+  const second = calculateDailyCollections([patient], date => date === '2026-09-22');
+  assert.equal(first.examFeesCollected, 50);
+  assert.equal(second.examFeesCollected, 0);
+  assert.equal(second.procedureFeesCollectedByName['حشو'], 200);
 });
 
 test('daily collection counts only receipts made on the selected date', () => {

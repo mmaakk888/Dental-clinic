@@ -1,4 +1,4 @@
-import { Session, SessionServiceItem, Patient, Appointment } from '../types';
+import { Session, SessionServiceItem, Patient, Appointment, PaymentInstallment } from '../types';
 
 export interface PatientFinancialSummary {
   totalRequired: number;
@@ -23,6 +23,18 @@ export function getSessionCollected(session: Session): number {
   return positiveMoney(session.paid);
 }
 
+export function appendSessionReceipt(session: Session, receipt: PaymentInstallment): Session {
+  const priorCollected = getSessionCollected(session);
+  const priorLog = session.paymentsLog || [];
+  const legacyLog: PaymentInstallment[] = !priorLog.length && priorCollected > 0 ? [{
+    id: `legacy_${session.id}`, amount: priorCollected, date: session.payDate || session.date,
+    paymentMethod: 'cash', note: 'دفعة سابقة محفوظة قبل سجل الدفعات'
+  }] : [];
+  const paymentsLog = [...legacyLog, ...priorLog, receipt];
+  const paid = getSessionCollected({ ...session, paymentsLog });
+  return { ...session, paymentsLog, paid, remain: Math.max(0, positiveMoney(session.amount) - positiveMoney(session.discount) - paid) };
+}
+
 function getIndependentGeneralPayments(patient: Patient) {
   const sessionPaymentIds = new Set(
     patient.sessions.flatMap(session => (session.paymentsLog || []).map(payment => payment.id))
@@ -40,7 +52,7 @@ function getIndependentGeneralPayments(patient: Patient) {
   });
 
   return (patient.payments || []).filter(payment => {
-    if (payment.voidedAt || sessionPaymentIds.has(payment.id)) return false;
+    if (payment.voidedAt || payment.legacyAggregate || sessionPaymentIds.has(payment.id)) return false;
     if (payment.linkedSessionId && linkedSessionIds.has(payment.linkedSessionId)) return false;
 
     // Older app versions copied every session receipt into `patient.payments`
@@ -186,7 +198,7 @@ export function calculateDailyCollections(
       // Check installments logged on the filtered date
       const allActiveInstallments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
       const installmentsInPeriod = allActiveInstallments.filter(p => dateFilterFn(p.date));
-      const installmentPaidInPeriod = installmentsInPeriod.reduce((sum, p) => sum + p.amount, 0);
+      const installmentPaidInPeriod = installmentsInPeriod.reduce((sum, p) => sum + positiveMoney(p.amount), 0);
 
       // Legacy sessions may have only a paid total and no receipt log.
       const legacyPaidInPeriod = (session.paymentsLog || []).length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
@@ -230,7 +242,18 @@ export function calculateDailyCollections(
         }
 
         // Calculate distribution of paid amount
-        const distribution = distributePaymentToServices(examFee, servicesList, paidInPeriod, discountAmt);
+        const firstReceiptDate = installmentsInPeriod.map(payment => payment.date).sort()[0];
+        const previouslyCollected = firstReceiptDate ? allActiveInstallments
+          .filter(payment => payment.date < firstReceiptDate)
+          .reduce((sum, payment) => sum + positiveMoney(payment.amount), 0) : 0;
+        const beforeDistribution = distributePaymentToServices(examFee, servicesList, previouslyCollected, discountAmt);
+        const cumulativeDistribution = distributePaymentToServices(examFee, servicesList, previouslyCollected + paidInPeriod, discountAmt);
+        const distribution = {
+          examFeePaid: Math.max(0, cumulativeDistribution.examFeePaid - beforeDistribution.examFeePaid),
+          services: cumulativeDistribution.services.map((service, index) => ({
+            ...service, paid: Math.max(0, (service.paid || 0) - (beforeDistribution.services[index]?.paid || 0))
+          }))
+        };
 
         if (examFee > 0) {
           examFeesCollected += distribution.examFeePaid;
@@ -275,9 +298,10 @@ export function calculateDailyCollections(
     // Also include general payments made on this date
     getIndependentGeneralPayments(patient).forEach(pay => {
       if (dateFilterFn(pay.date)) {
-        totalIncomeCollected += pay.amount;
-        cashTotal += pay.amount;
-        procedureFeesCollectedByName['دفعة عامة / أقساط'] = (procedureFeesCollectedByName['دفعة عامة / أقساط'] || 0) + pay.amount;
+        const paymentAmount = positiveMoney(pay.amount);
+        totalIncomeCollected += paymentAmount;
+        cashTotal += paymentAmount;
+        procedureFeesCollectedByName['دفعة عامة / أقساط'] = (procedureFeesCollectedByName['دفعة عامة / أقساط'] || 0) + paymentAmount;
         patientIdsSeen.add(patient.id);
         rows.push({
           sessionId: pay.linkedSessionId || `general_${pay.id}`,
@@ -287,9 +311,9 @@ export function calculateDailyCollections(
           mobile: patient.mobile,
           time: pay.createdAt ? new Date(pay.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—',
           proceduresText: pay.note || 'دفعة عامة / سداد رصيد سابق',
-          servicesBreakdown: [{ name: 'دفعة عامة / أقساط', price: pay.amount, paid: pay.amount }],
-          totalValue: pay.amount,
-          paidAmount: pay.amount,
+          servicesBreakdown: [{ name: 'دفعة عامة / أقساط', price: paymentAmount, paid: paymentAmount }],
+          totalValue: paymentAmount,
+          paidAmount: paymentAmount,
           discountAmount: 0,
           remainAmount: getPatientFinancialSummary(patient).totalRemaining,
           paymentMethod: 'cash',

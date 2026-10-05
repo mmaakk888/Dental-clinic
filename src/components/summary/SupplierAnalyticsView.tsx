@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { TrendingUp, Package, Building2, AlertTriangle, ArrowUpRight, ArrowDownRight, DollarSign, PieChart, Layers, Search, RefreshCw, BarChart2 } from 'lucide-react';
 import { Expense, ExpenseItem, MaterialUsage } from '../../types';
 import { MaterialInventoryPanel } from './MaterialInventoryPanel';
+import { getExpensePaymentSummary } from '../../utils/expenseUtils';
+import { normalizeMaterialPart } from '../../utils/inventory';
 
 interface SupplierAnalyticsViewProps {
   expenses: Expense[];
@@ -19,7 +21,6 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   onDeleteMaterialUsage,
 }) => {
   const [materialSearchQuery, setMaterialSearchQuery] = useState('');
-  const [selectedMaterialFilter, setSelectedMaterialFilter] = useState<string | null>(null);
 
   const maskMoney = (amt: number) => {
     if (isPrivacyMode) return '*** ج.م';
@@ -30,37 +31,43 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   const materialAnalytics = useMemo(() => {
     const itemsMap: Record<string, {
       name: string;
+      key: string;
       totalSpent: number;
       totalQty: number;
       unit: string;
       purchaseCount: number;
+      invoiceIds: Set<string>;
       pricesHistory: { price: number; date: string; supplier: string }[];
     }> = {};
 
     expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
-      const items = exp.items && exp.items.length > 0
-        ? exp.items
-        : [{ itemName: exp.title, quantity: 1, unit: 'دفعة', unitPrice: exp.amount, total: exp.amount }];
+      const items = exp.items || [];
 
       items.forEach(item => {
         const rawName = item.itemName.trim();
-        if (!rawName) return;
+        const unit = item.unit?.trim() || 'قطعة';
+        const key = normalizeMaterialPart(rawName) + '|' + normalizeMaterialPart(unit);
+        if (!rawName || !Number.isFinite(item.quantity) || item.quantity <= 0
+          || !Number.isFinite(item.unitPrice) || item.unitPrice < 0) return;
 
-        if (!itemsMap[rawName]) {
-          itemsMap[rawName] = {
+        if (!itemsMap[key]) {
+          itemsMap[key] = {
+            key,
             name: rawName,
             totalSpent: 0,
             totalQty: 0,
-            unit: item.unit || 'قطع',
+            unit,
             purchaseCount: 0,
+            invoiceIds: new Set(),
             pricesHistory: [],
           };
         }
 
-        const entry = itemsMap[rawName];
-        entry.totalSpent += item.total || (item.quantity * item.unitPrice);
-        entry.totalQty += item.quantity || 1;
-        entry.purchaseCount += 1;
+        const entry = itemsMap[key];
+        entry.totalSpent += Number.isFinite(item.total) ? Math.max(0, item.total) : item.quantity * item.unitPrice;
+        entry.totalQty += item.quantity;
+        entry.invoiceIds.add(exp.id);
+        entry.purchaseCount = entry.invoiceIds.size;
         entry.pricesHistory.push({
           price: item.unitPrice,
           date: exp.invoiceDate || exp.date,
@@ -71,9 +78,9 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
 
     const list = Object.values(itemsMap).map(m => {
       m.pricesHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      const lastPrice = m.pricesHistory[0]?.price || 0;
-      const prevPrice = m.pricesHistory[1]?.price || lastPrice;
-      const avgPrice = m.totalQty > 0 ? Math.round(m.totalSpent / m.totalQty) : lastPrice;
+      const lastPrice = m.pricesHistory[0]?.price ?? 0;
+      const prevPrice = m.pricesHistory[1]?.price ?? lastPrice;
+      const avgPrice = m.totalQty > 0 ? Math.round(m.totalSpent / m.totalQty * 100) / 100 : lastPrice;
       const priceChangePercent = prevPrice > 0 ? Math.round(((lastPrice - prevPrice) / prevPrice) * 100) : 0;
 
       return {
@@ -91,20 +98,25 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
 
   // 2. Compile Supplier Ranking Metrics
   const supplierAnalytics = useMemo(() => {
-    const map: Record<string, { name: string; totalSpent: number; count: number; lastInvoiceDate: string; phone?: string }> = {};
+    const map: Record<string, { name: string; totalSpent: number; totalPaid: number; totalRemaining: number; count: number; lastInvoiceDate: string; phone?: string }> = {};
 
     expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
-      const name = exp.supplierName || exp.title || 'مورد غير محدد';
+      const name = exp.supplierName?.trim() || 'مورد غير محدد';
       if (!map[name]) {
         map[name] = {
           name,
           totalSpent: 0,
+          totalPaid: 0,
+          totalRemaining: 0,
           count: 0,
           lastInvoiceDate: exp.invoiceDate || exp.date,
           phone: exp.supplierPhone,
         };
       }
-      map[name].totalSpent += exp.amount;
+      const financial = getExpensePaymentSummary(exp);
+      map[name].totalSpent += financial.total;
+      map[name].totalPaid += financial.paid;
+      map[name].totalRemaining += financial.remaining;
       map[name].count += 1;
       if (new Date(exp.invoiceDate || exp.date) > new Date(map[name].lastInvoiceDate)) {
         map[name].lastInvoiceDate = exp.invoiceDate || exp.date;
@@ -124,17 +136,18 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
   // Filtered materials
   const filteredMaterials = useMemo(() => {
     if (!materialSearchQuery.trim()) return materialAnalytics;
-    const q = materialSearchQuery.toLowerCase();
-    return materialAnalytics.filter(m => m.name.toLowerCase().includes(q));
+    const q = normalizeMaterialPart(materialSearchQuery);
+    return materialAnalytics.filter(m => normalizeMaterialPart(m.name).includes(q));
   }, [materialAnalytics, materialSearchQuery]);
 
   const totalSuppliesSpend = useMemo(() => {
-    return expenses.filter(e => e.category === 'supplies').reduce((acc, e) => acc + e.amount, 0);
+    return expenses.filter(e => e.category === 'supplies').reduce((acc, e) => acc + getExpensePaymentSummary(e).total, 0);
   }, [expenses]);
 
   return (
     <div className="space-y-6 animate-fadeIn font-cairo dir-rtl">
       <MaterialInventoryPanel expenses={expenses} usages={materialUsages} isPrivacyMode={isPrivacyMode} onAddUsage={onAddMaterialUsage} onDeleteUsage={onDeleteMaterialUsage} />
+      <p className="text-xs text-slate-500">الفاتورة بدون تفاصيل أصناف تُحسب ضمن قيمة المشتريات فقط، ولا تضيف كمية مخزون أو سعر مادة.</p>
       
       {/* Top Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -153,8 +166,8 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
             <Building2 className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-xs font-bold text-slate-500">عدد الموردين النشطين</span>
-            <p className="text-xl font-black text-slate-900">{supplierAnalytics.length} موردين</p>
+            <span className="text-xs font-bold text-slate-500">الموردون في سجل المشتريات</span>
+            <p className="text-xl font-black text-slate-900">{supplierAnalytics.length} مورد</p>
           </div>
         </div>
 
@@ -173,7 +186,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
             <DollarSign className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-xs font-bold text-indigo-200/80">إجمالي إنفاق المستلزمات</span>
+            <span className="text-xs font-bold text-indigo-200/80">قيمة مشتريات الخامات</span>
             <p className="text-xl font-black text-emerald-400">{maskMoney(totalSuppliesSpend)}</p>
           </div>
         </div>
@@ -236,11 +249,8 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
                 const percentOfTotal = totalSuppliesSpend > 0 ? Math.round((mat.totalSpent / totalSuppliesSpend) * 100) : 0;
                 return (
                   <div
-                    key={mat.name}
-                    onClick={() => setSelectedMaterialFilter(selectedMaterialFilter === mat.name ? null : mat.name)}
-                    className={`p-3 rounded-xl border transition cursor-pointer ${
-                      selectedMaterialFilter === mat.name ? 'border-indigo-500 bg-indigo-50/50 shadow-2xs' : 'border-slate-200/80 hover:bg-slate-50'
-                    }`}
+                    key={mat.key}
+                    className="p-3 rounded-xl border border-slate-200/80"
                   >
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
@@ -261,7 +271,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                         <div
                           className="bg-gradient-to-r from-indigo-500 to-purple-600 h-full rounded-full transition-all duration-300"
-                          style={{ width: `${Math.min(percentOfTotal * 2, 100)}%` }}
+                          style={{ width: `${Math.min(percentOfTotal, 100)}%` }}
                         />
                       </div>
                       <div className="flex justify-between text-[10px] text-slate-500 font-medium">
@@ -287,12 +297,12 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
             <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
               <Building2 className="w-4 h-4 text-emerald-600" /> كبار الموردين وحجم التعامل
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">تحليل الموردين الأكثر توريداً لخامات العيادة والمبالغ المسددة لهم</p>
+            <p className="text-xs text-slate-500 mt-0.5">قيمة فواتير كل مورد، مع فصل المدفوع عن المتبقي</p>
           </div>
 
           <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
             {supplierAnalytics.length === 0 ? (
-              <p className="text-center py-8 text-xs text-slate-400">لا يوجد موردين تسجلوا بعد</p>
+              <p className="text-center py-8 text-xs text-slate-400">لا توجد فواتير خامات مسجلة بعد</p>
             ) : (
               supplierAnalytics.map((sup, idx) => (
                 <div key={sup.name} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 flex items-center justify-between hover:bg-slate-100/80 transition">
@@ -310,6 +320,8 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
                   </div>
                   <div className="text-left font-mono">
                     <span className="text-sm font-black text-emerald-700 block">{maskMoney(sup.totalSpent)}</span>
+                    <span className="text-[11px] text-slate-500 block">مدفوع: {maskMoney(sup.totalPaid)}</span>
+                    <span className="text-[11px] text-amber-700 block">متبقي: {maskMoney(sup.totalRemaining)}</span>
                   </div>
                 </div>
               ))

@@ -1,7 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Sparkles, AlertTriangle, CheckCircle2, User, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Clock, Sparkles, AlertTriangle, CheckCircle2, X } from 'lucide-react';
 import { AiService, ScheduleRecommendation } from '../../services/aiService';
 import { Appointment, Patient } from '../../types';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, isValidAppointmentDate, localDateISO, occupiesAppointmentSlot } from './appointmentScheduling';
+import { useAppointmentDialog } from './useAppointmentDialog';
 
 interface SmartScheduleModalProps {
   isOpen: boolean;
@@ -13,9 +16,9 @@ interface SmartScheduleModalProps {
 
 const PROCEDURES = [
   { label: 'كشف واستشارة', duration: 20 },
-  { label: 'علاج عصب (Root Canal)', duration: 60 },
+  { label: 'علاج عصب', duration: 60 },
   { label: 'خلع أسنان', duration: 30 },
-  { label: 'طربوش زيركون / PFM', duration: 45 },
+  { label: 'تركيب طربوش', duration: 45 },
   { label: 'حشو ليزر تجميلي', duration: 35 },
   { label: 'تنظيف وتلميع أسنان', duration: 30 },
   { label: 'جلسة متابعة', duration: 15 },
@@ -29,78 +32,144 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   onBookAppointment,
 }) => {
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
-  const [procedureType, setProcedureType] = useState<string>('علاج عصب (Root Canal)');
-  const [apptDate, setApptDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [procedureType, setProcedureType] = useState<string>('علاج عصب');
+  const [apptDate, setApptDate] = useState<string>(localDateISO());
   const [selectedTime, setSelectedTime] = useState<string>('17:30');
   const [notes, setNotes] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [recommendation, setRecommendation] = useState<ScheduleRecommendation | null>(null);
+  const { showToast, validationFail, askConfirm } = useToastAndConfirm();
+  const timeWasEditedRef = useRef(false);
+  const dialogRef = useAppointmentDialog(isOpen, onClose);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchRecommendation();
+    if (!isOpen) return;
+    setSelectedPatientId('');
+    setApptDate(localDateISO());
+    setNotes('');
+    timeWasEditedRef.current = false;
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !isValidAppointmentDate(apptDate)) {
+      setRecommendation(null);
+      setIsAnalyzing(false);
+      return;
     }
-  }, [isOpen, procedureType, apptDate]);
+    let isCurrentRequest = true;
+    const defaultDuration = PROCEDURES.find(procedure => procedure.label === procedureType)?.duration || 30;
+    setIsAnalyzing(true);
+    setRecommendation(null);
+    const applyRecommendation = (result: ScheduleRecommendation) => {
+      if (!isCurrentRequest) return;
+      const duration = Number.isFinite(result.estimatedMinutes) && result.estimatedMinutes >= 10 && result.estimatedMinutes <= 180
+        ? result.estimatedMinutes : defaultDuration;
+      const dayAppts = existingAppointments.filter(appointment => appointment.date === apptDate && occupiesAppointmentSlot(appointment));
+      const now = new Date();
+      const today = localDateISO(now);
+      const validTimes = Array.isArray(result.suggestedSlots) ? result.suggestedSlots.filter(time => {
+        const minute = appointmentTimeMinutes(time);
+        return minute !== null && (apptDate > today || (apptDate === today && minute > now.getHours() * 60 + now.getMinutes()))
+          && !findAppointmentConflicts(dayAppts, apptDate, time, duration).length;
+      }) : [];
+      const suggestedSlots = Array.from(new Set([...validTimes, ...availableAppointmentTimes(dayAppts, apptDate, duration, now)]));
+      setRecommendation({
+        estimatedMinutes: duration,
+        suggestedSlots,
+        workloadStatus: result.workloadStatus || 'balanced',
+        recommendation: result.recommendation || `مدة الإجراء التقديرية: ${duration} دقيقة. راجع الوقت قبل الحجز.`,
+        warningNote: suggestedSlots.length ? result.warningNote : 'لا توجد أوقات مقترحة متاحة. يمكنك اختيار وقت يدويًا ومراجعة تعارضه قبل الحجز.',
+      });
+      if (!timeWasEditedRef.current && suggestedSlots.length) setSelectedTime(suggestedSlots[0]);
+      setIsAnalyzing(false);
+    };
+    AiService.suggestSchedule(procedureType, apptDate, existingAppointments.filter(appointment => appointment.date === apptDate && occupiesAppointmentSlot(appointment)))
+      .then(applyRecommendation)
+      .catch(() => applyRecommendation({ estimatedMinutes: defaultDuration, suggestedSlots: [], workloadStatus: 'balanced', recommendation: `مدة الإجراء التقديرية: ${defaultDuration} دقيقة.` }));
+    return () => { isCurrentRequest = false; };
+  }, [isOpen, procedureType, apptDate, existingAppointments]);
 
   if (!isOpen) return null;
 
-  const fetchRecommendation = async () => {
-    setIsAnalyzing(true);
-    const dayAppts = existingAppointments.filter(a => a.date === apptDate);
-    const res = await AiService.suggestSchedule(procedureType, apptDate, dayAppts);
-    setRecommendation(res);
-    if (res.suggestedSlots && res.suggestedSlots.length > 0) {
-      setSelectedTime(res.suggestedSlots[0]);
-    }
-    setIsAnalyzing(false);
-  };
-
   const handleSave = () => {
     const patient = patients.find(p => p.id === selectedPatientId);
-    if (!patient && !selectedPatientId) return;
+    if (!patient) {
+      validationFail('smart-schedule-dialog', 'smart-schedule-patient', 'اختر ملف مريض موجودًا للحجز');
+      return;
+    }
+    if (!isValidAppointmentDate(apptDate)) {
+      validationFail('smart-schedule-dialog', 'smart-schedule-date', 'اختر تاريخًا صحيحًا للموعد');
+      return;
+    }
+    if (appointmentTimeMinutes(selectedTime) === null) {
+      validationFail('smart-schedule-dialog', 'smart-schedule-time', 'اختر وقتًا صحيحًا للموعد');
+      return;
+    }
 
-    onBookAppointment({
-      patientId: patient?.id || 'new',
-      fileNo: patient?.id || '101',
-      patientName: patient?.name || 'مريض جديد',
-      mobile: patient?.mobile || '',
+    const durationMinutes = recommendation?.estimatedMinutes || PROCEDURES.find(procedure => procedure.label === procedureType)?.duration || 30;
+    const appointment: Partial<Appointment> = {
+      patientId: patient.id,
+      fileNo: patient.id,
+      patientName: patient.name,
+      mobile: patient.mobile || '',
       date: apptDate,
       time: selectedTime,
       appointmentType: procedureType,
-      durationMinutes: recommendation?.estimatedMinutes || 30,
-      note: notes,
+      durationMinutes,
+      note: notes.trim() || procedureType,
       status: 'scheduled',
       isFollowUp: procedureType.includes('متابعة'),
       isWalkIn: false,
-    });
-    onClose();
+    };
+    const saveAppointment = () => {
+      try {
+        onBookAppointment(appointment);
+        showToast('تم حجز الموعد بنجاح');
+        onClose();
+      } catch {
+        showToast('تعذّر حفظ الموعد. راجع البيانات وحاول مرة أخرى.', 'error');
+      }
+    };
+    if (findAppointmentConflicts(existingAppointments, apptDate, selectedTime, durationMinutes).length) {
+      askConfirm({
+        title: 'موعد متعارض',
+        message: 'يتداخل هذا الموعد مع حجز آخر مسجل. هل تريد تأكيد الحجز رغم التعارض؟',
+        confirmLabel: 'تأكيد الحجز',
+        tone: 'warning',
+        onConfirm: saveAppointment,
+      });
+      return;
+    }
+    saveAppointment();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col">
+      <div id="smart-schedule-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="smart-schedule-title" tabIndex={-1} dir="rtl" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[92dvh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold">جدولة المواعيد موازنة جهد العيادة الذكية</h3>
-              <p className="text-xs text-indigo-200/80">حساب مدة الإجراء تلقائياً واقتراح الأوقات المثالية</p>
+              <h3 id="smart-schedule-title" className="text-base font-bold">حجز موعد بمساعدة الجدول</h3>
+              <p className="text-xs text-indigo-200/80">مدة تقديرية للإجراء وأوقات خالية من التعارض</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition">
+          <button type="button" onClick={onClose} aria-label="إلغاء وإغلاق" className="min-w-[44px] min-h-[44px] shrink-0 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-4 min-h-0 overflow-y-auto">
           {/* Patient select */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">المريض</label>
+            <label htmlFor="smart-schedule-patient" className="block text-sm font-bold text-slate-700 mb-1">المريض</label>
             <select
+              id="smart-schedule-patient"
+              data-dialog-autofocus
               value={selectedPatientId}
               onChange={e => setSelectedPatientId(e.target.value)}
               className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500"
@@ -120,7 +189,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
               <label className="block text-xs font-bold text-slate-700 mb-1">نوع الإجراء الطبي</label>
               <select
                 value={procedureType}
-                onChange={e => setProcedureType(e.target.value)}
+                onChange={e => { timeWasEditedRef.current = false; setProcedureType(e.target.value); }}
                 className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500"
               >
                 {PROCEDURES.map(proc => (
@@ -131,11 +200,12 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">تاريخ الحجز</label>
+              <label htmlFor="smart-schedule-date" className="block text-sm font-bold text-slate-700 mb-1">تاريخ الحجز</label>
               <input
+                id="smart-schedule-date"
                 type="date"
                 value={apptDate}
-                onChange={e => setApptDate(e.target.value)}
+                onChange={e => { timeWasEditedRef.current = false; setApptDate(e.target.value); }}
                 className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -143,9 +213,9 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
 
           {/* AI Recommendation Widget */}
           <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-indigo-600" /> اقتراح الذكاء الاصطناعي لموازنة عبء العمل
+                <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" /> أوقات مقترحة للمراجعة قبل الحجز
               </span>
               {recommendation && (
                 <span
@@ -161,7 +231,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
             </div>
 
             {isAnalyzing ? (
-              <p className="text-xs text-indigo-700 animate-pulse">جاري تحليل جدول الطبيب وتوقع المدة الأنسب...</p>
+              <p className="text-sm text-indigo-700 animate-pulse">جاري مراجعة الأوقات المتاحة...</p>
             ) : (
               recommendation && (
                 <div className="space-y-2 text-xs text-slate-700">
@@ -181,7 +251,8 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
                         <button
                           key={slot}
                           type="button"
-                          onClick={() => setSelectedTime(slot)}
+                          onClick={() => { timeWasEditedRef.current = true; setSelectedTime(slot); }}
+                          aria-pressed={selectedTime === slot}
                           className={`px-3 py-1.5 rounded-lg font-bold text-xs transition border ${
                             selectedTime === slot
                               ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
@@ -202,11 +273,12 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
           {/* Manual time selection & notes */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">وقت الموعد المختار</label>
+              <label htmlFor="smart-schedule-time" className="block text-sm font-bold text-slate-700 mb-1">وقت الموعد المختار</label>
               <input
+                id="smart-schedule-time"
                 type="time"
                 value={selectedTime}
-                onChange={e => setSelectedTime(e.target.value)}
+                onChange={e => { timeWasEditedRef.current = true; setSelectedTime(e.target.value); }}
                 className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -224,14 +296,14 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-200 rounded-xl transition">
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2 shrink-0">
+          <button type="button" onClick={onClose} className="px-4 py-2 min-h-[44px] text-sm font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition">
             إلغاء وإغلاق
           </button>
           <button
+            type="button"
             onClick={handleSave}
-            disabled={!selectedPatientId}
-            className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-md transition flex items-center gap-1.5"
+            className="px-5 py-2 min-h-[44px] text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-md transition flex items-center gap-1.5"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>تأكيد وجدولة الموعد</span>
@@ -241,3 +313,4 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
     </div>
   );
 };
+

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Expense } from '../types';
-import { expenseBreakdown, expensesForMonth, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
+import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
 
 const expense = (id: string, title: string, category: Expense['category'], amount: number, date: string): Expense => ({ id, title, category, amount, date });
 
@@ -41,3 +41,18 @@ test('filters by invoice month and totals each expense once', () => {
   assert.deepEqual(expenseBreakdown(september), { rent: 2000, electricity: 0, water: 0, salary: 0, supplies: 500, maintenance: 0, other: 0 });
 });
 
+test('invoice payments distinguish paid cash from outstanding liabilities', () => {
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paidAmount: 200, remainingAmount: 123 }), { total: 500, paid: 200, remaining: 300 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paidAmount: 0 }), { total: 500, paid: 0, remaining: 500 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, remainingAmount: 300 }), { total: 500, paid: 200, remaining: 300 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paymentMethod: 'deferred' }), { total: 500, paid: 0, remaining: 500 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paymentMethod: 'cash' }), { total: 500, paid: 500, remaining: 0 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500 }), { total: 500, paid: 500, remaining: 0 });
+});
+
+test('invoice payment summaries clamp invalid or excessive amounts', () => {
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paidAmount: 700 }), { total: 500, paid: 500, remaining: 0 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, paidAmount: NaN }), { total: 500, paid: 0, remaining: 500 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: 500, remainingAmount: 700 }), { total: 500, paid: 0, remaining: 500 });
+  assert.deepEqual(getExpensePaymentSummary({ amount: Infinity, paidAmount: 10 }), { total: 0, paid: 0, remaining: 0 });
+});

@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
-import { Storage } from './utils/storage';
+import { Storage, STORAGE_FAILURE_EVENT } from './utils/storage';
 import { getDefaultViewForUser, canAccessView } from './utils/rbac';
 import { canUserLoginNow, matchesSessionIdentity } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
 import { mergeExpenseUpdate } from './utils/expenseUtils';
-import { ToastAndConfirmProvider } from './components/common/ToastAndConfirm';
+import { appendSessionReceipt } from './utils/financials';
+import { isValidAppointmentDate, appointmentTimeMinutes, localDateISO } from './components/appointments/appointmentScheduling';
+import { ToastAndConfirmProvider, useToastAndConfirm } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
 import { MobileBottomNav } from './components/navigation/MobileBottomNav';
@@ -34,7 +36,7 @@ function ViewFallbackLoader() {
   return (
     <div className="w-full py-12 flex flex-col items-center justify-center space-y-3 font-cairo dir-rtl animate-fadeIn">
       <div className="w-10 h-10 border-3 border-purple-600 border-t-transparent rounded-full animate-spin" />
-      <p className="text-xs font-bold text-slate-500">جاري تحميل الشاشة بلمس سريع...</p>
+      <p className="text-xs font-bold text-slate-500">جارٍ تحميل الشاشة...</p>
     </div>
   );
 }
@@ -61,6 +63,12 @@ function PermissionDeniedCard({ title, onBackToHome }: { title: string; onBackTo
 }
 
 export function AppContent() {
+  const { showToast } = useToastAndConfirm();
+  useEffect(() => {
+    const notifyFailure = () => showToast('تعذر حفظ آخر تعديل على الجهاز. احتفظ بالصفحة مفتوحة وصدّر نسخة احتياطية قبل إغلاقها.', 'error', { duration: 12000 });
+    window.addEventListener(STORAGE_FAILURE_EVENT, notifyFailure);
+    return () => window.removeEventListener(STORAGE_FAILURE_EVENT, notifyFailure);
+  }, [showToast]);
   // Application State
   const [activeView, setActiveView] = useState<ActiveView>('home');
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -181,7 +189,9 @@ export function AppContent() {
       isPaid: boolean;
     };
   }) => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    if (!currentUser?.permissions.patientEdit || !(currentUser?.permissions.registerPayment ?? currentUser?.permissions.patientFinance)) throw new Error('هذا الحساب لا يملك صلاحية تسجيل الزيارة والتحصيل.');
+    if ([payload.visit.totalFee, payload.visit.paidAmount, payload.visit.discountAmount ?? 0].some(amount => !Number.isFinite(amount) || amount < 0) || payload.visit.paidAmount + (payload.visit.discountAmount ?? 0) > payload.visit.totalFee) throw new Error('راجع مبالغ الزيارة والدفعة والخصم.');
+    const todayStr = localDateISO();
     const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
     const sessionId = `s_${Date.now()}`;
     const apptId = `a_${Date.now()}`;
@@ -209,7 +219,7 @@ export function AppContent() {
       visitNotes: payload.visit.visitNotes,
       examinationFee: payload.visit.examinationFee,
       treatmentFee: payload.visit.treatmentFee,
-      paymentMethod: payload.visit.paymentMethod,
+      paymentMethod: 'cash',
       isWalkIn: true,
       visitStatus: payload.visit.visitStatus
     };
@@ -237,8 +247,8 @@ export function AppContent() {
           id: payload.patient.id,
           name: payload.patient.name,
           mobile: payload.patient.mobile,
-          age: payload.patient.age || 30,
-          gender: payload.patient.gender || 'ذكر',
+          age: payload.patient.age ?? 0,
+          gender: payload.patient.gender,
           firstVisit: todayStr,
           notes: payload.visit.visitNotes,
           allergy: '',
@@ -435,7 +445,8 @@ export function AppContent() {
   useEffect(() => {
     if (!currentUser) return;
     const verifyAccessWindow = () => {
-      const latestUser = Storage.getUsers().find(user => user.id === currentUser.id);
+      const latestUsers = Storage.getUsers();
+      const latestUser = latestUsers.find(user => user.id === currentUser.id);
       if (!latestUser || !matchesSessionIdentity(latestUser, { userId: currentUser.id, username: currentUser.username, credentialVersion: currentUser.credentialVersion ?? 1 })) {
         handleLogout();
       } else if (!canUserLoginNow(latestUser).allowed) {
@@ -443,15 +454,24 @@ export function AppContent() {
         setCurrentUser(null);
         Storage.saveCurrentUser(null);
         setIsLoginModalOpen(true);
+      } else {
+        setUsers(previous => JSON.stringify(previous) === JSON.stringify(latestUsers) ? previous : latestUsers);
+        if (JSON.stringify([latestUser.permissions, latestUser.role, latestUser.name, latestUser.accessSchedule]) !== JSON.stringify([currentUser.permissions, currentUser.role, currentUser.name, currentUser.accessSchedule])) {
+          const { password: _password, ...safeUser } = latestUser;
+          setCurrentUser(safeUser);
+          Storage.saveCurrentUser(safeUser);
+        }
       }
     };
     const timer = window.setInterval(verifyAccessWindow, 60_000);
     window.addEventListener('focus', verifyAccessWindow);
+    window.addEventListener('storage', verifyAccessWindow);
     document.addEventListener('visibilitychange', verifyAccessWindow);
     verifyAccessWindow();
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('focus', verifyAccessWindow);
+      window.removeEventListener('storage', verifyAccessWindow);
       document.removeEventListener('visibilitychange', verifyAccessWindow);
     };
   }, [currentUser, handleLogout]);
@@ -473,6 +493,8 @@ export function AppContent() {
 
   // Patient Actions
   const handleSavePatient = (patientData: Omit<Patient, 'sessions' | 'payments'>) => {
+    if (!currentUser?.permissions.patientEdit) throw new Error('هذا الحساب لا يملك صلاحية تعديل ملفات المرضى.');
+    if (!patientData.id?.trim() || !patientData.name?.trim()) throw new Error('أدخل رقم الملف واسم المريض.');
     setPatients(prev => {
       const idx = prev.findIndex(p => p.id === patientData.id);
       if (idx >= 0) {
@@ -494,6 +516,10 @@ export function AppContent() {
   };
 
   const handleDeletePatient = (patientId: string) => {
+    if (!currentUser?.permissions.deletePatients) throw new Error('هذا الحساب لا يملك صلاحية حذف ملفات المرضى.');
+    if (labCases.some(item => item.patientId === patientId)) {
+      throw new Error('الملف مرتبط بشغل معمل. احتفظ به للحفاظ على ارتباط الحسابات وسجل التركيبات.');
+    }
     setPatients(prev => prev.filter(p => p.id !== patientId));
     setAppointments(prev => prev.filter(a => a.patientId !== patientId));
     if (selectedPatientId === patientId) {
@@ -503,6 +529,10 @@ export function AppContent() {
   };
 
   const handleSaveSession = (patientId: string, sessionData: Omit<import('./types').Session, 'id'>) => {
+    if (!currentUser?.permissions.patientEdit) throw new Error('هذا الحساب لا يملك صلاحية تسجيل الخدمات.');
+    if (sessionData.paid > 0 && !(currentUser.permissions.registerPayment ?? currentUser.permissions.patientFinance)) throw new Error('هذا الحساب لا يملك صلاحية تسجيل الدفعات.');
+    if (!patients.some(patient => patient.id === patientId)) throw new Error('ملف المريض غير موجود.');
+    if (!isValidAppointmentDate(sessionData.date) || !Number.isFinite(sessionData.amount) || sessionData.amount < 0 || !Number.isFinite(sessionData.paid) || sessionData.paid < 0 || !Number.isFinite(sessionData.discount ?? 0) || (sessionData.discount ?? 0) < 0 || (sessionData.discount ?? 0) > sessionData.amount || sessionData.paid > sessionData.amount - (sessionData.discount ?? 0)) throw new Error('راجع تاريخ الخدمة والتكلفة والخصم والدفعة.');
     const sessionId = `s_${Date.now()}`;
     const newSession: import('./types').Session = {
       ...sessionData,
@@ -522,6 +552,9 @@ export function AppContent() {
   };
 
   const handleAddPaymentInstallment = (patientId: string, sessionId: string, installment: { amount: number; date: string }) => {
+    if (!(currentUser?.permissions.registerPayment ?? currentUser?.permissions.patientFinance)) throw new Error('هذا الحساب لا يملك صلاحية تسجيل الدفعات.');
+    if (!Number.isFinite(installment.amount) || installment.amount <= 0 || !isValidAppointmentDate(installment.date)) throw new Error('راجع مبلغ الدفعة وتاريخ التحصيل.');
+    if (!patients.find(patient => patient.id === patientId)?.sessions.some(session => session.id === sessionId)) throw new Error('الخدمة المطلوب سدادها غير موجودة.');
     const instId = `inst_${Date.now()}`;
 
     setPatients(prev => prev.map(p => {
@@ -529,15 +562,7 @@ export function AppContent() {
 
       const updatedSessions = p.sessions.map(s => {
         if (s.id !== sessionId) return s;
-        const newPaid = s.paid + installment.amount;
-        const newRemain = Math.max(0, s.amount - newPaid - (s.discount || 0));
-        const newLog = [...(s.paymentsLog || []), { id: instId, amount: installment.amount, date: installment.date, paymentMethod: 'cash' as const, createdAt: new Date().toISOString() }];
-        return {
-          ...s,
-          paid: newPaid,
-          remain: newRemain,
-          paymentsLog: newLog
-        };
+        return appendSessionReceipt(s, { id: instId, amount: installment.amount, date: installment.date, paymentMethod: 'cash', createdAt: new Date().toISOString() });
       });
 
       return {
@@ -550,22 +575,31 @@ export function AppContent() {
 
   // Appointment Actions
   const handleSaveAppointment = (apptData: Omit<Appointment, 'id'> & { id?: string }) => {
+    if (!currentUser?.permissions.appointments) throw new Error('هذا الحساب لا يملك صلاحية إدارة المواعيد.');
+    const linkedPatient = patients.find(patient => patient.id === apptData.patientId);
+    if (!linkedPatient) throw new Error('اختر ملف مريض موجودًا قبل حجز الموعد.');
+    if (!isValidAppointmentDate(apptData.date) || appointmentTimeMinutes(apptData.time) === null) throw new Error('اختر تاريخًا ووقتًا صحيحين للموعد.');
+    if (apptData.durationMinutes !== undefined && (!Number.isFinite(apptData.durationMinutes) || apptData.durationMinutes <= 0 || apptData.durationMinutes > 1440)) throw new Error('أدخل مدة موعد صحيحة أكبر من صفر وأقل من يوم.');
+    const canonicalData = { ...apptData, patientName: linkedPatient.name, fileNo: linkedPatient.id, mobile: linkedPatient.mobile };
     if (apptData.id) {
-      setAppointments(prev => prev.map(a => a.id === apptData.id ? (apptData as Appointment) : a));
+      if (!appointments.some(appointment => appointment.id === apptData.id)) throw new Error('الموعد المطلوب تعديله غير موجود.');
+      setAppointments(prev => prev.map(a => a.id === apptData.id ? { ...a, ...canonicalData } as Appointment : a));
     } else {
       const newAppt: Appointment = {
-        ...apptData,
-        id: `a_${Date.now()}`
+        ...canonicalData,
+        id: `a_${crypto.randomUUID()}`
       };
       setAppointments(prev => [newAppt, ...prev]);
     }
   };
 
   const handleUpdateApptStatus = (apptId: string, status: AppointmentStatus) => {
+    if (!currentUser?.permissions.appointments) throw new Error('هذا الحساب لا يملك صلاحية إدارة المواعيد.');
     setAppointments(prev => prev.map(a => a.id === apptId ? { ...a, status } : a));
   };
 
   const handleDeleteAppointment = (apptId: string) => {
+    if (!currentUser?.permissions.appointments) throw new Error('هذا الحساب لا يملك صلاحية إدارة المواعيد.');
     setAppointments(prev => prev.filter(a => a.id !== apptId));
   };
 
@@ -678,7 +712,7 @@ export function AppContent() {
       );
       if (!match) {
         handleLogout();
-        alert('تم تعديل بيانات الحساب أو تغيير كلمة السر أو حذف المستخدم. تم إلغاء الجلسة تلقائياً، يرجى إعادة تسجيل الدخول.');
+        showToast('تغيّرت بيانات الحساب. يرجى تسجيل الدخول مرة أخرى.', 'warning');
       } else {
         setCurrentUser(match);
         Storage.saveCurrentUser(match);
@@ -751,6 +785,7 @@ export function AppContent() {
     if (Array.isArray(data.labCases)) setLabCases(data.labCases);
     if (Array.isArray(data.expenses)) setExpenses(data.expenses);
     if (Array.isArray(data.materialUsages)) setMaterialUsages(data.materialUsages);
+    else if (Array.isArray(data.expenses)) setMaterialUsages([]);
     if (Array.isArray(data.users)) setUsers(data.users);
     if (Array.isArray(data.serviceTypes)) setServiceTypes(data.serviceTypes);
     if (data.whatsappSettings) setWhatsappSettings(data.whatsappSettings);
@@ -868,7 +903,16 @@ export function AppContent() {
                 clinicName={clinicName}
                 whatsappSettings={whatsappSettings}
                 drugCatalog={drugCatalog}
-                isPrivacyMode={isPrivacyMode}
+                isPrivacyMode={isPrivacyMode || !currentUser?.permissions.patientFinance}
+                capabilities={{
+                  patientEdit: currentUser?.permissions.patientEdit === true,
+                  registerPayment: currentUser?.permissions.registerPayment ?? currentUser?.permissions.patientFinance ?? false,
+                  appointments: currentUser?.permissions.appointments === true,
+                  deletePatients: currentUser?.permissions.deletePatients === true,
+                  rx: currentUser?.permissions.patientView === true,
+                  whatsapp: currentUser?.permissions.patientView === true,
+                  viewRemainingBalance: currentUser?.permissions.viewRemainingBalance ?? currentUser?.permissions.patientFinance ?? false,
+                }}
                 onSaveSession={handleSaveSession}
                 onAddPaymentInstallment={handleAddPaymentInstallment}
                 onUpdatePatient={handleSavePatient}
@@ -928,6 +972,11 @@ export function AppContent() {
                 expenses={expenses}
                 materialUsages={materialUsages}
                 isPrivacyMode={isPrivacyMode}
+                capabilities={{
+                  viewExpenses: currentUser?.permissions.viewExpenses ?? currentUser?.permissions.summary ?? false,
+                  viewProfits: currentUser?.permissions.viewProfits ?? currentUser?.permissions.summary ?? false,
+                  financialReports: currentUser?.permissions.financialReports ?? currentUser?.permissions.summary ?? false,
+                }}
                 isOpenAddExpenseModal={isAddExpenseModalOpen}
                 onCloseAddExpenseModal={handleCloseAddExpenseModal}
                 onAddExpense={handleAddExpense}
@@ -1038,7 +1087,9 @@ export function AppContent() {
             patients={patients}
             appointments={appointments}
             isPrivacyMode={isPrivacyMode}
-            onSelectPatientFile={(pId) => handleSelectPatient(pId, 'home')}
+            canViewRemainingBalance={currentUser?.permissions.viewRemainingBalance ?? currentUser?.permissions.patientFinance ?? false}
+            canViewHistory={currentUser?.permissions.financialReports ?? currentUser?.permissions.summary ?? false}
+            onSelectPatientFile={currentUser?.permissions.patientView ? (pId) => handleSelectPatient(pId, 'home') : undefined}
           />
         )}
 
@@ -1068,6 +1119,7 @@ export function AppContent() {
             isOpen={isInvoiceOcrOpen}
             onClose={() => setIsInvoiceOcrOpen(false)}
             onSaveExpense={handleSaveExpense}
+            existingExpenses={expenses}
           />
         )}
 

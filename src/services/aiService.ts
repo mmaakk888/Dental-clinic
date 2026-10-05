@@ -1,4 +1,5 @@
 import { Patient, Appointment, Expense, ExpenseItem } from '../types';
+import { appointmentDuration, appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, occupiesAppointmentSlot } from '../components/appointments/appointmentScheduling';
 
 export interface ExtractedInvoice {
   supplierName?: string;
@@ -80,22 +81,7 @@ export const AiService = {
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       return await res.json();
     } catch (err) {
-      console.warn('AiService.extractInvoice fallback:', err);
-      return {
-        supplierName: 'مورد المستلزمات الطبية',
-        invoiceNumber: 'INV-TEMP-01',
-        invoiceDate: new Date().toISOString().split('T')[0],
-        totalAmount: 0,
-        subtotal: 0,
-        tax: 0,
-        discount: 0,
-        category: 'supplies',
-        currency: 'ج.م',
-        paymentMethod: 'cash',
-        notes: 'يرجى مراجعة الصورة والبنود يدوياً',
-        lineItems: [],
-        fieldConfidence: { supplierName: 70, totalAmount: 70 }
-      };
+      throw new Error('تعذر استخراج بيانات الفاتورة. راجع اتصال الخدمة أو أدخل البنود يدويًا.');
     }
   },
 
@@ -145,22 +131,54 @@ export const AiService = {
     date: string,
     existingAppointments: Appointment[]
   ): Promise<ScheduleRecommendation> {
+    const durationPresets: Record<string, number> = {
+      'كشف واستشارة': 20,
+      'علاج عصب': 60,
+      'علاج عصب (Root Canal)': 60,
+      'خلع أسنان': 30,
+      'تركيب طربوش': 45,
+      'طربوش زيركون / PFM': 45,
+      'حشو ليزر تجميلي': 35,
+      'تنظيف وتلميع أسنان': 30,
+      'جلسة متابعة': 15,
+    };
+    const defaultDuration = durationPresets[procedureType.trim()] || 30;
+    const dayAppointments = existingAppointments.filter(appointment => appointment.date === date && occupiesAppointmentSlot(appointment));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     try {
       const res = await fetch('/api/ai/schedule-assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ procedureType, date, existingAppointments }),
+        body: JSON.stringify({ procedureType, date, existingAppointments: dayAppointments }),
+        signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      const result = await res.json();
+      if (!result || !Number.isFinite(result.estimatedMinutes) || result.estimatedMinutes < 10 || result.estimatedMinutes > 180 || !Array.isArray(result.suggestedSlots)) {
+        throw new Error('Invalid schedule recommendation');
+      }
+      return {
+        estimatedMinutes: result.estimatedMinutes,
+        suggestedSlots: result.suggestedSlots.filter((time: unknown) => typeof time === 'string' && appointmentTimeMinutes(time) !== null && !findAppointmentConflicts(dayAppointments, date, time, result.estimatedMinutes).length),
+        workloadStatus: ['light', 'balanced', 'busy'].includes(result.workloadStatus) ? result.workloadStatus : 'balanced',
+        recommendation: typeof result.recommendation === 'string' ? result.recommendation : `مدة الحجز التقديرية: ${result.estimatedMinutes} دقيقة.`,
+        warningNote: typeof result.warningNote === 'string' ? result.warningNote : undefined,
+      };
     } catch (err) {
       console.warn('AiService.suggestSchedule fallback:', err);
+      const busyMinutes = dayAppointments.reduce((total, appointment) => total + appointmentDuration(appointment.durationMinutes), 0);
       return {
-        estimatedMinutes: 30,
-        suggestedSlots: ['17:00', '18:00', '19:00'],
-        workloadStatus: 'balanced',
-        recommendation: `تقدير افتراضي لإجراء ${procedureType}: 30 دقيقة.`,
+        estimatedMinutes: defaultDuration,
+        suggestedSlots: availableAppointmentTimes(dayAppointments, date, defaultDuration).slice(0, 3),
+        workloadStatus: busyMinutes > 300 ? 'busy' : 'balanced',
+        recommendation: durationPresets[procedureType.trim()]
+          ? `اقتراح محلي من جدول العيادة. مدة الحجز التقديرية لإجراء ${procedureType}: ${defaultDuration} دقيقة.`
+          : 'اقتراح محلي من جدول العيادة بمدة افتراضية ٣٠ دقيقة. راجع المدة المناسبة للإجراء قبل الحجز.',
+        warningNote: 'الأوقات مقترحة حسب الحجوزات المسجلة، والمدة تقديرية.',
       };
+    } finally {
+      clearTimeout(timeout);
     }
   },
 
@@ -210,17 +228,7 @@ export const AiService = {
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       return await res.json();
     } catch (err) {
-      console.warn('AiService.analyzeEndoWorkingLength fallback:', err);
-      return {
-        toothNumber: toothNumber || '21',
-        canals: [
-          { name: 'MB (Mesiobuccal)', estimatedLengthMm: 21.0, confidence: 'عالية' },
-          { name: 'Palatal / Lingual', estimatedLengthMm: 22.5, confidence: 'عالية' },
-        ],
-        apicalLimitNote: 'مراقب الطول الذروي الشعاعي آمن (0.5 مم قبل الذروة)',
-        autoCleanupFlag: true,
-        recommendation: 'تم تسجيل الأطوال المقترحة بنجاح.',
-      };
+      throw new Error('تعذر تحليل الصورة. لا توجد قياسات مستخرجة؛ يرجى مراجعة إعدادات الخدمة.');
     }
   },
 
@@ -249,3 +257,4 @@ export const AiService = {
     }
   },
 };
+

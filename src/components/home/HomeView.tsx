@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AlertCircle, Calendar, CheckCircle2, ChevronLeft, Clock, CreditCard,
-  FileText, Landmark, Microscope, Receipt, Search, Settings2,
-  Stethoscope, UserPlus, Users, X, Zap
+  AlertCircle, Banknote, Calendar, CheckCircle2, ChevronLeft, Clock,
+  FileText, Landmark, Microscope, Receipt, Search,
+  Stethoscope, UserPlus, X
 } from 'lucide-react';
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
+import { DEFAULT_UI_LABELS } from '../../data/initialData';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 
 interface HomeViewProps {
@@ -41,7 +42,11 @@ const tones: Record<Tone, { icon: string; hover: string }> = {
 
 const money = (value: number, hidden: boolean) => hidden
   ? '••••••'
-  : new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 }).format(value) + ' ج.م';
+  : new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(value) + ' ج.م';
+
+const normalizeSearch = (value: string) => value.trim().toLocaleLowerCase('ar')
+  .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
 
 const localDateKey = () => {
   const now = new Date();
@@ -50,23 +55,27 @@ const localDateKey = () => {
 
 const MetricCard: React.FC<{
   title: string; value: string | number; note: string; icon: React.ReactNode;
-  tone: Tone; onClick: () => void;
-}> = ({ title, value, note, icon, tone, onClick }) => (
-  <button type="button" onClick={onClick} className={'dashboard-card text-start ' + tones[tone].hover}>
-    <span className={'dashboard-icon ' + tones[tone].icon}>{icon}</span>
+  tone: Tone; onClick?: () => void;
+}> = ({ title, value, note, icon, tone, onClick }) => {
+  const content = <>
+    <span aria-hidden="true" className={'dashboard-icon ' + tones[tone].icon}>{icon}</span>
     <span className="mt-4 block text-2xl font-black text-slate-950 sm:text-3xl">{value}</span>
     <span className="mt-1 block text-sm font-extrabold text-slate-800">{title}</span>
     <span className="mt-1 block text-xs font-medium text-slate-500">{note}</span>
-  </button>
-);
+  </>;
+  return onClick
+    ? <button type="button" onClick={onClick} className={'dashboard-card text-start ' + tones[tone].hover}>{content}</button>
+    : <div className="dashboard-card text-start">{content}</div>;
+};
 
 export const HomeView: React.FC<HomeViewProps> = React.memo(({
-  clinicName, labels, tileOrder, patientCount, todayApptCount, activeLabCount,
+  clinicName, labels, activeLabCount,
   onNavigate, currentUser, patients = [], appointments = [], expenses = [],
   isPrivacyMode = false, onSelectPatient, onOpenWalkIn, onOpenDailyReport,
   onOpenScheduleModal, onOpenInvoiceModal
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const today = localDateKey();
   const permissions = currentUser?.permissions;
   const canPatients = permissions?.patientView !== false;
@@ -74,6 +83,14 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   const canLab = permissions?.lab !== false;
   const canFinance = permissions?.summary !== false;
   const canSettings = permissions?.controlPanel !== false;
+  const canRegisterPayment = canPatients && (permissions?.registerPayment ?? permissions?.patientFinance) !== false;
+  const canWalkIn = canPatients && permissions?.patientEdit !== false && canRegisterPayment;
+  const canViewCollections = (permissions?.viewTodayCollections ?? permissions?.patientFinance) === true;
+  const canViewRemaining = (permissions?.viewRemainingBalance ?? permissions?.patientFinance) === true;
+  const canViewExpenses = canFinance && permissions?.viewExpenses !== false;
+  const canReports = canViewCollections && permissions?.financialReports !== false;
+  const showActions = !!((canWalkIn && onOpenWalkIn) || (canAppointments && onOpenScheduleModal)
+    || canRegisterPayment || (canViewExpenses && onOpenInvoiceModal) || (canReports && onOpenDailyReport));
 
   const stats = useMemo(() => {
     const dayAppointments = appointments
@@ -95,15 +112,22 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
     };
   }, [appointments, expenses, patients, today]);
 
+  const showAlerts = (canAppointments && stats.noShow > 0)
+    || (canLab && activeLabCount > 0) || (canViewExpenses && stats.spent > 0);
+  const subtitle = !labels.homeSubtitle || labels.homeSubtitle === DEFAULT_UI_LABELS.homeSubtitle
+    ? 'مواعيد اليوم والمهام الأساسية في مكان واحد.' : labels.homeSubtitle;
+
   const filteredPatients = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase('ar');
+    const query = normalizeSearch(searchQuery).replace(/^#\s*/, '');
     if (!query) return [];
-    return patients.filter(patient => patient.name.toLocaleLowerCase('ar').includes(query)
-      || patient.mobile.includes(query) || patient.id.includes(query)).slice(0, 6);
+    const phoneQuery = query.replace(/[\s()+-]/g, '');
+    return patients.filter(patient => normalizeSearch(patient.name).includes(query)
+      || (!!phoneQuery && normalizeSearch(patient.mobile).replace(/[\s()+-]/g, '').includes(phoneQuery))
+      || normalizeSearch(patient.id).includes(query)).slice(0, 6);
   }, [patients, searchQuery]);
 
   const statusLabel: Record<string, string> = {
-    scheduled: 'محجوز', waiting: 'في الانتظار', attended: 'تم الكشف', no_show: 'لم يحضر',
+    scheduled: 'محجوز', waiting: 'في الانتظار', attended: 'تم الحضور', no_show: 'لم يحضر',
     apologized: 'اعتذر', confirmed: 'مؤكد', cancelled: 'ملغي'
   };
 
@@ -113,23 +137,26 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         <div className="min-w-0">
           <p className="dashboard-eyebrow">لوحة التشغيل اليومية</p>
           <h1 className="dashboard-title">{clinicName || 'نظام إدارة عيادة الأسنان'}</h1>
-          <p className="dashboard-subtitle">{labels.homeSubtitle || 'ملخص واضح للحجوزات والتحصيل والمهام اليومية.'}</p>
+          <p className="dashboard-subtitle">{subtitle}</p>
         </div>
-        <div className="dashboard-date"><Clock /><span>{new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
+        <div className="dashboard-date"><Clock aria-hidden="true" /><span>{new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
       </section>
 
       {canPatients && (
-        <section className="dashboard-search-panel">
-          <Search className="pointer-events-none absolute start-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-          <input aria-label="البحث عن مريض بالاسم أو الهاتف أو رقم الملف" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} className="dashboard-search-input" placeholder="اسم المريض، الهاتف أو رقم الملف" />
-          {searchQuery && <button type="button" aria-label="مسح البحث" className="dashboard-search-clear" onClick={() => setSearchQuery('')}><X /></button>}
-          {searchQuery && (
-            <div className="dashboard-search-results">
+        <section role="search" aria-label="البحث في ملفات المرضى" className="dashboard-search-panel" onFocus={() => setIsSearchFocused(true)}
+          onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSearchFocused(false); }}>
+          <Search aria-hidden="true" className="pointer-events-none absolute start-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+          <input aria-label="البحث عن مريض بالاسم أو الهاتف أو رقم الملف" aria-controls="dashboard-patient-results"
+            value={searchQuery} onChange={event => setSearchQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setIsSearchFocused(false); event.currentTarget.blur(); } }}
+            className="dashboard-search-input" placeholder="اسم المريض، الهاتف أو رقم الملف" autoComplete="off" />
+          {searchQuery && <button type="button" aria-label="مسح البحث" className="dashboard-search-clear" onClick={() => setSearchQuery('')}><X aria-hidden="true" /></button>}
+          {searchQuery.trim() && isSearchFocused && (
+            <div id="dashboard-patient-results" className="dashboard-search-results">
               {filteredPatients.length ? filteredPatients.map(patient => (
                 <button key={patient.id} type="button" className="dashboard-search-result" onClick={() => { onSelectPatient?.(patient.id, 'home'); setSearchQuery(''); }}>
                   <span className="dashboard-avatar">{patient.name.charAt(0)}</span>
-                  <span className="min-w-0 flex-1"><strong>{patient.name}</strong><small>ملف {patient.id} · {patient.mobile}</small></span>
-                  <ChevronLeft />
+                  <span className="min-w-0 flex-1"><strong>{patient.name}</strong><small>ملف <bdi>{patient.id}</bdi> · <bdi>{patient.mobile}</bdi></small></span>
+                  <ChevronLeft aria-hidden="true" />
                 </button>
               )) : <p className="p-4 text-center text-sm font-bold text-slate-500">لا توجد نتائج مطابقة</p>}
             </div>
@@ -137,29 +164,27 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         </section>
       )}
 
-      <section className="dashboard-metrics">
-        <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الكشف'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />
-        {canFinance ? (
-          <>
-            <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note="اضغط لمعرفة من دفع اليوم" icon={<CreditCard />} tone="emerald" onClick={() => onOpenDailyReport ? onOpenDailyReport() : onNavigate('summary')} />
-            <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={() => onNavigate('summary')} />
-          </>
-        ) : (
-          <MetricCard title="تحصيل مريض" value="تسجيل دفعة" note="بدون عرض إجمالي إيراد العيادة" icon={<CreditCard />} tone="emerald" onClick={() => onNavigate('secretary-desk')} />
-        )}
+      <section className="dashboard-metrics" aria-label="ملخص اليوم">
+        {canAppointments && <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الحضور'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />}
+        {canViewCollections && <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note={canReports ? 'عرض تفاصيل التحصيل اليومي' : 'إجمالي المبالغ المحصّلة اليوم'} icon={<Banknote />} tone="emerald"
+          onClick={canReports ? () => onOpenDailyReport ? onOpenDailyReport() : onNavigate('summary') : undefined} />}
+        {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={() => onNavigate('summary')} />}
         {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
       </section>
 
-      <div className="dashboard-main-grid">
-        <section className="dashboard-panel">
+      <div className={'dashboard-main-grid' + (!canAppointments || !showActions ? ' dashboard-main-grid-single' : '')}>
+        {canAppointments && <section className="dashboard-panel">
           <div className="dashboard-panel-header">
             <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">جدول اليوم</h2></div>
-            <button type="button" className="dashboard-link" onClick={() => onNavigate('appointments')}>عرض الجدول <ChevronLeft /></button>
+            <button type="button" className="dashboard-link" onClick={() => onNavigate('appointments')}>عرض الجدول <ChevronLeft aria-hidden="true" /></button>
           </div>
           {stats.dayAppointments.length ? (
             <div className="dashboard-appointment-list">
               {stats.dayAppointments.slice(0, 6).map(appointment => (
-                <button key={appointment.id} type="button" onClick={() => onSelectPatient?.(appointment.patientId, 'home')} className="dashboard-appointment">
+                <button key={appointment.id} type="button" onClick={() => {
+                  if (canPatients && onSelectPatient && patients.some(patient => patient.id === appointment.patientId)) onSelectPatient(appointment.patientId, 'home');
+                  else onNavigate('appointments');
+                }} className="dashboard-appointment">
                   <span className="dashboard-time">{appointment.time || '--:--'}</span>
                   <span className="min-w-0 flex-1 text-start"><strong>{appointment.patientName}</strong><small>{appointment.note || 'موعد كشف'}</small></span>
                   <span className={'dashboard-status status-' + appointment.status}>{statusLabel[appointment.status] || appointment.status}</span>
@@ -167,37 +192,37 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
               ))}
             </div>
           ) : (
-            <div className="dashboard-empty"><CheckCircle2 /><strong>لا توجد مواعيد مسجلة اليوم</strong><span>أضف موعدًا جديدًا من الإجراءات السريعة.</span></div>
+            <div className="dashboard-empty"><CheckCircle2 aria-hidden="true" /><strong>لا توجد مواعيد مسجلة اليوم</strong><span>يمكنك إضافة موعد جديد من جدول المواعيد.</span></div>
           )}
-        </section>
+        </section>}
 
-        <aside className="dashboard-panel">
+        {showActions && <aside className="dashboard-panel">
           <div className="dashboard-panel-header"><div><p className="dashboard-eyebrow">تنفيذ سريع</p><h2 className="dashboard-section-title">إجراءات اليوم</h2></div></div>
           <div className="dashboard-actions">
-            {canPatients && <button type="button" onClick={onOpenWalkIn} className="dashboard-action"><span className="dashboard-action-icon bg-indigo-100 text-indigo-700"><UserPlus /></span><span><strong>زيارة بدون موعد</strong><small>فتح ملف وتسجيل التحصيل</small></span><ChevronLeft /></button>}
-            {canAppointments && <button type="button" onClick={onOpenScheduleModal} className="dashboard-action"><span className="dashboard-action-icon bg-amber-100 text-amber-700"><Calendar /></span><span><strong>حجز موعد</strong><small>إضافة حجز جديد بسرعة</small></span><ChevronLeft /></button>}
-            <button type="button" onClick={() => onNavigate('secretary-desk')} className="dashboard-action"><span className="dashboard-action-icon bg-emerald-100 text-emerald-700"><CreditCard /></span><span><strong>تسجيل دفعة</strong><small>تحصيل مبلغ من مريض</small></span><ChevronLeft /></button>
-            {canFinance && <button type="button" onClick={onOpenInvoiceModal} className="dashboard-action"><span className="dashboard-action-icon bg-rose-100 text-rose-700"><Receipt /></span><span><strong>إضافة مصروف</strong><small>تسجيل فاتورة أو مصروف</small></span><ChevronLeft /></button>}
-            {canFinance && onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action"><span className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>ملخص الحركة والتحصيل</small></span><ChevronLeft /></button>}
+            {canWalkIn && onOpenWalkIn && <button type="button" onClick={onOpenWalkIn} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-indigo-100 text-indigo-700"><UserPlus /></span><span><strong>زيارة بدون موعد</strong><small>فتح ملف وتسجيل التحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
+            {canAppointments && onOpenScheduleModal && <button type="button" onClick={onOpenScheduleModal} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-amber-100 text-amber-700"><Calendar /></span><span><strong>حجز موعد</strong><small>إضافة حجز جديد</small></span><ChevronLeft aria-hidden="true" /></button>}
+            {canRegisterPayment && <button type="button" onClick={() => onNavigate('secretary-desk')} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-emerald-100 text-emerald-700"><Banknote /></span><span><strong>تسجيل دفعة</strong><small>تحصيل مبلغ من مريض</small></span><ChevronLeft aria-hidden="true" /></button>}
+            {canViewExpenses && onOpenInvoiceModal && <button type="button" onClick={onOpenInvoiceModal} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-rose-100 text-rose-700"><Receipt /></span><span><strong>إضافة فاتورة مصروف</strong><small>رفع الفاتورة ومراجعة بياناتها</small></span><ChevronLeft aria-hidden="true" /></button>}
+            {canReports && onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>تفاصيل الخدمات والتحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
           </div>
-        </aside>
+        </aside>}
       </div>
 
-      {(stats.noShow > 0 || stats.spent > 0 || activeLabCount > 0) && (
+      {showAlerts && (
         <section className="dashboard-alerts">
-          <div className="flex items-center gap-2"><AlertCircle /><strong>تنبيهات تحتاج متابعة</strong></div>
+          <div className="flex items-center gap-2"><AlertCircle aria-hidden="true" /><strong>تنبيهات تحتاج متابعة</strong></div>
           <div className="dashboard-alert-grid">
-            {stats.noShow > 0 && <span>{stats.noShow} موعد لم يحضر صاحبه</span>}
+            {canAppointments && stats.noShow > 0 && <span>{stats.noShow} موعد لم يحضر صاحبه</span>}
             {canLab && activeLabCount > 0 && <span>{activeLabCount} حالة معمل ما زالت مفتوحة</span>}
-            {canFinance && stats.spent > 0 && <span>مصروفات اليوم: {money(stats.spent, isPrivacyMode)}</span>}
+            {canViewExpenses && stats.spent > 0 && <span>قيمة مصروفات اليوم: {money(stats.spent, isPrivacyMode)}</span>}
           </div>
         </section>
       )}
 
 
       <section className="dashboard-footer-strip">
-        <Stethoscope /><span>{labels.welcomeText || 'اختر الإجراء المطلوب للمتابعة'}</span>
-        {canSettings && <button type="button" onClick={() => onNavigate('settings')}>فتح لوحة التحكم <ChevronLeft /></button>}
+        <Stethoscope aria-hidden="true" /><span>{!labels.welcomeText || labels.welcomeText === DEFAULT_UI_LABELS.welcomeText ? 'اختر الإجراء المطلوب للمتابعة' : labels.welcomeText}</span>
+        {canSettings && <button type="button" onClick={() => onNavigate('settings')}>إعدادات العيادة <ChevronLeft aria-hidden="true" /></button>}
       </section>
     </div>
   );

@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Appointment, AppointmentStatus } from '../../types';
-import { CheckCircle2, Clock, Calendar as CalendarIcon, AlertCircle, XCircle, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Clock, Calendar as CalendarIcon, AlertCircle, XCircle } from 'lucide-react';
+import { appointmentTimeMinutes } from './appointmentScheduling';
+import { useAppointmentDialog } from './useAppointmentDialog';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
 
 interface AppointmentStatusModalProps {
   appointment: Appointment | null;
@@ -23,7 +26,7 @@ export const APPOINTMENT_STATUS_CONFIGS: Record<AppointmentStatus, StatusOptionC
   attended: {
     key: 'attended',
     label: 'حضر',
-    desc: 'حضر المريض وجاري المتابعة أو إجراء الكشف',
+    desc: 'حضر المريض وبدأت الجلسة أو الكشف',
     icon: CheckCircle2,
     badgeBg: 'bg-emerald-50 text-emerald-800 border-emerald-200/90 hover:bg-emerald-100',
     activeBg: 'bg-emerald-600 text-white',
@@ -43,7 +46,7 @@ export const APPOINTMENT_STATUS_CONFIGS: Record<AppointmentStatus, StatusOptionC
   scheduled: {
     key: 'scheduled',
     label: 'موعد محجوز',
-    desc: 'موعد مؤكد وبانتظار حضور المريض في الموعد',
+    desc: 'حجز مسجل وبانتظار حضور المريض',
     icon: CalendarIcon,
     badgeBg: 'bg-indigo-50 text-indigo-800 border-indigo-200/90 hover:bg-indigo-100',
     activeBg: 'bg-indigo-600 text-white',
@@ -72,7 +75,7 @@ export const APPOINTMENT_STATUS_CONFIGS: Record<AppointmentStatus, StatusOptionC
   },
   confirmed: {
     key: 'confirmed',
-    label: 'موعد محجوز',
+    label: 'أكد الحضور',
     desc: 'موعد مؤكد وبانتظار الحضور',
     icon: CalendarIcon,
     badgeBg: 'bg-indigo-50 text-indigo-800 border-indigo-200/90 hover:bg-indigo-100',
@@ -82,9 +85,9 @@ export const APPOINTMENT_STATUS_CONFIGS: Record<AppointmentStatus, StatusOptionC
   },
   cancelled: {
     key: 'cancelled',
-    label: 'اعتذر / ملغي',
-    desc: 'موعد غير منفذ',
-    icon: AlertCircle,
+    label: 'ملغي',
+    desc: 'إلغاء الموعد وإتاحة وقته لحجز آخر',
+    icon: XCircle,
     badgeBg: 'bg-orange-50 text-orange-800 border-orange-200/90 hover:bg-orange-100',
     activeBg: 'bg-orange-600 text-white',
     dotColor: 'bg-orange-500',
@@ -93,7 +96,7 @@ export const APPOINTMENT_STATUS_CONFIGS: Record<AppointmentStatus, StatusOptionC
 };
 
 export const format12HourTime = (time24: string): string => {
-  if (!time24) return '';
+  if (appointmentTimeMinutes(time24) === null) return 'وقت غير محدد';
   const [hStr, mStr] = time24.split(':');
   let h = parseInt(hStr, 10);
   const period = h >= 12 ? 'م' : 'ص';
@@ -107,34 +110,52 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
   onSelectStatus,
 }) => {
   const [selectedUpdatingKey, setSelectedUpdatingKey] = useState<AppointmentStatus | null>(null);
+  const updatingRef = useRef(false);
+  const { showToast } = useToastAndConfirm();
+  const closeDialog = () => { if (!updatingRef.current) onClose(); };
+  const dialogRef = useAppointmentDialog(Boolean(appointment), closeDialog);
 
   if (!appointment) return null;
 
   const handleChoose = async (statusKey: AppointmentStatus) => {
-    if (selectedUpdatingKey) return; // prevent duplicate clicks
+    if (updatingRef.current) return;
+    if (appointment.status === statusKey) {
+      onClose();
+      return;
+    }
+    updatingRef.current = true;
     setSelectedUpdatingKey(statusKey);
     try {
       await onSelectStatus(statusKey);
+    } catch {
+      showToast('تعذّر تحديث حالة الموعد. حاول مرة أخرى.', 'error');
     } finally {
+      updatingRef.current = false;
       setSelectedUpdatingKey(null);
     }
   };
 
-  const statusList: AppointmentStatus[] = ['attended', 'waiting', 'scheduled', 'apologized', 'no_show'];
+  const statusList: AppointmentStatus[] = ['scheduled', 'confirmed', 'waiting', 'attended', 'apologized', 'no_show', 'cancelled'];
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn"
-      onClick={onClose}
+      onClick={closeDialog}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="appointment-status-title"
+        tabIndex={-1}
+        dir="rtl"
         className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll font-tajawal"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div>
-            <h3 className="text-base font-extrabold text-slate-900 leading-tight">
+            <h3 id="appointment-status-title" className="text-base font-extrabold text-slate-900 leading-tight">
               تحديد حالة الموعد
             </h3>
             <p className="text-xs text-slate-500 font-bold mt-0.5">
@@ -143,7 +164,8 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={closeDialog}
+            disabled={selectedUpdatingKey !== null}
             className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer min-h-[44px] touch-manipulation flex items-center justify-center"
           >
             إلغاء وإغلاق
@@ -164,6 +186,7 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
                 type="button"
                 disabled={selectedUpdatingKey !== null}
                 onClick={() => handleChoose(statusKey)}
+                aria-pressed={isCurrent}
                 className={`w-full p-3.5 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 cursor-pointer min-h-[56px] active:scale-[0.98] touch-manipulation ${
                   isCurrent
                     ? 'bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-slate-400/30'
@@ -188,7 +211,7 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
                       )}
                     </div>
                     <span
-                      className={`text-[11px] block mt-0.5 truncate ${
+                      className={`text-xs block mt-1 leading-relaxed ${
                         isCurrent ? 'text-slate-300' : 'text-slate-500'
                       }`}
                     >
@@ -214,3 +237,4 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
     </div>
   );
 };
+

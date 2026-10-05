@@ -50,13 +50,13 @@ export function parseCompositeToothId(compositeId: string): ToothInfo | null {
 }
 
 export function getToothLabel(compositeId: string | null): string {
-  if (!compositeId) return 'بدون تحديد سنة';
+  if (!compositeId) return 'خدمة عامة';
   const parsed = parseCompositeToothId(compositeId);
   if (!parsed) return compositeId;
   if (parsed.isPediatric) {
-    return `${getQuadrantTitle(parsed.quadrant)} - سنة لبنية (${parsed.letter})`;
+    return `${getQuadrantTitle(parsed.quadrant)} - سن لبني (${parsed.letter})`;
   }
-  return `${getQuadrantTitle(parsed.quadrant)} - سنة ${parsed.number}`;
+  return `${getQuadrantTitle(parsed.quadrant)} - سن ${parsed.number}`;
 }
 
 export function calculateToothBridgeRange(startCompositeId: string, endCompositeId: string): {
@@ -131,3 +131,4 @@ export function getToothStatusForPatient(patientSessions: Session[], compositeId
     sessionCount: matchingSessions.length
   };
 }
+

@@ -35,9 +35,9 @@ export const OfflineSyncEngine = {
   getLastSyncTime(): number {
     try {
       const val = localStorage.getItem(LAST_SYNC_KEY);
-      return val ? parseInt(val, 10) : Date.now();
+      return val ? parseInt(val, 10) || 0 : 0;
     } catch {
-      return Date.now();
+      return 0;
     }
   },
 
@@ -79,47 +79,9 @@ export const OfflineSyncEngine = {
     failed: number;
     conflicts: number;
   }> {
-    if (!navigator.onLine) {
-      return { synced: 0, failed: 0, conflicts: 0 };
-    }
-
-    const queue = this.getQueue();
-    if (queue.length === 0) {
-      this.saveLastSyncTime(Date.now());
-      return { synced: 0, failed: 0, conflicts: 0 };
-    }
-
-    let synced = 0;
-    let failed = 0;
-    let conflicts = 0;
-
-    for (let i = 0; i < queue.length; i++) {
-      const mutation = queue[i];
-      try {
-        mutation.status = 'syncing';
-        this.saveQueue(queue);
-
-        // Simulate cloud push or sync verification
-        await new Promise(res => setTimeout(res, 200));
-
-        // Delete processed mutation
-        this.removeMutation(mutation.id);
-        synced++;
-        if (onProgress) onProgress(synced, queue.length - (i + 1));
-      } catch (err: any) {
-        mutation.retries += 1;
-        if (mutation.retries >= 3) {
-          mutation.status = 'failed';
-          mutation.errorNote = err.message || 'فشل الاتصال الخادم';
-          failed++;
-        } else {
-          mutation.status = 'pending';
-        }
-        this.saveQueue(queue);
-      }
-    }
-
-    this.saveLastSyncTime(Date.now());
-    return { synced, failed, conflicts };
+    // No authenticated cloud mutation transport has been configured yet.
+    // Preserve queued changes until a real upload acknowledges them.
+    return { synced: 0, failed: 0, conflicts: 0 };
   },
 };
+

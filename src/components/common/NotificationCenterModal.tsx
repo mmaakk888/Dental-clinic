@@ -49,7 +49,8 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     };
   }, [isOpen]);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const todayStr = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
   // Dynamically compute notification items
   const notifications = useMemo(() => {
@@ -77,7 +78,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         list.push({
           id: `notif-fin-${p.id}`,
           type: 'finance',
-          title: `مستحقات تأخر سداد: ${p.name}`,
+          title: `رصيد متبقٍ: ${p.name}`,
           message: `يوجد متبقي مالي بقيمة ${balance.toLocaleString()} ج.م على المريض (ملف #${p.id})`,
           date: 'مستحق',
           isRead: readIds.has(`notif-fin-${p.id}`),
@@ -93,7 +94,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           id: `notif-lab-${l.id}`,
           type: 'lab',
           title: `حالة معمل منتظرة: ${l.patientName}`,
-          message: `حالة (${l.type}) مع معمل "${l.labName}" قيد التجهيز التسليم`,
+          message: `حالة (${l.type}) مع معمل "${l.labName}" قيد التجهيز والتسليم`,
           date: l.date,
           isRead: readIds.has(`notif-lab-${l.id}`),
           actionPayload: { view: 'lab' }

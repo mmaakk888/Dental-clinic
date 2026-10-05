@@ -8,6 +8,7 @@ import {
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { NotificationCenterModal } from './NotificationCenterModal';
 import { OfflineSyncEngine, PendingMutation } from '../../utils/offlineSync';
+import { getPatientFinancialSummary } from '../../utils/financials';
 
 interface HeaderNavbarProps {
   activeView: ActiveView;
@@ -96,23 +97,27 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
     setLastSyncTime(OfflineSyncEngine.getLastSyncTime());
   };
 
+  const canPatientView = currentUser?.permissions?.patientView !== false;
+  const canPatientFinance = canPatientView && currentUser?.permissions?.patientFinance !== false && (currentUser?.permissions?.viewRemainingBalance ?? currentUser?.permissions?.patientFinance) !== false && !isPrivacyMode;
+  const visiblePatients = canPatientView ? patients : [];
+  const visibleAppointments = currentUser?.permissions?.appointments !== false ? appointments : [];
+  const visibleLabCases = currentUser?.permissions?.lab !== false ? labCases : [];
+  const visibleExpenses = currentUser?.permissions?.summary !== false && currentUser?.permissions?.viewExpenses !== false && !isPrivacyMode ? expenses : [];
+
   // Notifications calculation
   const { todayApptsCount, overduePatientsCount, pendingLabCount, totalNotifCount } = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const appts = appointments.filter(a => a.date === todayStr).length;
-    const overdue = patients.filter(p => {
-      const cost = p.sessions.reduce((acc, s) => acc + s.amount, 0);
-      const paid = p.sessions.reduce((acc, s) => acc + (s.paid || 0), 0) + p.payments.reduce((acc, pay) => acc + pay.amount, 0);
-      return (cost - paid) > 500;
-    }).length;
-    const pendingLabs = labCases.filter(l => l.status === 'pending').length;
+    const now = new Date();
+    const todayStr = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const appts = visibleAppointments.filter(a => a.date === todayStr).length;
+    const overdue = canPatientFinance ? visiblePatients.filter(p => getPatientFinancialSummary(p).totalRemaining > 500).length : 0;
+    const pendingLabs = visibleLabCases.filter(l => l.status === 'pending').length;
     return {
       todayApptsCount: appts,
       overduePatientsCount: overdue,
       pendingLabCount: pendingLabs,
       totalNotifCount: appts + overdue + pendingLabs
     };
-  }, [appointments, patients, labCases]);
+  }, [appointments, patients, labCases, currentUser, isPrivacyMode]);
 
   // Shortcut Ctrl+K
   useEffect(() => {
@@ -267,7 +272,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 <Eye className="w-4.5 h-4.5 text-emerald-700 animate-fadeIn" />
               )}
               <span className="hidden lg:inline text-[11px] font-black">
-                {isPrivacyMode ? 'وضع المريض مُفعّل' : 'تفعيل وضع المريض'}
+                {isPrivacyMode ? 'المبالغ مخفية' : 'إخفاء المبالغ'}
               </span>
             </button>
 
@@ -284,7 +289,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                   ? 'bg-rose-50 border-rose-300 text-rose-800'
                   : 'bg-emerald-50 border-emerald-300 text-emerald-800'
               }`}
-              title="انقر لفتح تفاصيل حالة الاتصال والمزامنة"
+              title="حالة الاتصال وحفظ البيانات"
             >
               {isSyncing ? (
                 <>
@@ -518,12 +523,12 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                     ? 'أنتم تعملون بوضع بدون إنترنت (Offline Mode)'
                     : failedCount > 0
                     ? 'توجد عمليات تعذر رفعها تلقائياً'
-                    : 'النظام متصل وقواعد البيانات متزامنة بالكامل'}
+                    : 'الإنترنت متاح — البيانات محفوظة على هذا الجهاز'}
                 </span>
                 <span className="text-[11px] opacity-90 block mt-0.5 leading-relaxed font-tajawal">
                   {!isOnline
-                    ? 'يتم حفظ كافة سجلات المرضى والمواعيد والمالية بأمان على ذاكرة الجهاز المحلية وسوف تُرفع تلقائياً عند عودة الإنترنت.'
-                    : 'جميع بيانات العيادة مؤمنة ومحفوظة محلياً وفي السحابة بشكل فوري.'}
+                    ? 'يمكن متابعة العمل محليًا. احتفظ بنسخة احتياطية قبل تغيير الجهاز أو حذف بيانات المتصفح.'
+                    : 'النسخ السحابي اليدوي متاح من الإعدادات بعد تفعيل الحساب؛ المزامنة المشتركة لم تُفعّل بعد.'}
                 </span>
               </div>
             </div>
@@ -542,7 +547,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                     <span className="font-bold text-slate-700">قاعدة البيانات المحلية</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-black">
-                    نشطة (IndexedDB)
+                    حفظ محلي
                   </span>
                 </div>
 
@@ -555,7 +560,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                   <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
                     isOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
                   }`}>
-                    {isOnline ? 'متصل بالسحابة' : 'محلي فقط'}
+                    {'الربط المشترك غير مفعّل'}
                   </span>
                 </div>
 
@@ -563,7 +568,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
                   <span className="font-bold text-slate-700">آخر مزامنة ناجحة</span>
                   <span className="font-mono text-slate-900 font-bold">
-                    {getRelativeSyncTime(lastSyncTime)}
+                    {'لم يتم التحقق من رفع سحابي'}
                   </span>
                 </div>
 
@@ -593,21 +598,21 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
             <div className="space-y-2">
               <button
                 type="button"
-                disabled={isSyncing || !isOnline}
+                disabled={true}
                 onClick={triggerSync}
                 className={`w-full p-3.5 rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all active:scale-98 min-h-[48px] shadow-2xs font-tajawal cursor-pointer ${
-                  isSyncing || !isOnline
+                  true
                     ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
                     : 'bg-indigo-600 hover:bg-indigo-700 text-white active:scale-95'
                 }`}
               >
                 <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'جاري المزامن الآن...' : 'مزامنة البيانات الآن (Sync Now)'}</span>
+                <span>{isSyncing ? 'جاري المزامن الآن...' : 'المزامنة المشتركة غير مفعّلة'}</span>
               </button>
 
               <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 text-[11px] text-slate-500 text-center font-tajawal flex items-center justify-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span>المزامنة التلقائية مفعلة تلقائياً بمجرد توفر الاتصال بالإنترنت</span>
+                <span>لنسخ البيانات احتياطيًا، افتح الإعدادات ثم النسخ الاحتياطية.</span>
               </div>
             </div>
           </div>
@@ -618,10 +623,12 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
       <GlobalSearchModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
-        patients={patients}
-        appointments={appointments}
-        labCases={labCases}
-        expenses={expenses}
+        patients={visiblePatients}
+        appointments={visibleAppointments}
+        labCases={visibleLabCases}
+        expenses={visibleExpenses}
+        showFinancials={canPatientFinance}
+        showLabCosts={currentUser?.permissions?.labProfit === true && !isPrivacyMode}
         onSelectPatient={onSelectPatient}
         onNavigate={onNavigate}
       />
@@ -630,9 +637,9 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
       <NotificationCenterModal
         isOpen={isNotifOpen}
         onClose={() => setIsNotifOpen(false)}
-        patients={patients}
-        appointments={appointments}
-        labCases={labCases}
+        patients={canPatientFinance ? visiblePatients : []}
+        appointments={visibleAppointments}
+        labCases={visibleLabCases}
         onSelectPatient={onSelectPatient}
         onNavigate={onNavigate}
       />

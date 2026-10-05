@@ -50,11 +50,11 @@ function sanitizeSessionUser(user: User | null): User | null {
 // In-memory cache to eliminate repetitive synchronous JSON parsing on render loops
 const cacheMap = new Map<string, any>();
 
-// Timers map for debounced non-blocking background persistence
-const writeTimers = new Map<string, number>();
+export const STORAGE_FAILURE_EVENT = 'dental-storage-failure';
 
 function safeGet<T>(key: string, fallback: T): T {
-  if (cacheMap.has(key)) {
+  // Account changes made in another tab must be visible to access checks immediately.
+  if (key !== KEYS.USERS && cacheMap.has(key)) {
     return cacheMap.get(key) as T;
   }
   try {
@@ -69,42 +69,31 @@ function safeGet<T>(key: string, fallback: T): T {
   }
 }
 
-function safeSet<T>(key: string, value: T, immediate: boolean = false): void {
-  // Update in-memory cache instantly so subsequent getters see it without latency
+function safeSet<T>(key: string, value: T, _immediate: boolean = false): void {
   cacheMap.set(key, value);
-
-  const doWrite = () => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (err) {
-      console.error(`Error writing to localStorage key "${key}":`, err);
-    }
-  };
-
-  if (immediate) {
-    doWrite();
-    return;
+  // Complete the write before returning; idle writes can be lost on tab close.
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    console.error(`Error writing to localStorage key "${key}":`, err);
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(STORAGE_FAILURE_EVENT));
   }
+}
 
-  // Debounce storage writes to background idle frame to prevent UI micro-stutters/lag
-  if (writeTimers.has(key)) {
-    clearTimeout(writeTimers.get(key));
-  }
-
-  const timerId = window.setTimeout(() => {
-    writeTimers.delete(key);
-    if ('requestIdleCallback' in window) {
-      (window as any).requestIdleCallback(() => doWrite(), { timeout: 1000 });
-    } else {
-      doWrite();
-    }
-  }, 150);
-
-  writeTimers.set(key, timerId);
+function normalizeOriginalDemoPatients(patients: Patient[]): Patient[] {
+  return patients.map(patient => {
+    const fixture = INITIAL_PATIENTS.find(original => original.id === patient.id);
+    if (!fixture) return patient;
+    const stripMarker = (record: Patient) => ({ ...record, payments: (record.payments || []).map(({ legacyAggregate: _marker, ...payment }) => payment) });
+    // Only an exact, untouched bundled demo record can be identified safely.
+    // Never infer summary payments from real/customized patients or money totals.
+    if (JSON.stringify(stripMarker(patient)) !== JSON.stringify(stripMarker(fixture))) return patient;
+    return { ...patient, payments: patient.payments.map(payment => ({ ...payment, legacyAggregate: true })) };
+  });
 }
 
 export const Storage = {
-  getPatients: (): Patient[] => safeGet(KEYS.PATIENTS, INITIAL_PATIENTS),
+  getPatients: (): Patient[] => normalizeOriginalDemoPatients(safeGet(KEYS.PATIENTS, INITIAL_PATIENTS)),
   savePatients: (patients: Patient[]) => safeSet(KEYS.PATIENTS, patients),
 
   getAppointments: (): Appointment[] => safeGet(KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
@@ -155,8 +144,22 @@ export const Storage = {
   getPrivacyMode: (): boolean => safeGet(KEYS.PRIVACY_MODE, true),
   savePrivacyMode: (mode: boolean) => safeSet(KEYS.PRIVACY_MODE, mode, true),
 
-  getCurrentUser: (): User | null => sanitizeSessionUser(safeGet<User | null>(KEYS.CURRENT_USER, null)),
-  saveCurrentUser: (user: User | null) => safeSet(KEYS.CURRENT_USER, sanitizeSessionUser(user), true),
+  getCurrentUser: (): User | null => {
+    try {
+      const raw = sessionStorage.getItem(KEYS.CURRENT_USER);
+      return raw ? sanitizeSessionUser(JSON.parse(raw)) : null;
+    } catch { return null; }
+  },
+  saveCurrentUser: (user: User | null) => {
+    const safeUser = sanitizeSessionUser(user);
+    try {
+      localStorage.removeItem(KEYS.CURRENT_USER);
+      if (safeUser) sessionStorage.setItem(KEYS.CURRENT_USER, JSON.stringify(safeUser));
+      else sessionStorage.removeItem(KEYS.CURRENT_USER);
+    } catch {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event(STORAGE_FAILURE_EVENT));
+    }
+  },
 
   getRememberedSession: (): RememberedSession | null => {
     const remembered = safeGet<RememberedSession | (Partial<RememberedSession> & { password?: string }) | null>(KEYS.REMEMBERED_SESSION, null);
@@ -186,8 +189,7 @@ export const Storage = {
 
   resetAll: () => {
     cacheMap.clear();
-    writeTimers.forEach(timer => clearTimeout(timer));
-    writeTimers.clear();
     Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+    sessionStorage.removeItem(KEYS.CURRENT_USER);
   }
 };

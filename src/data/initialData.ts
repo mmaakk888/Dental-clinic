@@ -35,7 +35,7 @@ export const DEFAULT_WHATSAPP_SETTINGS: WhatsappSettings = {
   autoRemind24h: true,
   autoPostOpOnAttended: true,
   templates: {
-    reminderTomorrow: 'أهلاً بك أ. {patientName}، نود تذكيرك بموعدك غداً {date} الساعة {time} في {clinicName}. يسعدنا حضورك!',
+    reminderTomorrow: 'أهلاً بك أ. {patientName}، نود تذكيرك بموعدك يوم {date} الساعة {time} في {clinicName}. يسعدنا حضورك!',
     newAppt: 'أهلاً بك أ. {patientName}، تم حجز موعد جديد لك يوم {date} الساعة {time} في {clinicName}.',
     postOp: 'أهلاً بك أ. {patientName}، نتمنى لك الشفاء العاجل! نرفق لك تعليمات الهامة بعد الجلسة:\n1) الالتزام بالأدوية في مواعيدها.\n2) تجنب المشروبات الساخنة 24 ساعة.\n3) التواصل معنا فوراً عند أي استفسار.',
     accountBalance: 'أهلاً بك أ. {patientName}، نود إحاطتك علماً بأن المتبقي على حساب ملفك برقم #{fileNo} هو {remainingBalance} ج.م. يسعدنا تواصلك معنا دائماً.'
@@ -183,7 +183,7 @@ export const INITIAL_PATIENTS: Patient[] = [
         paymentsLog: [{ id: 'p2', amount: 2000, date: '2026-06-15' }]
       }
     ],
-    payments: [{ id: 'gp1', amount: 2600, date: '2026-06-15' }]
+    payments: [{ id: 'gp1', amount: 2600, date: '2026-06-15', legacyAggregate: true }]
   },
   {
     id: '102',
@@ -211,7 +211,7 @@ export const INITIAL_PATIENTS: Patient[] = [
         ]
       }
     ],
-    payments: [{ id: 'gp2', amount: 1200, date: '2026-06-08' }]
+    payments: [{ id: 'gp2', amount: 1200, date: '2026-06-08', legacyAggregate: true }]
   },
   {
     id: '103',
@@ -236,7 +236,7 @@ export const INITIAL_PATIENTS: Patient[] = [
         paymentsLog: [{ id: 'p5', amount: 500, date: '2026-07-02' }]
       }
     ],
-    payments: [{ id: 'gp3', amount: 500, date: '2026-07-02' }]
+    payments: [{ id: 'gp3', amount: 500, date: '2026-07-02', legacyAggregate: true }]
   },
   {
     id: '104',
@@ -259,7 +259,7 @@ export const INITIAL_PATIENTS: Patient[] = [
         paymentsLog: [{ id: 'p6', amount: 400, date: '2026-07-12' }]
       }
     ],
-    payments: [{ id: 'gp4', amount: 400, date: '2026-07-12' }]
+    payments: [{ id: 'gp4', amount: 400, date: '2026-07-12', legacyAggregate: true }]
   },
   {
     id: '105',
@@ -285,7 +285,7 @@ export const INITIAL_PATIENTS: Patient[] = [
         paymentsLog: [{ id: 'p7', amount: 1000, date: '2026-07-20' }]
       }
     ],
-    payments: [{ id: 'gp5', amount: 1000, date: '2026-07-20' }]
+    payments: [{ id: 'gp5', amount: 1000, date: '2026-07-20', legacyAggregate: true }]
   }
 ];
 

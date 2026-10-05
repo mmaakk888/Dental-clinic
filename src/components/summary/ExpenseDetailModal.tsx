@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, ZoomIn, ZoomOut, RotateCw, Maximize2, Download, Receipt, Building2, Phone, MapPin, Calendar, CreditCard, DollarSign, AlertTriangle, ShieldCheck, Clock, FileText, CheckCircle2, ChevronRight } from 'lucide-react';
 import { Expense, ExpenseItem } from '../../types';
+import { getExpensePaymentSummary } from '../../utils/expenseUtils';
 
 interface ExpenseDetailModalProps {
   expense: Expense | null;
@@ -20,8 +21,50 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setZoomLevel(1);
+    setRotationDegree(0);
+    setIsFullscreenImage(false);
+  }, [expense?.id, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const priorOverflow = document.body.style.overflow;
+    const priorFocus = document.activeElement as HTMLElement | null;
+    document.body.style.overflow = 'hidden';
+    const activeModal = isFullscreenImage ? fullscreenRef.current : modalRef.current;
+    activeModal?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (isFullscreenImage) setIsFullscreenImage(false); else onClose();
+      }
+      if (event.key === 'Tab' && activeModal) {
+        const controls = (Array.from(activeModal.querySelectorAll('button, a[href], input, select, textarea, [tabindex="0"]')) as HTMLElement[])
+          .filter(element => !element.hasAttribute('disabled') && element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (!first) { event.preventDefault(); activeModal.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === activeModal)) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = priorOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      if (priorFocus?.isConnected) priorFocus.focus();
+    };
+  }, [isOpen, isFullscreenImage, onClose]);
 
   if (!isOpen || !expense) return null;
+  const financial = getExpensePaymentSummary(expense);
 
   const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.25, 3));
   const handleZoomOut = () => setZoomLevel(prev => Math.max(prev - 0.25, 0.5));
@@ -60,17 +103,17 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
 
   return (
     <div onClick={onClose} className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
-      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="expense-detail-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
         
         {/* ERP Invoice Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-3">
+        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex flex-wrap gap-3 items-center justify-between border-b border-slate-800">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 shadow-inner">
               <Receipt className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base sm:text-lg font-black">{expense.supplierName || expense.title}</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 id="expense-detail-title" className="text-base sm:text-lg font-black break-words">{expense.supplierName || expense.title}</h3>
                 {expense.invoiceNumber && (
                   <span className="bg-indigo-500/30 text-indigo-200 text-xs px-2.5 py-0.5 rounded-md font-mono border border-indigo-400/30">
                     {expense.invoiceNumber}
@@ -98,7 +141,8 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              aria-label="إغلاق تفاصيل الفاتورة"
+              className="p-2 min-h-11 min-w-11 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -137,7 +181,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
                 <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5 mb-1">
                   <CreditCard className="w-3.5 h-3.5 text-slate-600" /> طريقة السداد والحالة
                 </span>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   {getPaymentMethodBadge(expense.paymentMethod)}
                   <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
                     {expense.category === 'supplies' ? 'خامات ومستلزمات' : expense.category === 'fixed' ? 'مصروفات ثابتة' : expense.category === 'maintenance' ? 'صيانة' : 'أخرى'}
@@ -156,9 +200,9 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
                 <p className="text-2xl font-black text-emerald-400 mt-0.5">{maskMoney(expense.amount)}</p>
               </div>
               <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold text-indigo-100">
-                <span>المبلغ المدفوع: {maskMoney(expense.paidAmount ?? expense.amount)}</span>
-                {expense.remainingAmount && expense.remainingAmount > 0 ? (
-                  <span className="text-amber-300 font-extrabold">المتبقي: {maskMoney(expense.remainingAmount)}</span>
+                <span>المبلغ المدفوع: {maskMoney(financial.paid)}</span>
+                {financial.remaining > 0 ? (
+                  <span className="text-amber-300 font-extrabold">المتبقي: {maskMoney(financial.remaining)}</span>
                 ) : (
                   <span className="text-emerald-300 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> مسددة بالكامل</span>
                 )}
@@ -186,11 +230,11 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
           {/* High-Resolution Interactive Image Lightbox Viewer */}
           {expense.invoiceImageUrl ? (
             <div className="space-y-2">
-              <div className="flex items-center justify-between px-1">
+              <div className="flex flex-wrap gap-2 items-center justify-between px-1">
                 <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                   <FileText className="w-4 h-4 text-indigo-600" /> صورة الفاتورة المستند الأصلي
                 </h4>
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button type="button" onClick={handleZoomIn} className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition cursor-pointer" title="تكبير">
                     <ZoomIn className="w-4 h-4" />
                   </button>
@@ -215,7 +259,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
               <div className="relative bg-slate-950 rounded-2xl border border-slate-800 p-4 min-h-[220px] max-h-[380px] overflow-auto flex items-center justify-center">
                 <img
                   src={expense.invoiceImageUrl}
-                  alt="Original Invoice"
+                  alt="صورة الفاتورة الأصلية"
                   className="object-contain transition-transform duration-200 max-h-[340px]"
                   style={{
                     transform: `scale(${zoomLevel}) rotate(${rotationDegree}deg)`,
@@ -273,21 +317,21 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
               </div>
             ) : (
               <div className="p-4 text-center rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-500">
-                لم يتم تفنيط أصناف الفاتورة بشكل منفصل (تم تسجيل المبلغ الإجمالي فقط)
+                لم تُسجل أصناف هذه الفاتورة بشكل منفصل؛ المبلغ الإجمالي فقط مسجل
               </div>
             )}
           </div>
 
           {/* Financial Breakdown Summary */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2 text-xs">
-            <div className="flex justify-between text-slate-600">
+            {expense.subtotal !== undefined && <div className="flex justify-between text-slate-600">
               <span>الإجمالي الفرعي قبل الضريبة والخصم:</span>
-              <span className="font-mono font-bold">{maskMoney(expense.subtotal ?? expense.amount)}</span>
-            </div>
+              <span className="font-mono font-bold">{maskMoney(expense.subtotal)}</span>
+            </div>}
             {Boolean(expense.discount) && (
               <div className="flex justify-between text-amber-700">
                 <span>إجمالي الخصم التجاري:</span>
-                <span className="font-mono font-bold">- {maskMoney(expense.discount)}</span>
+                <span className="font-mono font-bold">- {expense.discountType === 'percentage' ? `${isPrivacyMode ? '***' : expense.discount}%` : maskMoney(expense.discount)}</span>
               </div>
             )}
             {Boolean(expense.tax) && (
@@ -328,8 +372,8 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-          <span className="text-xs text-slate-500 font-medium">معرف الفاتورة: {expense.id}</span>
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between">
+          <span className="text-xs text-slate-500 font-medium break-all">معرّف الفاتورة: {expense.id}</span>
           <button
             type="button"
             onClick={onClose}
@@ -342,7 +386,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
 
       {/* Fullscreen Image Overlay */}
       {isFullscreenImage && expense.invoiceImageUrl && (
-        <div className="fixed inset-0 z-60 bg-slate-950/95 flex flex-col p-4 animate-fadeIn">
+        <div ref={fullscreenRef} role="dialog" aria-modal="true" aria-label="صورة الفاتورة كاملة" tabIndex={-1} onClick={event => event.stopPropagation()} className="fixed inset-0 z-[70] bg-slate-950/95 flex flex-col p-4 animate-fadeIn">
           <div className="flex items-center justify-between text-white pb-3 border-b border-slate-800">
             <h4 className="text-sm font-bold">{expense.supplierName || 'صورة الفاتورة الأصلية'}</h4>
             <div className="flex items-center gap-2">
@@ -355,10 +399,11 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
             </div>
           </div>
           <div className="flex-1 flex items-center justify-center p-4 overflow-auto">
-            <img src={expense.invoiceImageUrl} alt="Full Invoice" className="object-contain max-h-full max-w-full" />
+            <img src={expense.invoiceImageUrl} alt="صورة الفاتورة كاملة" className="object-contain max-h-full max-w-full" />
           </div>
         </div>
       )}
     </div>
   );
 };
+

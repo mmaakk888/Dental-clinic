@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, CreditCard, X, ChevronLeft } from 'lucide-react';
+import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, ClipboardList, X, ChevronLeft } from 'lucide-react';
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
 
 interface Props {
@@ -20,7 +20,7 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
     { key: 'home' as ActiveView, label: labels.tabs.home || 'الرئيسية', icon: Home, allowed: true },
     { key: 'patients' as ActiveView, label: 'المرضى', icon: Users, allowed: permissions?.patientView !== false },
     { key: 'appointments' as ActiveView, label: 'المواعيد', icon: Calendar, allowed: permissions?.appointments !== false },
-    { key: 'secretary-desk' as ActiveView, label: 'الاستقبال', icon: CreditCard, allowed: true },
+    { key: 'secretary-desk' as ActiveView, label: 'الاستقبال', icon: ClipboardList, allowed: permissions?.patientView !== false },
     { key: 'lab' as ActiveView, label: 'التركيبات', icon: Microscope, allowed: permissions?.lab !== false },
     { key: 'summary' as ActiveView, label: 'الماليات', icon: Landmark, allowed: permissions?.summary !== false },
     { key: 'settings' as ActiveView, label: 'الإعدادات', icon: Settings2, allowed: permissions?.controlPanel !== false },
@@ -32,14 +32,16 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
     if (!open) return;
     const element = dialog.current;
     const oldOverflow = document.body.style.overflow;
-    element?.showModal();
+    if (element && !element.open) element.showModal();
     document.body.style.overflow = 'hidden';
     return () => {
       element?.close();
       document.body.style.overflow = oldOverflow;
-      moreButton.current?.focus();
+      if (moreButton.current?.isConnected) moreButton.current.focus();
     };
   }, [open]);
+
+  useEffect(() => { setOpen(false); }, [activeView, currentUser?.id]);
 
   const navigate = (view: ActiveView) => { setOpen(false); onNavigate(view); };
   if (!currentUser) return null;
@@ -59,10 +61,10 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
       </button>}
     </nav>
     {open && <dialog ref={dialog} id="clinic-more-menu" aria-labelledby="clinic-more-title" className="clinic-dock-dialog" dir="rtl"
-      onCancel={() => setOpen(false)} onClick={event => { if (event.target === event.currentTarget) setOpen(false); }}>
+      onCancel={() => setOpen(false)} onClose={() => setOpen(false)} onClick={event => { if (event.target === event.currentTarget) setOpen(false); }}>
       <div className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3"><h2 id="clinic-more-title" className="text-lg font-bold">باقي الأقسام</h2>
-          <button type="button" autoFocus aria-label="إغلاق قائمة الأقسام" onClick={() => setOpen(false)} className="p-3 rounded-xl bg-slate-100"><X size={20} /></button>
+          <button type="button" autoFocus aria-label="إغلاق قائمة الأقسام" onClick={() => setOpen(false)} className="clinic-dock-close"><X size={20} aria-hidden="true" /></button>
         </div>
         <div className="grid gap-2">{extra.map(item => <button key={item.key} type="button" onClick={() => navigate(item.key)}
           aria-current={selected === item.key ? 'page' : undefined} className="clinic-dock-option">

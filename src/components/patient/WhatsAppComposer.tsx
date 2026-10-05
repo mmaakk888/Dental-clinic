@@ -31,12 +31,14 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
   const [notice, setNotice] = useState('');
   const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', accountBalance: 'الرصيد المتبقي', postOp: 'تعليمات عامة',
     ...Object.fromEntries(Object.entries(extraMessageTemplates).map(([key, value]) => [key, value.title])) };
-  const appts = appointments.filter(a => (a.patientId === patient.id || a.fileNo === patient.id) && !['cancelled', 'no_show'].includes(a.status))
-    .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const appts = appointments.filter(a => (a.patientId === patient.id || a.fileNo === patient.id) && !['cancelled', 'no_show', 'apologized', 'attended'].includes(a.status) && a.date >= today)
+    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   const selected = appts.find(a => a.id === appointmentId);
   const activeDate = selected?.date || date;
   const activeTime = selected?.time || time;
-  const raw = campaign?.message ?? settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
+  const storedTemplate = campaign?.message ?? settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
+  const raw = template === 'reminderTomorrow' ? storedTemplate.replace('غداً {date}', 'يوم {date}') : storedTemplate;
   const message = edited ?? fillMessageTemplate(raw, { patientName: patient.name, clinicName, fileNo: patient.id,
     date: formatArabicDate(activeDate), time: format12HourAr(activeTime), remainingBalance: getPatientFinancialSummary(patient).totalRemaining.toLocaleString('ar-EG') });
   const text = message + (link.trim() ? `\n${link.trim()}` : '');
@@ -44,7 +46,7 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
   const validPhone = /^[1-9]\d{7,14}$/.test(phone);
   const missingDate = ['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) && (!activeDate || !activeTime);
   const unfinished = /\[[^\]]+\]|\{\w+\}/.test(text);
-  const validLink = !link || /^https?:\/\/\S+$/i.test(link.trim());
+  const validLink = !link.trim() || /^https?:\/\/\S+$/i.test(link.trim());
   const ready = validPhone && !missingDate && !unfinished && validLink && !!message.trim();
   return <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
     <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تجهيز رسالة واتساب" onKeyDown={e => {
@@ -55,12 +57,12 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { e.preventDefault(); last?.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
     }} className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 space-y-4">
-      <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg">رسالة إلى {patient.name}</h2><button type="button" onClick={onClose} className="p-3 rounded-xl bg-slate-100">إغلاق</button></div>
+      <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg min-w-0 break-words">رسالة إلى {patient.name}</h2><button type="button" onClick={onClose} className="p-3 min-h-[44px] shrink-0 rounded-xl bg-slate-100">إغلاق</button></div>
       <p className="text-sm text-slate-600">تجهّز الرسالة هنا ثم تراجعها وتضغط إرسال داخل واتساب.</p>
       <p className="text-xs text-slate-500">راجع التاريخ والتعليمات الطبية والمبلغ قبل الإرسال. لا تُرسل عروضاً إلا لمن وافق على استقبالها.</p>
       {!campaign && <label className="block text-sm font-bold">نوع الرسالة<select value={template} onChange={e => { setTemplate(e.target.value); setEdited(null); }} className="block w-full border rounded-xl p-3 mt-1">{Object.entries(options).map(([key, title]) => <option key={key} value={key}>{title}</option>)}</select></label>}
       {['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) && <div className="space-y-2">
-        <label className="block text-sm">الموعد<select value={appointmentId} onChange={e => { setAppointmentId(e.target.value); setEdited(null); }} className="block border rounded-xl p-3 w-full"><option value="manual">تحديد موعد يدوياً</option>{appts.map(a => <option key={a.id} value={a.id}>{a.date} — {format12HourAr(a.time)}</option>)}</select></label>
+        <label className="block text-sm">الموعد<select value={appointmentId} onChange={e => { setAppointmentId(e.target.value); setEdited(null); }} className="block border rounded-xl p-3 w-full"><option value="manual">تحديد موعد يدوياً</option>{appts.map(a => <option key={a.id} value={a.id}>{formatArabicDate(a.date)} — {format12HourAr(a.time)}</option>)}</select></label>
         {appointmentId === 'manual' && <div className="grid grid-cols-2 gap-2"><input aria-label="تاريخ الموعد" type="date" value={date} onChange={e => { setDate(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /><input aria-label="وقت الموعد" type="time" value={time} onChange={e => { setTime(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /></div>}
       </div>}
       <label className="block text-sm font-bold">نص الرسالة<textarea rows={7} value={message} onChange={e => setEdited(e.target.value)} className="block w-full border rounded-xl p-3 mt-1 font-normal" /></label>
