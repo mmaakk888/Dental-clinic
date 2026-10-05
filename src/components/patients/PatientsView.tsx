@@ -24,7 +24,9 @@ import {
   Clock,
   UserCheck,
   CreditCard,
-  RefreshCw
+  RefreshCw,
+  SlidersHorizontal,
+  ChevronDown
 } from 'lucide-react';
 import { Patient, NavigationOrigin, Appointment, LabCase, User, AppointmentStatus } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
@@ -32,6 +34,7 @@ import { EmptyState } from '../common/EmptyState';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
+import './patientDirectory.css';
 
 const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
@@ -54,8 +57,8 @@ type FilterChip = 'all' | 'todayAppt' | 'ongoing' | 'debt' | 'allergy' | 'lab' |
 // Utility for highlighting matching search substrings
 const highlightText = (text: string, query: string) => {
   if (!query || !query.trim() || !text) return text;
-  const q = query.trim().toLowerCase();
-  const lower = text.toLowerCase();
+  const q = normalizeDigits(query.trim().replace(/^#\s*/, '')).toLowerCase();
+  const lower = normalizeDigits(text).toLowerCase();
   const index = lower.indexOf(q);
   if (index === -1) return text;
 
@@ -76,14 +79,17 @@ const highlightText = (text: string, query: string) => {
 
 const getPatientMatchScore = (patient: Patient, q: string): number => {
   if (!q) return 1;
-  const cleanQ = q.toLowerCase();
-  const id = (patient.id || '').toLowerCase();
+  const fileOnly = q.startsWith('#');
+  const cleanQ = normalizeDigits(q.replace(/^#\s*/, '').trim()).toLowerCase();
+  if (!cleanQ) return 1;
+  const id = normalizeDigits(patient.id || '').toLowerCase();
   const name = (patient.name || '').toLowerCase();
-  const mobile = (patient.mobile || (patient as any).phone || '').replace(/\D/g, '');
+  const mobile = normalizeDigits(patient.mobile || (patient as any).phone || '').replace(/\D/g, '');
   const cleanQMobile = cleanQ.replace(/\D/g, '');
 
   if (id === cleanQ) return 100;
   if (id.startsWith(cleanQ)) return 90;
+  if (fileOnly) return id.includes(cleanQ) ? 50 : 0;
   if (name === cleanQ) return 85;
   if (name.startsWith(cleanQ)) return 80;
   if (cleanQMobile && mobile === cleanQMobile) return 75;
@@ -107,14 +113,16 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   onBackToHome
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
+  const canViewRemainingBalance = !currentUser || Boolean(currentUser.permissions.viewRemainingBalance ?? currentUser.permissions.patientFinance);
   
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [activeFilter, setActiveFilter] = useState<FilterChip>('all');
-  const [showAmounts, setShowAmounts] = useState(!isPrivacyMode);
+  const [showAmounts, setShowAmounts] = useState(!isPrivacyMode && canViewRemainingBalance);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  useEffect(() => { setShowAmounts(!isPrivacyMode); }, [isPrivacyMode]);
+  useEffect(() => { setShowAmounts(!isPrivacyMode && canViewRemainingBalance); }, [isPrivacyMode, canViewRemainingBalance]);
+  useEffect(() => { if (!canViewRemainingBalance && activeFilter === 'debt') setActiveFilter('all'); }, [canViewRemainingBalance, activeFilter]);
 
   // Modals & Bottom Sheets State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -154,6 +162,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [mobile, setMobile] = useState('');
   const [age, setAge] = useState<number | ''>('');
   const [allergy, setAllergy] = useState('');
+  const [showMedicalField, setShowMedicalField] = useState(false);
   const [notes, setNotes] = useState('');
 
   // Auto suggest next file number
@@ -175,6 +184,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     setMobile('');
     setAge('');
     setAllergy('');
+    setShowMedicalField(false);
     setNotes('');
     setIsModalOpen(true);
   };
@@ -188,6 +198,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     setMobile(p.mobile);
     setAge(p.age);
     setAllergy(p.allergy || '');
+    setShowMedicalField(false);
     setNotes(p.notes || '');
     setIsModalOpen(true);
   };
@@ -379,7 +390,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
         const metrics = getPatientMetrics(p);
         if (activeFilter === 'todayAppt' && !metrics.hasTodayAppointment) return false;
         if (activeFilter === 'ongoing' && !metrics.hasIncompleteTreatment) return false;
-        if (activeFilter === 'debt' && metrics.totalRemain <= 0) return false;
+        if (activeFilter === 'debt' && canViewRemainingBalance && metrics.totalRemain <= 0) return false;
         if (activeFilter === 'allergy' && !metrics.hasAllergy) return false;
         if (activeFilter === 'lab' && !metrics.hasLabCase) return false;
         if (activeFilter === 'noAppt' && metrics.hasTodayAppointment) return false;
@@ -390,355 +401,123 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .map(item => item.patient);
-  }, [patients, deferredSearchQuery, activeFilter, appointments, labCases]);
+  }, [patients, deferredSearchQuery, activeFilter, appointments, labCases, canViewRemainingBalance]);
 
   const isDoctor = currentUser?.role === 'doctor' || !currentUser?.role;
+  const canEditPatient = !currentUser || currentUser.permissions.patientEdit === true;
+  const canBookAppointment = Boolean(onSaveAppointment) && (!currentUser || currentUser.permissions.appointments === true);
+  const canDeletePatient = currentUser ? currentUser.permissions?.deletePatients === true : isDoctor;
+  const primaryFilters: { id: FilterChip; label: string; icon?: React.ReactNode }[] = [
+    { id: 'all', label: 'الكل' },
+    { id: 'todayAppt', label: 'مواعيد اليوم', icon: <Calendar /> },
+    { id: 'ongoing', label: 'علاج جارٍ', icon: <Activity /> },
+    { id: 'debt', label: 'رصيد متبقٍ', icon: <DollarSign /> }
+  ];
+  const extraFilters: { id: FilterChip; label: string; icon: React.ReactNode }[] = [
+    { id: 'lab', label: 'تركيبات', icon: <Microscope /> },
+    { id: 'noAppt', label: 'بدون موعد اليوم', icon: <Calendar /> },
+    { id: 'allergy', label: 'معلومات طبية مسجّلة', icon: <FileText /> }
+  ];
+  const renderFilter = (filter: { id: FilterChip; label: string; icon?: React.ReactNode }) => (
+    <button key={filter.id} type="button" onClick={() => setActiveFilter(filter.id)}
+      aria-pressed={activeFilter === filter.id}
+      className={'patients-filter' + (activeFilter === filter.id ? ' patients-filter--active' : '')}>
+      {filter.icon}<span>{filter.label}</span><span className="patients-filter-count">{filterCounts[filter.id]}</span>
+    </button>
+  );
 
   return (
     <div
-      className="space-y-2 max-w-7xl mx-auto py-1 font-['Cairo',sans-serif] dir-rtl relative select-none"
+      className="patients-directory max-w-7xl mx-auto font-['Cairo',sans-serif] dir-rtl"
     >
-      {/* 1. Smart Collapsing Top Bar Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="text-sm text-slate-600">اختر ملف المريض لحجز موعد أو تسجيل دفعة.</p>
-        <button type="button" onClick={handleOpenAddModal} className="flex items-center gap-2 min-h-[44px] rounded-xl bg-purple-700 px-4 py-3 text-sm font-bold text-white"><UserPlus className="w-4 h-4" />إضافة مريض</button>
-      </div>
-      <div 
-        className="flex flex-wrap items-center justify-between gap-2.5 bg-white px-3.5 py-3 rounded-2xl border border-slate-200/90 shadow-sm"
-      >
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onBackToHome}
-            className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer active:scale-95 shrink-0"
-            title="رجوع للشاشة الرئيسية"
-          >
-            <ArrowRight className="w-4.5 h-4.5" />
-          </button>
+      <header className="patients-page-header">
+        <div className="patients-page-heading">
+          <button type="button" onClick={onBackToHome} className="patients-icon-button" aria-label="العودة للرئيسية"><ArrowRight /></button>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base sm:text-lg font-black text-slate-900 font-tajawal tracking-tight">
-                فهرس المرضى
-              </h1>
-              <span className="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-900 text-xs font-mono font-black border border-purple-200/80">
-                {filteredPatients.length} / {patients.length}
-              </span>
-            </div>
+            <h1>المرضى</h1>
+            <p>{patients.length.toLocaleString('ar-EG')} ملف مسجّل في العيادة</p>
           </div>
         </div>
-
-        <button
-          type="button"
-          onClick={() => !isPrivacyMode && setShowAmounts(!showAmounts)}
-          disabled={isPrivacyMode}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95 shrink-0 min-h-[36px]"
-          title={showAmounts ? 'إخفاء المبالغ والمديونيات' : 'إظهار المبالغ والمديونيات'}
-        >
-          {showAmounts ? <EyeOff className="w-4 h-4 text-amber-600" /> : <Eye className="w-4 h-4 text-emerald-600" />}
-          <span className="hidden sm:inline">{showAmounts ? 'إخفاء المبالغ' : 'إظهار المبالغ'}</span>
-        </button>
-      </div>
-
-      {/* 2. Sticky Realtime Search Bar & Horizontal Filter Chips */}
-      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md py-1.5 space-y-1.5 border-b border-slate-200/70 -mx-3 px-3 sm:-mx-6 sm:px-6 shadow-2xs">
-        
-        {/* Instant Search Bar */}
-        <div className="relative">
-          <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onFocus={() => setIsSearchFocused(true)}
-            onBlur={() => setIsSearchFocused(false)}
-            placeholder="ابحث بالاسم أو الهاتف أو رقم الملف (#)..."
-            className={`w-full pl-9 pr-10 py-2 bg-slate-50 border rounded-xl text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 transition-all min-h-[40px] ${
-              isSearchFocused || searchQuery 
-                ? 'bg-white border-purple-600 ring-2 ring-purple-500/20 shadow-xs' 
-                : 'border-slate-200/90 hover:border-slate-300'
-            }`}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer transition-colors"
-              title="مسح البحث"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+        <div className="patients-page-actions">
+          {!isPrivacyMode && canViewRemainingBalance && <button type="button" onClick={() => setShowAmounts(!showAmounts)} className="patients-secondary-button">
+            {showAmounts ? <EyeOff /> : <Eye />}<span>{showAmounts ? 'إخفاء المبالغ' : 'إظهار المبالغ'}</span>
+          </button>}
+          {canEditPatient && <button type="button" onClick={handleOpenAddModal} className="patients-add-button"><UserPlus /><span>إضافة مريض</span></button>}
         </div>
+      </header>
 
-        {/* Compact Horizontal Scroll Filter Chips (With Dynamic Counters) */}
-        <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-          <button
-            type="button"
-            onClick={() => setActiveFilter('all')}
-            className={`px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'all'
-                ? 'bg-purple-700 text-white shadow-xs ring-2 ring-purple-600/30'
-                : 'bg-slate-100 text-slate-700 border border-slate-200/80 hover:bg-slate-200'
-            }`}
-          >
-            الكل ({filterCounts.all})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('todayAppt')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'todayAppt'
-                ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-500/30'
-                : 'bg-sky-50 text-sky-800 border border-sky-200/80 hover:bg-sky-100'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>موعد اليوم ({filterCounts.todayAppt})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('ongoing')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'ongoing'
-                ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-500/30'
-                : 'bg-emerald-50 text-emerald-800 border border-emerald-200/80 hover:bg-emerald-100'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>علاج جارٍ ({filterCounts.ongoing})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('debt')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'debt'
-                ? 'bg-amber-600 text-white shadow-xs ring-2 ring-amber-500/30'
-                : 'bg-amber-50 text-amber-800 border border-amber-200/80 hover:bg-amber-100'
-            }`}
-          >
-            <DollarSign className="w-3.5 h-3.5" />
-            <span>رصيد متبقٍ ({filterCounts.debt})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('allergy')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'allergy'
-                ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-500/30'
-                : 'bg-rose-50 text-rose-800 border border-rose-200/80 hover:bg-rose-100'
-            }`}
-          >
-            <ShieldAlert className="w-3.5 h-3.5" />
-            <span>حساسية ({filterCounts.allergy})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('lab')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'lab'
-                ? 'bg-purple-600 text-white shadow-xs ring-2 ring-purple-500/30'
-                : 'bg-purple-50 text-purple-800 border border-purple-200/80 hover:bg-purple-100'
-            }`}
-          >
-            <Microscope className="w-3.5 h-3.5" />
-            <span>تركيبات ({filterCounts.lab})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveFilter('noAppt')}
-            className={`flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 text-xs ${
-              activeFilter === 'noAppt'
-                ? 'bg-slate-800 text-white shadow-xs'
-                : 'bg-white text-slate-700 border border-slate-200/80 hover:bg-slate-100'
-            }`}
-          >
-            <span>بدون موعد اليوم ({filterCounts.noAppt})</span>
-          </button>
-
-          {(searchQuery || activeFilter !== 'all') && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setActiveFilter('all');
-              }}
-              className="mr-auto text-rose-600 hover:text-rose-700 font-black hover:underline cursor-pointer px-2 py-1 text-xs shrink-0"
-            >
-              مسح الفلاتر
-            </button>
-          )}
+      <section className="patients-search-panel" aria-label="البحث في المرضى">
+        <div className="patients-search-heading">
+          <label htmlFor="patients-directory-search" className="patients-search-label">ابحث بالاسم أو رقم الملف أو الهاتف</label>
+          <p id="patients-search-results" role="status">{filteredPatients.length.toLocaleString('ar-EG')} {searchQuery || activeFilter !== 'all' ? 'نتيجة' : 'ملفات'}</p>
         </div>
-      </div>
+        <div className={'patients-search-control' + (isSearchFocused ? ' patients-search-control--focused' : '')}>
+          <Search aria-hidden="true" className="patients-search-icon" />
+          <input id="patients-directory-search" type="search" autoComplete="off"
+            value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            onFocus={() => setIsSearchFocused(true)} onBlur={() => setIsSearchFocused(false)}
+            placeholder="الاسم، رقم الملف، أو الهاتف"
+            aria-describedby="patients-search-results" />
+          {searchQuery && <button type="button" onClick={() => setSearchQuery('')} className="patients-search-clear" aria-label="مسح البحث"><X /></button>}
+        </div>
+        <div className="patients-filter-toolbar">
+          <details className="patients-extra-filters">
+          <summary><SlidersHorizontal /><span>تصفية القائمة</span>
+            {activeFilter !== 'all' && <span className="patients-selected-filter">{[...primaryFilters, ...extraFilters].find(filter => filter.id === activeFilter)?.label}</span>}
+            <ChevronDown className="patients-extra-chevron" />
+          </summary>
+          <div className="patients-filters-row" aria-label="فلاتر المرضى">{primaryFilters.filter(filter => filter.id !== 'debt' || canViewRemainingBalance).map(renderFilter)}{extraFilters.map(renderFilter)}</div>
+          </details>
+          {(searchQuery || activeFilter !== 'all') && <button type="button" onClick={() => { setSearchQuery(''); setActiveFilter('all'); }} className="patients-reset-button">مسح البحث والفلاتر</button>}
+        </div>
+      </section>
 
-      {/* 3. Patient Cards Grid */}
-      <div className="pb-28 sm:pb-12">
+      <section className="patients-list" aria-label="قائمة المرضى">
         {filteredPatients.length === 0 ? (
           <EmptyState
-            message={searchQuery || activeFilter !== 'all' ? 'لا توجد حالات تطابق فلاتر البحث الحالية' : 'لا توجد حالات مسجلة في الفهرس بعد'}
-            description={searchQuery || activeFilter !== 'all' ? 'جرّب تغيير كلمات البحث أو اختر فلتر آخر' : 'ابدأ بإضافة أول ملف مريض لتنظيم العيادة'}
-            ctaLabel={searchQuery || activeFilter !== 'all' ? 'إلغاء الفلاتر' : 'إضافة أول حالة'}
-            onCtaClick={searchQuery || activeFilter !== 'all' ? () => { setSearchQuery(''); setActiveFilter('all'); } : handleOpenAddModal}
+            message={searchQuery || activeFilter !== 'all' ? 'لا يوجد مرضى مطابقون للبحث' : 'لا توجد ملفات مرضى بعد'}
+            description={searchQuery || activeFilter !== 'all' ? 'جرّب اسمًا أو رقم ملف أو هاتفًا مختلفًا، أو امسح الفلاتر.' : 'أضف أول مريض لبدء تنظيم ملفات العيادة.'}
+            ctaLabel={searchQuery || activeFilter !== 'all' ? 'مسح البحث والفلاتر' : canEditPatient ? 'إضافة مريض' : undefined}
+            onCtaClick={searchQuery || activeFilter !== 'all' ? () => { setSearchQuery(''); setActiveFilter('all'); } : canEditPatient ? handleOpenAddModal : undefined}
           />
         ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-2.5">
+            <div className="patients-list-heading" aria-hidden="true">
+              <span>المريض ورقم الملف</span><span>الهاتف والسن</span><span>أول زيارة</span><span>حالة الملف</span><span />
+            </div>
+            <div className="patients-list-body">
               {filteredPatients.slice(0, visibleCount).map(p => {
                 const metrics = getPatientMetrics(p);
-
-              // Compile badges list for patient
-              const activeBadges: React.ReactNode[] = [];
-
-              if (metrics.hasTodayAppointment) {
-                activeBadges.push(
-                  <span key="today" className="font-bold bg-sky-50 text-sky-800 border border-sky-200/90 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0" />
-                    <span>📅 اليوم</span>
-                  </span>
-                );
-              }
-
-              if (metrics.hasIncompleteTreatment) {
-                activeBadges.push(
-                  <span key="ongoing" className="font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/90 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span>🦷 علاج جاري</span>
-                  </span>
-                );
-              }
-
-              if (metrics.totalRemain > 0) {
-                activeBadges.push(
-                  <span key="debt" className="font-black bg-amber-50 text-amber-900 border border-amber-200/90 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                    <span>
-                      {showAmounts ? `💰 مديونية: ${metrics.totalRemain.toLocaleString()} ج` : '💰 مديونية'}
-                    </span>
-                  </span>
-                );
-              }
-
-              if (metrics.hasAllergy) {
-                activeBadges.push(
-                  <span key="allergy" className="font-bold bg-rose-50 text-rose-800 border border-rose-200/90 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                    <span>⚠️ حساسية</span>
-                  </span>
-                );
-              }
-
-              if (metrics.hasLabCase) {
-                activeBadges.push(
-                  <span key="lab" className="font-bold bg-purple-50 text-purple-800 border border-purple-200/90 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
-                    <span>🦷 تركيبات</span>
-                  </span>
-                );
-              }
-
-              const visibleBadges = activeBadges.slice(0, 3);
-              const extraBadgesCount = activeBadges.length > 3 ? activeBadges.length - 3 : 0;
-
-              return (
-                <div
-                  key={p.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`فتح ملف ${p.name}، رقم ${p.id}`}
-                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onSelectPatient(p.id, 'patients'); } }}
-                  onClick={() => onSelectPatient(p.id, 'patients')}
-                  className="group relative bg-white hover:bg-purple-50/30 active:bg-purple-100/40 rounded-2xl border border-slate-200/90 hover:border-purple-300/80 p-2.5 sm:p-3 shadow-2xs hover:shadow-xs transition-all duration-150 cursor-pointer touch-manipulation flex flex-col justify-between space-y-1.5 active:scale-[0.985] content-visibility-auto"
-                >
-                  {/* Card Row 1: Prominent Patient Name, Subtle File Badge, Far-Left 44x44 Touch Target Three-Dots Button */}
-                  <div className="flex items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <h3 className="font-black text-sm sm:text-base text-slate-900 truncate font-tajawal group-hover:text-purple-950 transition-colors leading-tight">
-                        {highlightText(p.name, searchQuery)}
-                      </h3>
-                      <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-mono font-bold text-[10px] shrink-0 border border-slate-200/80">
-                        #{highlightText(p.id, searchQuery)}
-                      </span>
+                return (
+                  <div key={p.id} role="button" tabIndex={0} aria-label={'فتح ملف ' + p.name + '، رقم ' + p.id}
+                    onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onSelectPatient(p.id, 'patients'); } }}
+                    onClick={() => onSelectPatient(p.id, 'patients')} className="patient-directory-row">
+                    <div className="patient-row-identity">
+                      <span className="patient-file-number"><span className="patient-file-number-label">ملف</span><b dir="ltr">{highlightText(p.id, searchQuery)}</b></span>
+                      <h2 className="patient-row-name">{highlightText(p.name, searchQuery)}</h2>
                     </div>
-
-                    {/* Far Left Options Button (Three Dots) with comfortable 44x44px touch area */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveBottomSheetPatient(p);
-                      }}
-                      className="w-11 h-11 min-w-[44px] min-h-[44px] -ml-1.5 -mt-1 rounded-xl hover:bg-slate-100 active:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors flex items-center justify-center cursor-pointer shrink-0"
-                      title="خيارات الإجراءات"
-                    >
-                      <MoreVertical className="w-4.5 h-4.5 text-slate-500" />
-                    </button>
+                    <div className="patient-row-contact">
+                      {p.mobile ? <a href={'tel:' + p.mobile} dir="ltr" onClick={e => e.stopPropagation()} aria-label={'الاتصال بـ ' + p.name} className="patient-row-phone"><Phone />{highlightText(p.mobile, searchQuery)}</a> : <span className="patient-row-muted">بدون رقم هاتف</span>}
+                      <span className="patient-row-age">{p.age} سنة</span>
+                    </div>
+                    <div className="patient-row-visit"><span className="patient-row-mobile-label">أول زيارة</span><time dateTime={p.firstVisit || undefined}>{p.firstVisit || 'غير مسجّلة'}</time></div>
+                    <div className="patient-row-status">
+                      {metrics.hasTodayAppointment && <span className="patient-status patient-status--today"><Calendar />موعد اليوم</span>}
+                      {metrics.hasIncompleteTreatment && <span className="patient-status">علاج جارٍ</span>}
+                      {metrics.hasLabCase && <span className="patient-status">تركيبات</span>}
+                      {canViewRemainingBalance && metrics.totalRemain > 0 && <span className="patient-status">{showAmounts && !isPrivacyMode ? 'متبقٍ ' + metrics.totalRemain.toLocaleString('ar-EG') + ' ج.م' : 'رصيد متبقٍ'}</span>}
+                      {metrics.hasAllergy && <span className="patient-status patient-status--medical" title="توجد معلومات طبية مسجّلة داخل الملف"><FileText />معلومة طبية مسجّلة</span>}
+                      {!metrics.hasTodayAppointment && !metrics.hasIncompleteTreatment && !metrics.hasLabCase && (!canViewRemainingBalance || !metrics.totalRemain) && !metrics.hasAllergy && <span className="patient-row-muted">ملف المريض</span>}
+                    </div>
+                    <button type="button" onClick={e => { e.stopPropagation(); setActiveBottomSheetPatient(p); }} className="patients-icon-button patient-row-options" aria-label={'خيارات ملف ' + p.name}><MoreVertical /></button>
                   </div>
-
-                  {/* Card Row 2: Direct Call Phone + Age + Last Visit Info */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 font-medium">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {p.mobile ? (
-                        <a
-                          href={`tel:${p.mobile}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="flex items-center gap-1 text-[11px] font-medium text-slate-700 hover:text-purple-700 font-mono dir-ltr p-0.5 rounded hover:bg-purple-50 transition-colors"
-                          title="اضغط للاتصال المباشر"
-                        >
-                          <Phone className="w-4 h-4 text-purple-600 shrink-0" />
-                          <span>{highlightText(p.mobile || (p as any).phone || '—', searchQuery)}</span>
-                        </a>
-                      ) : (
-                        <div className="flex items-center gap-1 text-[11px] font-medium text-slate-400 font-mono dir-ltr">
-                          <Phone className="w-4 h-4 text-slate-300 shrink-0" />
-                          <span>—</span>
-                        </div>
-                      )}
-                      <span className="text-slate-300">•</span>
-                      <span className="text-[11px] font-tajawal font-medium text-slate-600 shrink-0">{p.age} سنة</span>
-                    </div>
-
-                    {p.firstVisit && (
-                      <span className="text-[10px] text-slate-500 font-tajawal truncate shrink-0 font-medium">
-                        أول زيارة: {p.firstVisit}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Card Row 3: Compact Unified Status Badges (Max 3 Badges + Overflow pill) */}
-                  {activeBadges.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-slate-100 text-[10px] font-tajawal">
-                      {visibleBadges}
-                      {extraBadgesCount > 0 && (
-                        <span className="font-bold bg-slate-100 text-slate-700 border border-slate-200/90 px-1.5 py-0.5 rounded text-[10px] shrink-0">
-                          +{extraBadgesCount}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {visibleCount < filteredPatients.length && (
-            <div className="pt-3 pb-2 text-center">
-              <button
-                type="button"
-                onClick={() => setVisibleCount(prev => prev + 30)}
-                className="px-6 py-2.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-900 text-xs font-black border border-purple-200 transition-colors cursor-pointer shadow-xs active:scale-95"
-              >
-                عرض المزيد من الحالات ({filteredPatients.length - visibleCount} حالة متبقية)
-              </button>
+                );
+              })}
             </div>
-          )}
-        </>
+            {visibleCount < filteredPatients.length && <div className="patients-show-more"><button type="button" onClick={() => setVisibleCount(prev => prev + 30)} className="patients-secondary-button">عرض المزيد ({filteredPatients.length - visibleCount} مريض)</button></div>}
+          </>
         )}
-      </div>
-
+      </section>
 
       {/* 5. Touch Options Bottom Sheet (قائمة الخيارات السريعة للمريض) */}
       {activeBottomSheetPatient && (
@@ -797,7 +576,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </button>
 
               {/* 2. Edit Patient Info */}
-              <button
+              {canEditPatient && <button
                 type="button"
                 onClick={() => handleOpenEditModal(activeBottomSheetPatient)}
                 className="w-full text-right p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-900 flex items-center gap-3 transition-colors cursor-pointer font-bold text-xs sm:text-sm font-tajawal min-h-[48px] active:scale-[0.99] border border-slate-200/60"
@@ -806,10 +585,10 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   <Edit3 className="w-4.5 h-4.5" />
                 </div>
                 <span>تعديل البيانات الأساسية</span>
-              </button>
+              </button>}
 
               {/* 3. Book New Appointment */}
-              {onSaveAppointment && <button
+              {canBookAppointment && <button
                 type="button"
                 onClick={() => {
                   const p = activeBottomSheetPatient;
@@ -887,7 +666,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               )}
 
               {/* 6. Delete Patient (Only visible for doctor role) */}
-              {isDoctor && (
+              {canDeletePatient && (
                 <button
                   type="button"
                   onClick={() => handleDelete(activeBottomSheetPatient)}
@@ -988,7 +767,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base sm:text-lg font-black text-purple-950 font-tajawal">
-                {editingPatient ? `تعديل ملف المريض #${editingPatient.id}` : 'إضافة حالة جديدة'}
+                {editingPatient ? `تعديل ملف المريض #${editingPatient.id}` : 'إضافة مريض'}
               </h2>
               <button
                 type="button"
@@ -1077,19 +856,17 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5 text-rose-700">
-                  <ShieldAlert className="w-3.5 h-3.5" />
-                  حساسية أو ملاحظات طبية خاصة
-                </label>
-                <input
-                  id="input-allergy"
-                  type="text"
-                  value={allergy}
-                  onChange={e => setAllergy(e.target.value)}
-                  placeholder="مثال: حساسية بنسلين، ضغط مرتفع، سكر..."
-                  className="w-full px-3.5 py-2.5 bg-rose-50/50 border border-rose-200 rounded-xl text-xs font-bold focus:outline-none focus:border-rose-500"
-                />
+              <div className="optional-medical-field">
+                <button type="button" onClick={() => setShowMedicalField(value => !value)} aria-expanded={showMedicalField} aria-controls="patient-optional-medical-field" className="optional-medical-trigger">
+                  <Plus aria-hidden="true" /><span>{allergy.trim() ? 'عرض أو تعديل المعلومة الطبية المسجّلة' : 'إضافة حساسية أو ملاحظة طبية'}</span><small>اختياري</small><ChevronDown aria-hidden="true" />
+                </button>
+                {!showMedicalField && allergy.trim() && <p className="optional-medical-saved">توجد معلومة طبية محفوظة في الملف.</p>}
+                {showMedicalField && <div id="patient-optional-medical-field" className="optional-medical-content">
+                  <label htmlFor="input-allergy">الحساسية أو الملاحظة الطبية</label>
+                  <textarea id="input-allergy" value={allergy} onChange={e => setAllergy(e.target.value)} rows={2}
+                    placeholder="اكتب المعلومة التي تحتاج مراعاتها أثناء العلاج" />
+                  <button type="button" onClick={() => setShowMedicalField(false)} className="optional-medical-hide">إخفاء الحقل</button>
+                </div>}
               </div>
 
               <div>

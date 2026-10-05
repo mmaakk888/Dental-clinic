@@ -28,6 +28,7 @@ interface HomeViewProps {
   onOpenDailyReport?: () => void;
   onOpenScheduleModal?: () => void;
   onOpenInvoiceModal?: () => void;
+  onOpenPayment?: () => void;
 }
 
 type Tone = 'indigo' | 'emerald' | 'amber' | 'rose' | 'purple' | 'teal';
@@ -72,7 +73,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   clinicName, labels, activeLabCount,
   onNavigate, currentUser, patients = [], appointments = [], expenses = [],
   isPrivacyMode = false, onSelectPatient, onOpenWalkIn, onOpenDailyReport,
-  onOpenScheduleModal, onOpenInvoiceModal
+  onOpenScheduleModal, onOpenInvoiceModal, onOpenPayment
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -168,7 +169,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         {canAppointments && <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الحضور'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />}
         {canViewCollections && <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note={canReports ? 'عرض تفاصيل التحصيل اليومي' : 'إجمالي المبالغ المحصّلة اليوم'} icon={<Banknote />} tone="emerald"
           onClick={canReports ? () => onOpenDailyReport ? onOpenDailyReport() : onNavigate('summary') : undefined} />}
-        {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={() => onNavigate('summary')} />}
+        {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={canFinance ? () => onNavigate('summary') : undefined} />}
         {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
       </section>
 
@@ -201,7 +202,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
           <div className="dashboard-actions">
             {canWalkIn && onOpenWalkIn && <button type="button" onClick={onOpenWalkIn} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-indigo-100 text-indigo-700"><UserPlus /></span><span><strong>زيارة بدون موعد</strong><small>فتح ملف وتسجيل التحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
             {canAppointments && onOpenScheduleModal && <button type="button" onClick={onOpenScheduleModal} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-amber-100 text-amber-700"><Calendar /></span><span><strong>حجز موعد</strong><small>إضافة حجز جديد</small></span><ChevronLeft aria-hidden="true" /></button>}
-            {canRegisterPayment && <button type="button" onClick={() => onNavigate('secretary-desk')} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-emerald-100 text-emerald-700"><Banknote /></span><span><strong>تسجيل دفعة</strong><small>تحصيل مبلغ من مريض</small></span><ChevronLeft aria-hidden="true" /></button>}
+            {canRegisterPayment && <button type="button" onClick={() => onOpenPayment ? onOpenPayment() : onNavigate('patients')} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-emerald-100 text-emerald-700"><Banknote /></span><span><strong>تسجيل دفعة</strong><small>تحصيل مباشر من ملف المريض</small></span><ChevronLeft aria-hidden="true" /></button>}
             {canViewExpenses && onOpenInvoiceModal && <button type="button" onClick={onOpenInvoiceModal} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-rose-100 text-rose-700"><Receipt /></span><span><strong>إضافة فاتورة مصروف</strong><small>رفع الفاتورة ومراجعة بياناتها</small></span><ChevronLeft aria-hidden="true" /></button>}
             {canReports && onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action"><span aria-hidden="true" className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>تفاصيل الخدمات والتحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
           </div>

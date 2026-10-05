@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Expense, MaterialUsage } from '../../types';
 import { getInventory, getMonthlyMaterials } from '../../utils/inventory';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { localDateISO } from '../appointments/appointmentScheduling';
 
 interface Props {
   expenses: Expense[];
@@ -17,7 +18,7 @@ export function MaterialInventoryPanel({ expenses, usages, isPrivacyMode, onAddU
   const [selectedKey, setSelectedKey] = useState('');
   const [quantity, setQuantity] = useState<number | ''>('');
   const [kind, setKind] = useState<MaterialUsage['kind']>('used');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(localDateISO);
   const [note, setNote] = useState('');
   const [search, setSearch] = useState('');
   const [month, setMonth] = useState(() => {

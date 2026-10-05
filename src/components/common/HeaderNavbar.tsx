@@ -130,6 +130,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
         setIsSearchOpen(false);
         setIsProfileMenuOpen(false);
         setIsSyncModalOpen(false);
+        setIsNotifOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -282,7 +283,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               onClick={() => setIsSyncModalOpen(true)}
               className={`h-9.5 sm:h-10 px-2 sm:px-2.5 rounded-xl flex items-center gap-1.5 border font-bold text-xs transition-all cursor-pointer shrink-0 touch-manipulation active:scale-95 min-h-[44px] ${
                 isSyncing
-                  ? 'bg-amber-50 border-amber-300 text-amber-800 animate-pulse'
+                  ? 'bg-amber-50 border-amber-300 text-amber-800'
                   : !isOnline
                   ? 'bg-sky-50 border-sky-300 text-sky-800'
                   : failedCount > 0
@@ -298,13 +299,13 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 </>
               ) : !isOnline ? (
                 <>
-                  <span className="w-2 h-2 rounded-full bg-sky-500 animate-ping shrink-0" />
+                  <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0" />
                   <WifiOff className="w-3.5 h-3.5 text-sky-700 shrink-0" />
                   <span className="hidden sm:inline font-tajawal text-[11px]">أوفلاين</span>
                 </>
               ) : failedCount > 0 ? (
                 <>
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-700 shrink-0 animate-bounce" />
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
                   <span className="hidden sm:inline font-tajawal text-[11px]">خطأ</span>
                 </>
               ) : (
@@ -322,10 +323,13 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               onClick={() => setIsNotifOpen(true)}
               className="relative w-9.5 h-9.5 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer border border-slate-200 shrink-0 touch-manipulation active:scale-95 min-h-[44px]"
               title="التنبيهات والإشعارات"
+              aria-label={totalNotifCount ? `التنبيهات والإشعارات (${totalNotifCount})` : 'التنبيهات والإشعارات'}
+              aria-expanded={isNotifOpen}
+              aria-controls="clinic-notifications-dialog"
             >
               <Bell className="w-4.5 h-4.5 text-slate-700" />
               {totalNotifCount > 0 && (
-                <span className="clinic-notification-count absolute -top-1 -right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center animate-pulse border border-white">
+                <span aria-hidden="true" className="clinic-notification-count absolute -top-1 -right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center border border-white">
                   {totalNotifCount > 9 ? '9+' : totalNotifCount}
                 </span>
               )}

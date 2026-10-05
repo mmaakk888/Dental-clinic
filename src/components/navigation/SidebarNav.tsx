@@ -59,13 +59,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       allowed: true 
     },
     { 
-      key: 'secretary-desk' as ActiveView, 
-      label: currentUser?.role === 'secretary' ? 'التحصيل والاستقبال' : 'مكتب التحصيل', 
-      desc: 'سندات المقبوضات وإدارة الحالات',
-      icon: <Smartphone className="w-5 h-5 text-emerald-400" />, 
-      allowed: true 
-    },
-    { 
       key: 'patients' as ActiveView, 
       label: 'فهرس المرضى', 
       desc: 'السجلات الطبية والشخصية',
@@ -109,7 +102,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
     { key: 'identity', label: 'الهوية والمظهر', icon: <Palette className="w-4 h-4 text-amber-400" /> },
     { key: 'layout', label: 'المحتوى والترتيب', icon: <Layout className="w-4 h-4 text-sky-400" /> },
     { key: 'services', label: 'الخدمات والأسعار', icon: <Sliders className="w-4 h-4 text-emerald-400" /> },
-    { key: 'whatsapp', label: 'أتمتة الواتساب', icon: <MessageCircle className="w-4 h-4 text-green-400" /> },
+    { key: 'whatsapp', label: 'إدارة واتساب', icon: <MessageCircle className="w-4 h-4 text-green-400" /> },
     { key: 'drugs', label: 'فهرس الأدوية', icon: <Pill className="w-4 h-4 text-purple-400" /> },
     { key: 'firebase', label: 'النسخ السحابي', icon: <Cloud className="w-4 h-4 text-blue-400" /> },
     { key: 'users', label: 'المستخدمين والصلاحيات', icon: <Users className="w-4 h-4 text-amber-300" /> },

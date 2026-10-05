@@ -334,14 +334,14 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onNavigate('secretary-desk');
+                      onNavigate('home');
                       onClose();
                     }}
                     className="p-3 rounded-2xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 text-right text-emerald-900 transition-all cursor-pointer group"
                   >
                     <div className="flex items-center gap-2 mb-1">
                       <FileText className="w-4 h-4 text-emerald-600" />
-                      <span className="font-extrabold text-xs">مكتب الاستقبال</span>
+                      <span className="font-extrabold text-xs">الرئيسية</span>
                     </div>
                     <span className="text-[10px] text-emerald-600 font-bold block">تسجيل وحضور اليوم</span>
                   </button>

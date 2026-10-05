@@ -7,7 +7,7 @@ import { ToothChart } from './ToothChart';
 import { WhatsAppComposer } from './WhatsAppComposer';
 import { PrescriptionAndInstructionsView } from './PrescriptionAndInstructionsView';
 import {
-  ArrowRight, Phone, MessageCircle, Edit3, Trash2, ShieldAlert, Plus,
+  ArrowRight, Phone, MessageCircle, Edit3, Trash2, Plus,
   ChevronDown, ChevronUp, DollarSign, Microscope, Calendar, CheckCircle,
   Clock, Copy, Send, CheckCircle2, UserCheck, XCircle, Share2, Mail,
   MessageSquare, MoreHorizontal, Sparkles, Activity, FileText, Check,
@@ -23,6 +23,7 @@ import { buildAppointmentReminderText, cleanEgyptianPhone, getWhatsAppUrl as for
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
 import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
+import '../patients/patientDirectory.css';
 
 const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const sessionBalance = (session: Session) => Math.max(0, session.amount - (session.discount || 0) - getSessionCollected(session));
@@ -226,6 +227,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [editAge, setEditAge] = useState<number | ''>(patient.age);
   const [editGender, setEditGender] = useState<'male' | 'female'>(patient.gender || 'male');
   const [editAllergy, setEditAllergy] = useState(patient.allergy || '');
+  const [showEditMedicalField, setShowEditMedicalField] = useState(false);
   const [editNotes, setEditNotes] = useState(patient.notes || '');
 
   const handleOpenEditPatient = () => {
@@ -235,6 +237,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     setEditAge(patient.age);
     setEditGender(patient.gender || 'male');
     setEditAllergy(patient.allergy || '');
+    setShowEditMedicalField(false);
     setEditNotes(patient.notes || '');
     setIsEditPatientModalOpen(true);
   };
@@ -765,11 +768,14 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
           </div>
         </div>
 
-        {/* Medical Warning Banner if Allergy exists */}
+        {/* Keep existing medical information visible without forcing a form field. */}
         {patient.allergy && patient.allergy.trim() !== '' && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-950 p-3 rounded-2xl flex items-center gap-3 text-xs font-bold animate-fadeIn">
-            <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
-            <span>تنبيه طبي وهام: المريض يعاني من ({patient.allergy})</span>
+          <div className="patient-medical-note">
+            <FileText className="w-5 h-5 shrink-0" aria-hidden="true" />
+            <div>
+              <strong>معلومة طبية مسجّلة</strong>
+              <p>{patient.allergy}</p>
+            </div>
           </div>
         )}
 
@@ -2131,15 +2137,34 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 mb-1">التنبيه الطبي / الحساسية (إن وجد)</label>
-                <input
-                  type="text"
-                  value={editAllergy}
-                  onChange={e => setEditAllergy(e.target.value)}
-                  placeholder="مثال: حساسية بنيسيلين، ضغط الدم..."
-                  className="w-full px-3.5 py-2 bg-rose-50 border border-rose-200 rounded-xl text-rose-900"
-                />
+              <div className="optional-medical-field">
+                <button
+                  type="button"
+                  className="optional-medical-trigger"
+                  aria-expanded={showEditMedicalField}
+                  aria-controls="patient-file-optional-medical-field"
+                  onClick={() => setShowEditMedicalField(value => !value)}
+                >
+                  <FileText className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>{showEditMedicalField ? 'إخفاء الحقل' : editAllergy.trim() ? 'عرض أو تعديل المعلومة الطبية المسجّلة' : 'إضافة حساسية أو ملاحظة طبية'}</span>
+                  <small>اختياري</small>
+                  <ChevronDown className="w-4 h-4 shrink-0" aria-hidden="true" />
+                </button>
+                {!showEditMedicalField && editAllergy.trim() && (
+                  <p className="optional-medical-saved">توجد معلومة طبية محفوظة في الملف.</p>
+                )}
+                {showEditMedicalField && (
+                  <div id="patient-file-optional-medical-field" className="optional-medical-content">
+                    <label htmlFor="input-edit-patient-allergy">الحساسية أو الملاحظة الطبية</label>
+                    <textarea
+                      id="input-edit-patient-allergy"
+                      rows={3}
+                      value={editAllergy}
+                      onChange={e => setEditAllergy(e.target.value)}
+                      placeholder="اكتب المعلومة الطبية عند الحاجة"
+                    />
+                  </div>
+                )}
               </div>
 
               <div>

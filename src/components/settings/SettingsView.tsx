@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { extraMessageTemplates } from '../../utils/whatsappUtils';
-import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown } from 'lucide-react';
+import { extraMessageTemplates, fillMessageTemplate } from '../../utils/whatsappUtils';
+import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown, FileText, Megaphone, Plug, Clock, Info } from 'lucide-react';
 import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
@@ -8,6 +8,25 @@ import { ClinicLogo } from '../common/ClinicLogo';
 import { AuditTrailView } from './AuditTrailView';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
+import './WhatsAppManagement.css';
+
+type WhatsAppTemplateKey = keyof WhatsappSettings['templates'];
+const whatsappTemplateCatalog: Array<{ key: WhatsAppTemplateKey; title: string; group: string; description: string; fallback: string }> = [
+  { key: 'reminderTomorrow', title: 'تذكير بالموعد', group: 'المواعيد والحساب', description: 'تذكير بموعد مسجل أو موعد تحدده يدويًا من ملف المريض.', fallback: 'أهلاً {patientName}، نذكرك بموعدك في {clinicName} يوم {date} الساعة {time}. يسعدنا حضورك.' },
+  { key: 'newAppt', title: 'تأكيد موعد جديد', group: 'المواعيد والحساب', description: 'رسالة بتفاصيل الحجز بعد الاتفاق مع المريض على الموعد.', fallback: 'أهلاً {patientName}، تم حجز موعدك في {clinicName} يوم {date} الساعة {time}. للاستفسار أو تعديل الموعد تواصل معنا.' },
+  { key: 'accountBalance', title: 'الرصيد المتبقي', group: 'المواعيد والحساب', description: 'رسالة فردية بالمتبقي على ملف المريض، تُراجع قبل الإرسال.', fallback: 'أهلاً {patientName}، المتبقي على ملفك رقم {fileNo} هو {remainingBalance} ج.م. لأي استفسار تواصل مع {clinicName}.' },
+  { key: 'postOp', title: 'تعليمات عامة بعد الجلسة', group: 'تعليمات المريض', description: 'مقدمة للتعليمات التي يحددها الطبيب حسب الحالة.', fallback: 'أهلاً {patientName}، نتمنى لك دوام الصحة.\nتعليمات الطبيب بعد الجلسة:\n[أضف التعليمات المناسبة للحالة]\nللاستفسار تواصل مع {clinicName}.' },
+  { key: 'extraction', title: 'تعليمات بعد الخلع', group: 'تعليمات المريض', description: 'تعليمات يراجعها الطبيب ويكملها قبل مشاركتها مع المريض.', fallback: extraMessageTemplates.extraction.text },
+  { key: 'filling', title: 'تعليمات بعد الحشو', group: 'تعليمات المريض', description: 'مقدمة قابلة للتخصيص بعد الحشو، وفق تعليمات الطبيب.', fallback: extraMessageTemplates.filling.text },
+  { key: 'rootCanal', title: 'تعليمات علاج العصب', group: 'تعليمات المريض', description: 'تعليمات الجلسة وموعد المتابعة الذي تختاره عند تجهيز الرسالة.', fallback: extraMessageTemplates.rootCanal.text },
+  { key: 'greeting', title: 'معايدة', group: 'رسائل الحملات', description: 'قالب لطيف للأعياد والمناسبات، للموافقين على الحملات.', fallback: extraMessageTemplates.greeting.text },
+  { key: 'offer', title: 'عرض أو إعلان', group: 'رسائل الحملات', description: 'أضف تفاصيل العرض ومدته قبل إعداد الحملة.', fallback: extraMessageTemplates.offer.text },
+];
+const whatsappVariables = [
+  { key: 'patientName', title: 'اسم المريض' }, { key: 'clinicName', title: 'اسم العيادة' },
+  { key: 'date', title: 'تاريخ الموعد' }, { key: 'time', title: 'وقت الموعد' },
+  { key: 'fileNo', title: 'رقم الملف' }, { key: 'remainingBalance', title: 'المتبقي' },
+];
 
 interface SettingsViewProps {
   activeSubTab?: string;
@@ -77,6 +96,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'identity' | 'layout' | 'services' | 'whatsapp' | 'drugs' | 'firebase' | 'users' | 'excel' | 'system' | 'audit'>(
     (externalSubTab as any) || 'identity'
   );
+  const selectedSettingsContent = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (externalSubTab) {
@@ -89,10 +109,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (onSubTabChange) {
       onSubTabChange(tab);
     }
+    requestAnimationFrame(() => {
+      if (!window.matchMedia('(max-width: 1023px)').matches) return;
+      selectedSettingsContent.current?.scrollIntoView({ block: 'start',
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    });
   };
 
   // WhatsApp Form State
   const [waState, setWaState] = useState<WhatsappSettings>({ ...whatsappSettings });
+  const [waSection, setWaSection] = useState<'templates' | 'campaigns' | 'connection'>('templates');
+  const waManagementRef = useRef<HTMLElement>(null);
+  const handleSelectWaSection = (section: 'templates' | 'campaigns' | 'connection') => {
+    setWaSection(section);
+    requestAnimationFrame(() => {
+      if (window.matchMedia('(max-width: 1023px)').matches) waManagementRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    });
+  };
+  const [waTemplateKey, setWaTemplateKey] = useState<WhatsAppTemplateKey>('reminderTomorrow');
+  const waEditorRef = useRef<HTMLTextAreaElement>(null);
+  const previousWhatsappSettings = useRef(whatsappSettings);
+  useEffect(() => {
+    const previous = previousWhatsappSettings.current as WhatsappSettings;
+    setWaState(current => ({
+      ...whatsappSettings,
+      templates: JSON.stringify(current.templates) === JSON.stringify(previous.templates) ? whatsappSettings.templates : current.templates,
+    }));
+    previousWhatsappSettings.current = whatsappSettings;
+  }, [whatsappSettings]);
+  const activeWhatsAppTemplate = whatsappTemplateCatalog.find(template => template.key === waTemplateKey)!;
+  const activeWhatsAppText = waState.templates[waTemplateKey] ?? activeWhatsAppTemplate.fallback;
+  const hasWhatsappChanges = JSON.stringify(waState.templates) !== JSON.stringify(whatsappSettings.templates);
+  const whatsappPreviewDate = new Date();
+  whatsappPreviewDate.setDate(whatsappPreviewDate.getDate() + 1);
+  const whatsappPreview = fillMessageTemplate(activeWhatsAppText, {
+    patientName: 'أحمد محمد', clinicName, fileNo: '٤٠١', remainingBalance: '٥٠٠',
+    date: whatsappPreviewDate.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }), time: '٥:٣٠ مساءً',
+  });
+  const unknownWhatsappVariables = Array.from(new Set((activeWhatsAppText.match(/\{[^{}]+\}/g) || [])
+    .filter(token => !whatsappVariables.some(variable => token === `{${variable.key}}`))));
+  const updateWhatsAppTemplate = (value: string) => setWaState(current => ({ ...current, templates: { ...current.templates, [waTemplateKey]: value } }));
+  const insertWhatsAppVariable = (variable: string) => {
+    const editor = waEditorRef.current as HTMLTextAreaElement | null;
+    const start = editor?.selectionStart ?? activeWhatsAppText.length;
+    const end = editor?.selectionEnd ?? start;
+    const token = `{${variable}}`;
+    updateWhatsAppTemplate(activeWhatsAppText.slice(0, start) + token + activeWhatsAppText.slice(end));
+    requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
+  };
 
   // Drug Catalog Form State
   const [catalogList, setCatalogList] = useState<DrugCatalogItem[]>([...drugCatalog]);
@@ -587,8 +651,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleSaveWhatsappForm = (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveWhatsappSettings(waState);
-    showToast('تم حفظ قوالب الواتساب؛ الإرسال الحالي يدوي', 'success');
+    if (!hasWhatsappChanges) return;
+    try {
+      onSaveWhatsappSettings(waState);
+      showToast('تم حفظ الرسائل الجاهزة', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذّر حفظ الرسائل. احتفظ بتعديلاتك وحاول مرة أخرى.', 'error');
+    }
   };
 
   const handleOpenAddDrug = () => {
@@ -780,7 +849,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 { key: 'identity', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
                 { key: 'layout', label: 'المحتوى والترتيب', description: 'ترتيب واجهة الشاشة والتسميات', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
                 { key: 'services', label: 'الخدمات والأسعار', description: 'أنواع العلاجات وتصنيفات الحشو', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
-                { key: 'whatsapp', label: 'أتمتة الواتساب', description: 'رسائل التذكير والتأكيد التلقائية', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
+                { key: 'whatsapp', label: 'إدارة واتساب', description: 'الرسائل الجاهزة والحملات والربط', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
                 { key: 'drugs', label: 'فهرس الأدوية', description: 'دليل الوصفات والجرعات للروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
                 { key: 'firebase', label: 'النسخ السحابي', description: 'مزامنة Firebase والنسخ الاحتياطي', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
                 { key: 'users', label: 'المستخدمين والصلاحيات', description: 'إدارة أطقم العمل وحسابات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },
@@ -827,7 +896,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {/* Selected Settings Content Panel Column */}
-        <div className="lg:col-span-9 min-w-0 animate-fadeIn">
+        <div ref={selectedSettingsContent} className="lg:col-span-9 min-w-0 animate-fadeIn scroll-mt-4">
         {/* 1. Identity & Theme SubTab */}
         {activeSubTab === 'identity' && (
           <form onSubmit={handleSaveIdentity} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
@@ -1260,88 +1329,89 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* WhatsApp Integration SubTab */}
         {activeSubTab === 'whatsapp' && (
-          <div className="space-y-5">
-          <form onSubmit={handleSaveWhatsappForm} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                  <MessageCircle className="w-5 h-5 text-emerald-600" />
-                  رسائل واتساب والقوالب
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  الوضع الحالي: تجهيز الرسالة وفتح واتساب للإرسال بنفسك.
-                </p>
-              </div>
-
-              <button
-                type="submit"
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md cursor-pointer flex items-center gap-1.5"
-              >
-                <Save className="w-4 h-4" />
-                حفظ إعدادات الواتساب
-              </button>
-            </div>
-
-            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">الإرسال التلقائي غير متصل. سيُتاح بعد ربط الخدمة الرسمية بخادم آمن والتحقق من الاتصال. لا تضع مفاتيح سرية في المتصفح.</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.entries(extraMessageTemplates).map(([key, preset]) => <label key={key} className="block text-sm font-bold text-slate-700">
-                {preset.title}
-                <textarea rows={5} value={waState.templates[key as keyof typeof extraMessageTemplates] ?? preset.text}
-                  onChange={e => setWaState({ ...waState, templates: { ...waState.templates, [key]: e.target.value } })}
-                  className="mt-2 w-full p-3 border border-slate-300 rounded-xl font-normal" />
-              </label>)}
-            </div>
-            <p className="text-sm text-slate-600">قوالب التعليمات مقدمات قابلة للتعديل؛ يضيف الطبيب التعليمات المناسبة للحالة قبل الإرسال.</p>
-            <div className="space-y-4 pt-2">
-              <h4 className="text-xs font-bold text-slate-800 font-tajawal">
-                تعديل قوالب الرسائل الديناميكية (يمكنك استخدام المتغيرات: &#123;patientName&#125;, &#123;date&#125;, &#123;time&#125;, &#123;clinicName&#125;, &#123;fileNo&#125;, &#123;remainingBalance&#125;):
-              </h4>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <section ref={waManagementRef} className="wa-management scroll-mt-4" dir="rtl" aria-labelledby="wa-management-title">
+            <header className="wa-management-header">
+              <div className="wa-section-identity">
+                <span className="wa-section-symbol"><MessageCircle size={23} /></span>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">قالب تذكير الموعد (Reminder)</label>
-                  <textarea
-                    rows={3}
-                    value={waState.templates.reminderTomorrow}
-                    onChange={e => setWaState({ ...waState, templates: { ...waState.templates, reminderTomorrow: e.target.value } })}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">قالب الموعد الجديد (New Appt)</label>
-                  <textarea
-                    rows={3}
-                    value={waState.templates.newAppt}
-                    onChange={e => setWaState({ ...waState, templates: { ...waState.templates, newAppt: e.target.value } })}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">قالب تعليمات ما بعد الجلسة (Post-Op)</label>
-                  <textarea
-                    rows={3}
-                    value={waState.templates.postOp}
-                    onChange={e => setWaState({ ...waState, templates: { ...waState.templates, postOp: e.target.value } })}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">قالب إشعارات الرصيد والمتبقي (Account Balance)</label>
-                  <textarea
-                    rows={3}
-                    value={waState.templates.accountBalance}
-                    onChange={e => setWaState({ ...waState, templates: { ...waState.templates, accountBalance: e.target.value } })}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
-                  />
+                  <h2 id="wa-management-title">إدارة واتساب</h2>
+                  <p>رسائل العيادة في مكان واحد، من تجهيز النص إلى مراجعته مع المريض.</p>
                 </div>
               </div>
+              <span className="wa-mode-badge"><span /> الإرسال الحالي يدوي</span>
+            </header>
+            <nav className="wa-section-navigation" aria-label="أقسام إدارة واتساب">
+              {[
+                { key: 'templates' as const, title: 'الرسائل الجاهزة', icon: FileText },
+                { key: 'campaigns' as const, title: 'الحملات', icon: Megaphone },
+                { key: 'connection' as const, title: 'الربط المستقبلي', icon: Plug },
+              ].map(section => <button key={section.key} type="button" aria-pressed={waSection === section.key} onClick={() => handleSelectWaSection(section.key)} className={waSection === section.key ? 'is-active' : ''}>
+                <section.icon size={18} /><span>{section.title}</span>
+              </button>)}
+            </nav>
+
+            <div hidden={waSection !== 'templates'}>
+              <form onSubmit={handleSaveWhatsappForm} className="wa-panel">
+                <div className="wa-panel-heading">
+                  <div><h3>الرسائل الجاهزة</h3><p>اختر الرسالة، عدّلها، ثم راجع شكلها قبل الحفظ.</p></div>
+                  <button type="submit" className="wa-button wa-button-primary" disabled={!hasWhatsappChanges}><Save size={17} /> حفظ الرسائل</button>
+                </div>
+                <div className="wa-template-select">
+                  <label htmlFor="wa-template-select">الرسالة التي تريد تعديلها</label>
+                  <select id="wa-template-select" value={waTemplateKey} onChange={event => setWaTemplateKey(event.target.value as WhatsAppTemplateKey)}>
+                    {['المواعيد والحساب', 'تعليمات المريض', 'رسائل الحملات'].map(group => <optgroup key={group} label={group}>
+                      {whatsappTemplateCatalog.filter(template => template.group === group).map(template => <option key={template.key} value={template.key}>{template.title}</option>)}
+                    </optgroup>)}
+                  </select>
+                </div>
+                <div className="wa-template-layout">
+                  <aside className="wa-template-list" aria-label="اختيار الرسالة الجاهزة">
+                    {['المواعيد والحساب', 'تعليمات المريض', 'رسائل الحملات'].map(group => <div key={group}>
+                      <h4>{group}</h4>
+                      {whatsappTemplateCatalog.filter(template => template.group === group).map(template => <button key={template.key} type="button" aria-pressed={waTemplateKey === template.key} onClick={() => setWaTemplateKey(template.key)} className={waTemplateKey === template.key ? 'is-active' : ''}>{template.title}<ChevronLeft size={15} /></button>)}
+                    </div>)}
+                  </aside>
+                  <div className="wa-editor-layout">
+                    <div className="wa-template-editor">
+                      <div className="wa-editor-heading"><div><h4>{activeWhatsAppTemplate.title}</h4><p>{activeWhatsAppTemplate.description}</p></div></div>
+                      <label htmlFor="wa-template-text" className="wa-field-label">نص الرسالة</label>
+                      <textarea id="wa-template-text" ref={waEditorRef} rows={9} value={activeWhatsAppText} onChange={event => updateWhatsAppTemplate(event.target.value)} placeholder="اكتب نص الرسالة هنا…" />
+                      <div className="wa-editor-meta"><span>{activeWhatsAppText.length.toLocaleString('ar-EG')} حرف</span><span>{hasWhatsappChanges ? 'تعديلات لم تُحفظ بعد' : 'لا توجد تعديلات غير محفوظة'}</span></div>
+                      <div className="wa-variable-section">
+                        <h5>أضف بيانات المريض تلقائيًا</h5>
+                        <p>اضغط على البيان لإضافته في موضع الكتابة. تُستبدل قيمته عند تجهيز رسالة المريض.</p>
+                        <div className="wa-variable-buttons">{whatsappVariables.map(variable => <button key={variable.key} type="button" onClick={() => insertWhatsAppVariable(variable.key)} title={`إضافة {${variable.key}}`}><span>{variable.title}</span><code dir="ltr">{`{${variable.key}}`}</code></button>)}</div>
+                      </div>
+                      {unknownWhatsappVariables.length > 0 && <p className="wa-inline-notice" role="status">هذه البيانات غير مدعومة وتحتاج تعديلًا: {unknownWhatsappVariables.join('، ')}.</p>}
+                      {activeWhatsAppTemplate.group === 'تعليمات المريض' && <p className="wa-context-note"><Info size={16} /> يراجع الطبيب التعليمات ويكمل تفاصيل الحالة قبل إرسالها للمريض.</p>}
+                    </div>
+                    <aside className="wa-message-preview" aria-label="معاينة الرسالة الجاهزة">
+                      <div className="wa-preview-caption"><span>معاينة الرسالة</span><small>بيانات تجريبية، بدون إرسال</small></div>
+                      <div className="wa-chat-header"><span className="wa-chat-avatar"><MessageCircle size={18} /></span><div><strong>{clinicName}</strong><small>رسالة من العيادة</small></div></div>
+                      <div className="wa-chat-body"><div className="wa-chat-bubble"><p>{whatsappPreview.trim() || 'ستظهر معاينة رسالتك هنا.'}</p><span className="wa-chat-time">٥:٠٠ م</span></div></div>
+                      <p className="wa-preview-footnote">تُراجع الرسالة النهائية من ملف المريض، وتُرسل من داخل واتساب.</p>
+                    </aside>
+                  </div>
+                </div>
+              </form>
             </div>
-          </form>
-          <WhatsAppCampaigns patients={patients} settings={waState} clinicName={clinicName} onSave={next => { setWaState(next); onSaveWhatsappSettings(next); }} />
-          </div>
+
+            <div hidden={waSection !== 'campaigns'}>
+              <WhatsAppCampaigns patients={patients} settings={waState} clinicName={clinicName} onSave={next => {
+                onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent });
+                setWaState(current => ({ ...current, campaignConsent: next.campaignConsent }));
+              }} />
+            </div>
+
+            <div hidden={waSection !== 'connection'} className="wa-panel wa-connection-panel">
+              <div className="wa-panel-heading"><div><h3>الربط المستقبلي</h3><p>مساحة مستقلة لتفعيل الاتصال الرسمي عندما يصبح جاهزًا.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div>
+              <div className="wa-connection-comparison">
+                <article className="wa-connection-current"><MessageCircle size={25} /><h4>الاستخدام المتاح الآن</h4><p>جهّز النص، اختر المريض، وافتح واتساب لمراجعة الرسالة وإرسالها يدويًا. يمكن إضافة رابط وصورة حسب دعم جهازك للمشاركة.</p><button type="button" className="wa-button wa-button-secondary" onClick={() => handleSelectWaSection('templates')}>إدارة الرسائل الجاهزة <ChevronLeft size={16} /></button></article>
+                <article><Plug size={25} /><h4>بعد إتمام الربط</h4><p>يمكن إتاحة التذكيرات التلقائية وحالة الرسائل والحملات الرسمية بعد ربط الخدمة والتحقق من الاتصال.</p><span className="wa-future-label"><Clock size={15} /> غير متاح في النسخة الحالية</span></article>
+              </div>
+              <p className="wa-context-note"><Info size={17} /> حفظ الرسائل لا يفعّل الإرسال التلقائي. تبقى خيارات الأتمتة غير متاحة حتى يكتمل الربط الآمن والتحقق من الاتصال.</p>
+            </div>
+          </section>
         )}
 
         {/* Drug Catalog SubTab */}

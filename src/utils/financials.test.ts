@@ -54,6 +54,31 @@ test('adding a receipt to a voided log does not resurrect the voided amount', ()
   assert.equal(appendSessionReceipt(original, { id: 'new', amount: 100, date: '2026-09-22' }).paid, 100);
 });
 
+test('a new receipt never hides an independent payment with the same date and amount', () => {
+  const original = makeSession({ amount: 100, paid: 0, paymentsLog: [], date: '2026-10-06' });
+  const patient = makePatient({ sessions: [original], payments: [{ id: 'independent', amount: 20, date: '2026-10-06' }] });
+  const updated = { ...patient, sessions: [appendSessionReceipt(original, { id: 'new', amount: 20, date: '2026-10-06' })] };
+  assert.equal(getPatientFinancialSummary(patient).totalCollected, 20);
+  assert.equal(getPatientFinancialSummary(updated).totalCollected, 40);
+  assert.equal(getPatientFinancialSummary(updated).totalRemaining, 60);
+  assert.equal(calculateDailyCollections([updated], date => date === '2026-10-06').totalIncomeCollected, 40);
+});
+
+test('a modern independent receipt is not a mirror of an older session receipt', () => {
+  const patient = makePatient({ payments: [{ id: 'independent', amount: 700, date: '2026-09-22', createdAt: '2026-09-22T12:00:00Z' }] });
+  assert.equal(getPatientFinancialSummary(patient).totalCollected, 1900);
+  assert.equal(calculateDailyCollections([patient], date => date === '2026-09-22').totalIncomeCollected, 1400);
+});
+
+test('synthesizing an old paid log preserves independent receipts already counted', () => {
+  const original = makeSession({ amount: 100, paid: 20, paymentsLog: [], date: '2026-10-06' });
+  const patient = makePatient({ sessions: [original], payments: [{ id: 'independent', amount: 20, date: '2026-10-06' }] });
+  const updated = { ...patient, sessions: [appendSessionReceipt(original, { id: 'new', amount: 10, date: '2026-10-06' })] };
+  assert.equal(getPatientFinancialSummary(patient).totalCollected, 40);
+  assert.equal(getPatientFinancialSummary(updated).totalCollected, 50);
+  assert.equal(calculateDailyCollections([updated], date => date === '2026-10-06').totalIncomeCollected, 50);
+});
+
 test('exam fee is allocated once across installment dates, not again on every payment', () => {
   const patient = makePatient({ sessions: [makeSession({ amount: 500, examinationFee: 50,
     services: [{ id: 'filling', name: 'حشو', price: 450 }],

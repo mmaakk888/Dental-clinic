@@ -1,13 +1,24 @@
-import React, { useState, useMemo } from 'react';
-import { ArrowRight, Landmark, DollarSign, TrendingUp, AlertCircle, Calendar, Plus, Trash2, Receipt, ShieldAlert, CreditCard, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2, Users, Zap, Droplets } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import { ArrowRight, Banknote, TrendingUp, Plus, Trash2, Receipt, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2, Users, Zap, Droplets, Package } from 'lucide-react';
 import { Patient, LabCase, Expense, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
-import { BalanceProgressMeter, CompactBalanceBadge, VisualFinancialCard } from '../common/FinancialBadge';
+import { BalanceProgressMeter } from '../common/FinancialBadge';
 import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from '../../utils/expenseUtils';
+import './SummaryView.css';
+
+type SummaryTab = 'overview' | 'expenses' | 'analytics';
+
+const SummaryMetric: React.FC<{
+  title: string; value: string; note: string; icon: React.ReactNode; tone: 'green' | 'rose' | 'amber' | 'indigo';
+}> = ({ title, value, note, icon, tone }) => <article className={'summary-metric summary-metric--' + tone}>
+  <div className="summary-metric-heading"><span className="summary-metric-icon" aria-hidden="true">{icon}</span><h3>{title}</h3></div>
+  <p className="summary-metric-value"><bdi dir="ltr">{value}</bdi></p>
+  <p className="summary-metric-note">{note}</p>
+</article>;
 
 interface SummaryViewProps {
   patients: Patient[];
@@ -53,7 +64,68 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const canViewReports = capabilities?.financialReports !== false;
   const canViewAnalytics = canViewExpenses && canViewReports;
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'expenses' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<SummaryTab>('overview');
+  const switcherAnchorRef = useRef<HTMLDivElement>(null);
+  const switcherRef = useRef<HTMLDivElement>(null);
+  const sectionContentRef = useRef<HTMLDivElement>(null);
+  const shouldScrollToSection = useRef(false);
+  const [switcherLayout, setSwitcherLayout] = useState({ pinned: false, left: 0, width: 0, height: 0 });
+  const sections = [
+    { key: 'overview' as SummaryTab, label: 'الملخص المالي', icon: BarChart2, visible: true },
+    { key: 'expenses' as SummaryTab, label: 'المصروفات', icon: Receipt, visible: canViewExpenses },
+    { key: 'analytics' as SummaryTab, label: 'الخامات والموردون', icon: Package, visible: canViewAnalytics },
+  ].filter(section => section.visible);
+
+  const switchSection = (section: SummaryTab) => {
+    if ((section === 'expenses' && !canViewExpenses) || (section === 'analytics' && !canViewAnalytics)) return;
+    shouldScrollToSection.current = true;
+    setActiveTab(section);
+    if (section === activeTab) scrollToSection();
+  };
+
+  const scrollToSection = () => {
+    const content = sectionContentRef.current;
+    if (!content) return;
+    shouldScrollToSection.current = false;
+    const barHeight = switcherRef.current?.getBoundingClientRect().height || 64;
+    window.scrollTo({ top: Math.max(0, window.scrollY + content.getBoundingClientRect().top - barHeight - 28),
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  };
+
+  React.useEffect(() => {
+    if (!shouldScrollToSection.current) return;
+    const frame = requestAnimationFrame(scrollToSection);
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    let frame = 0;
+    const measure = () => {
+      const anchor = switcherAnchorRef.current;
+      const bar = switcherRef.current;
+      if (!anchor || !bar) return;
+      const bounds = anchor.getBoundingClientRect();
+      const next = { pinned: bounds.top < 12, left: bounds.left, width: bounds.width, height: bar.getBoundingClientRect().height };
+      setSwitcherLayout(previous => previous.pinned === next.pinned && Math.abs(previous.left - next.left) < .5
+        && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 ? previous : next);
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (switcherAnchorRef.current) observer.observe(switcherAnchorRef.current);
+    if (switcherRef.current) observer.observe(switcherRef.current);
+    document.addEventListener('scroll', scheduleMeasure, true);
+    window.addEventListener('resize', scheduleMeasure);
+    scheduleMeasure();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      document.removeEventListener('scroll', scheduleMeasure, true);
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, []);
   const [expenseSearchQuery, setExpenseSearchQuery] = useState('');
 
   // ERP Modals State
@@ -318,7 +390,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto py-2">
+    <div className="summary-workspace max-w-7xl mx-auto py-2" dir="rtl">
       {/* View Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
@@ -339,90 +411,55 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
           </div>
         </div>
 
-        {/* Tab switcher */}
-        <div className={`summary-tabs grid grid-cols-1 ${canViewAnalytics ? 'sm:grid-cols-3' : canViewExpenses ? 'sm:grid-cols-2' : ''} gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200 w-full lg:w-auto`}>
-          <button
-            type="button"
-            onClick={() => setActiveTab('overview')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold font-tajawal transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'overview' ? 'bg-[#0f3d3e] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            الملخص المالي
-          </button>
-          {canViewExpenses && <button
-            type="button"
-            onClick={() => setActiveTab('expenses')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold font-tajawal transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'expenses' ? 'bg-[#0f3d3e] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            المصروفات والفواتير ({expenses.length})
-          </button>}
-          {canViewAnalytics && <button
-            type="button"
-            onClick={() => setActiveTab('analytics')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold font-tajawal transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'analytics' ? 'bg-indigo-700 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            الخامات والموردون
-          </button>}
+      </div>
+
+      <div ref={switcherAnchorRef} className="summary-switcher-anchor" style={{ height: switcherLayout.height || undefined }}>
+        <div ref={switcherRef} role="tablist" aria-label="أقسام الماليات"
+          className={'summary-section-switcher' + (switcherLayout.pinned ? ' summary-section-switcher--pinned' : '')}
+          style={switcherLayout.pinned ? { left: switcherLayout.left, width: switcherLayout.width } : undefined}>
+          {sections.map(section => <button key={section.key} type="button" id={'finance-tab-' + section.key} role="tab"
+            aria-selected={activeTab === section.key} aria-controls="finance-section-content" tabIndex={activeTab === section.key ? 0 : -1}
+            onClick={() => switchSection(section.key)} onKeyDown={event => {
+              const index = sections.findIndex(item => item.key === section.key);
+              const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? sections.length - 1
+                : event.key === 'ArrowLeft' ? (index + 1) % sections.length
+                : event.key === 'ArrowRight' ? (index - 1 + sections.length) % sections.length : -1;
+              if (nextIndex < 0) return;
+              event.preventDefault();
+              const next = sections[nextIndex].key;
+              switchSection(next);
+              requestAnimationFrame(() => document.getElementById('finance-tab-' + next)?.focus({ preventScroll: true }));
+            }}><section.icon aria-hidden="true" /><span>{section.label}</span></button>)}
         </div>
       </div>
 
-      {/* Main Financial KPI Deck */}
-      {canViewReports && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <VisualFinancialCard
-          title="إجمالي المقبوضات الفعلية"
-          subtitle="السيولة المحصلة من المرضى"
-          amount={maskMoney(totalPaid)}
-          icon={<DollarSign className="w-6 h-6 text-emerald-400" />}
-          gradient="emerald"
-          ratioPercent={isPrivacyMode ? undefined : totalRequired > 0 ? Math.min(100, Math.round((totalPaid / totalRequired) * 100)) : 100}
-          ratioLabel="تحصيل"
-          footerInfo={`المتبقي غير المحصل: ${maskMoney(totalRemain)}`}
-        />
-
-        {canViewProfits && <VisualFinancialCard
-          title="المدفوع للمعامل"
-          subtitle="دفعات المعامل المسجلة فعليًا"
-          amount={maskMoney(totalLabPaid)}
-          icon={<Receipt className="w-6 h-6 text-rose-300" />}
-          gradient="rose"
-          footerInfo={`إجمالي التكلفة: ${maskMoney(totalLabCosts)}`}
-        />}
-
-        {canViewExpenses && <VisualFinancialCard
-          title="مدفوعات المصروفات"
-          subtitle="المدفوع من الفواتير والمصروفات"
-          amount={maskMoney(totalExpensesPaid)}
-          icon={<CreditCard className="w-6 h-6 text-amber-300" />}
-          gradient="amber"
-          footerInfo={`قيمة الفواتير: ${maskMoney(totalExpensesAmount)}`}
-        />}
-
-        {canViewProfits && canViewExpenses && <VisualFinancialCard
-          title="الرصيد النقدي للحركة المسجلة"
-          subtitle="المقبوضات − مدفوعات المعامل والمصروفات"
-          amount={maskMoney(cashBalance)}
-          icon={<TrendingUp className="w-6 h-6 text-[#c9a227]" />}
-          gradient="teal"
-          footerInfo="من إجمالي السجلات، دون رصيد افتتاحي"
-        />}
-      </div>}
-
-      {canViewReports && canViewProfits && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 space-y-1">
-        <p className="font-bold">التزامات لم تُسدد بعد: {maskMoney(totalLabRemaining + (canViewExpenses ? totalExpenseRemaining : 0))}</p>
-        <p className="text-xs">للمعامل: {maskMoney(totalLabRemaining)}{canViewExpenses && <> · للموردين والمصروفات: {maskMoney(totalExpenseRemaining)}</>}</p>
-      </div>}
+      <div ref={sectionContentRef} id="finance-section-content" role="tabpanel" aria-labelledby={'finance-tab-' + activeTab}
+        className="summary-section-content" tabIndex={0}>
 
       {activeTab === 'overview' && canViewReports && (
-        <div className="space-y-6">
+        <div className="summary-overview">
+          <div className="summary-overview-heading"><h2>الملخص المالي</h2><span>إجمالي السجلات المسجلة</span></div>
+          <div className="summary-metrics">
+            <SummaryMetric title="المحصّل من المرضى" value={maskMoney(totalPaid)} icon={<Banknote />} tone="green"
+              note={`مستحقات لم تُحصّل: ${maskMoney(totalRemain)}`} />
+            {canViewProfits && <SummaryMetric title="المدفوع للمعامل" value={maskMoney(totalLabPaid)} icon={<Receipt />} tone="rose"
+              note={`إجمالي تكلفة الحالات: ${maskMoney(totalLabCosts)}`} />}
+            {canViewExpenses && <SummaryMetric title="مدفوعات المصروفات" value={maskMoney(totalExpensesPaid)} icon={<Banknote />} tone="amber"
+              note={`إجمالي قيمة الفواتير: ${maskMoney(totalExpensesAmount)}`} />}
+            {canViewProfits && canViewExpenses && <SummaryMetric title="الرصيد النقدي المسجل" value={maskMoney(cashBalance)} icon={<TrendingUp />} tone="indigo"
+              note="المقبوضات بعد مدفوعات المعامل والمصروفات، دون رصيد افتتاحي" />}
+          </div>
+
+          {canViewProfits && <div className="summary-liabilities">
+            <div><strong>التزامات لم تُسدد</strong><span>المبالغ المستحقة للمعامل{canViewExpenses && ' والموردين'}</span></div>
+            <bdi>{maskMoney(totalLabRemaining + (canViewExpenses ? totalExpenseRemaining : 0))}</bdi>
+            <p>للمعامل: {maskMoney(totalLabRemaining)}{canViewExpenses && <> · للموردين والمصروفات: {maskMoney(totalExpenseRemaining)}</>}</p>
+          </div>}
+
           {/* Patient Debtors List */}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900 font-tajawal flex items-center justify-between">
-              <span>قائمة الحالات ذات المتبقي المالي الأعلى (المستحقات غير المحصلة)</span>
+          <div className="summary-debtors bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <h2 className="text-base font-bold text-slate-900 font-tajawal flex flex-wrap gap-2 items-center justify-between">
+              <span>مستحقات المرضى غير المحصلة</span>
               <span className="text-xs font-mono font-normal text-slate-500">
                 إجمالي المتبقي: {maskMoney(totalRemain)}
               </span>
@@ -468,7 +505,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
       {/* Expenses Tab */}
       {activeTab === 'expenses' && canViewExpenses && (
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-5">
+        <div className="summary-expenses bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-5">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
@@ -504,12 +541,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
           </div>
 
           {/* Preset Buttons Bar for Fast Entry */}
-          <div className="bg-amber-50/70 border border-amber-200/80 p-3.5 rounded-2xl space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-amber-900 block font-tajawal">
-                مصروفات متكررة
-              </span>
-            </div>
+          <details className="summary-expense-presets bg-amber-50/70 border border-amber-200/80 p-3.5 rounded-2xl space-y-2">
+            <summary className="text-sm font-bold text-amber-900 cursor-pointer">إضافة مصروف متكرر <span className="text-xs font-normal">إيجار · رواتب · مرافق</span></summary>
             <div className="flex flex-wrap gap-2 text-xs">
               <button
                 type="button"
@@ -540,26 +573,32 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 <Droplets className="h-4 w-4" aria-hidden="true" /><span>فاتورة المياه</span>
               </button>
             </div>
-          </div>
+          </details>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div><h3 className="font-bold text-sm text-slate-900">مصروفات الفترة</h3><p className="text-xs text-slate-500">كل فاتورة تُحسب مرة واحدة في شهر تاريخ الفاتورة.</p></div>
+              <div><h3 className="font-bold text-sm text-slate-900">مصروفات الفترة</h3><p className="text-xs text-slate-500">{monthExpenses.length} بند حسب تاريخ الفاتورة</p></div>
               <div className="flex flex-wrap items-center gap-2">
                 <input aria-label="شهر المصروفات" type="month" value={expenseMonth === 'all' ? '' : expenseMonth} onChange={e => setExpenseMonth(e.target.value || currentMonth)} className="border border-slate-300 rounded-xl p-2 bg-white" />
                 <button type="button" onClick={() => setExpenseMonth(currentMonth)} className="px-3 py-2 rounded-xl bg-white border text-xs font-bold">الشهر الحالي</button>
                 <button type="button" onClick={() => setExpenseMonth('all')} className={`px-3 py-2 rounded-xl border text-xs font-bold ${expenseMonth === 'all' ? 'bg-slate-900 text-white' : 'bg-white'}`}>كل الفترات</button>
               </div>
             </div>
-            {canViewReports && <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center">
-              {[
-                ['الإيجار', monthlyBreakdown.rent], ['الكهرباء', monthlyBreakdown.electricity], ['المياه', monthlyBreakdown.water],
-                ['الرواتب', monthlyBreakdown.salary], ['الخامات', monthlyBreakdown.supplies], ['الصيانة', monthlyBreakdown.maintenance], ['أخرى', monthlyBreakdown.other]
-              ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white border p-2"><span className="block text-[11px] text-slate-500">{label}</span><strong className="text-xs text-slate-900">{maskMoney(Number(amount))}</strong></div>)}
-            </div>}
             {canViewReports && <>
-              <p className="text-sm font-black text-rose-700">قيمة الفواتير: {maskMoney(monthlyTotal)} · {monthExpenses.length} بند</p>
-              <p className="text-xs text-slate-600">المدفوع المسجل لهذه الفواتير: {maskMoney(monthlyPaid)} · المتبقي: {maskMoney(monthlyRemaining)}</p>
+              <div className="summary-expense-totals">
+                <div><span>قيمة الفواتير</span><strong><bdi>{maskMoney(monthlyTotal)}</bdi></strong></div>
+                <div><span>المدفوع المسجل</span><strong><bdi>{maskMoney(monthlyPaid)}</bdi></strong></div>
+                <div><span>المتبقي للموردين</span><strong><bdi>{maskMoney(monthlyRemaining)}</bdi></strong></div>
+              </div>
+              <details className="summary-expense-breakdown">
+                <summary>تفصيل المصروفات حسب النوع</summary>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center">
+                  {[
+                    ['الإيجار', monthlyBreakdown.rent], ['الكهرباء', monthlyBreakdown.electricity], ['المياه', monthlyBreakdown.water],
+                    ['الرواتب', monthlyBreakdown.salary], ['الخامات', monthlyBreakdown.supplies], ['الصيانة', monthlyBreakdown.maintenance], ['أخرى', monthlyBreakdown.other]
+                  ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white border p-2"><span className="block text-xs text-slate-500">{label}</span><strong className="text-xs text-slate-900">{maskMoney(Number(amount))}</strong></div>)}
+                </div>
+              </details>
             </>}
           </div>
 
@@ -657,19 +696,19 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                           </div>
                         )}
 
-                        <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                        <div className="flex flex-wrap items-center gap-2 text-[13px] text-slate-500">
                           <span>التاريخ: {exp.invoiceDate || exp.date}</span>
                           {exp.taxNumber && <span>• ضريبي: {exp.taxNumber}</span>}
                           {exp.note && <span>• {exp.note}</span>}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 w-full sm:w-auto justify-between sm:justify-end">
+                      <div className="flex flex-wrap items-center gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 w-full sm:w-auto justify-between sm:justify-end">
                         <div className="text-left font-mono">
-                          <span className="font-black text-rose-700 text-sm block">
+                          <span className="font-black text-rose-700 text-base block">
                             {maskMoney(exp.amount)}
                           </span>
-                          <span className="block text-[11px] text-slate-500">مدفوع: {maskMoney(getExpensePaymentSummary(exp).paid)} · متبقي: {maskMoney(getExpensePaymentSummary(exp).remaining)}</span>
+                          <span className="block text-[13px] text-slate-500">مدفوع: {maskMoney(getExpensePaymentSummary(exp).paid)} · متبقي: {maskMoney(getExpensePaymentSummary(exp).remaining)}</span>
                           {exp.tax ? <span className="text-[10px] text-slate-400">شامل الضريبة: {maskMoney(exp.tax)}</span> : null}
                         </div>
 
@@ -677,7 +716,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                           <button
                             type="button"
                             onClick={() => setViewingExpenseDetail(exp)}
-                            className="px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer flex items-center gap-1"
+                            className="min-h-[44px] px-2.5 py-1.5 text-sm font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer flex items-center gap-1"
                             title="عرض تفاصيل الفاتورة الكاملة"
                           >
                             <Eye className="w-3.5 h-3.5" />
@@ -687,7 +726,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                           <button
                             type="button"
                             onClick={() => handleOpenEditExpense(exp)}
-                            className="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                            className="min-h-[44px] min-w-[44px] grid place-items-center p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
                             title="تعديل"
                           >
                             <Edit3 className="w-4 h-4" />
@@ -696,7 +735,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                           <button
                             type="button"
                             onClick={() => handleDeleteExpenseConfirmed(exp)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                            className="min-h-[44px] min-w-[44px] grid place-items-center p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                             title="حذف"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -715,6 +754,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       {activeTab === 'analytics' && canViewAnalytics && (
         <SupplierAnalyticsView expenses={expenses} materialUsages={materialUsages} onAddMaterialUsage={onAddMaterialUsage} onDeleteMaterialUsage={onDeleteMaterialUsage} isPrivacyMode={isPrivacyMode} />
       )}
+      </div>
 
       {/* Add / Edit Expense Modal */}
       {isExpenseModalOpen && canViewExpenses && (

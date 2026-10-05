@@ -30,7 +30,8 @@ export function appendSessionReceipt(session: Session, receipt: PaymentInstallme
     id: `legacy_${session.id}`, amount: priorCollected, date: session.payDate || session.date,
     paymentMethod: 'cash', note: 'دفعة سابقة محفوظة قبل سجل الدفعات'
   }] : [];
-  const paymentsLog = [...legacyLog, ...priorLog, receipt];
+  // New receipts are explicit transactions, never legacy date/amount mirrors.
+  const paymentsLog = [...legacyLog, ...priorLog, { ...receipt, createdAt: receipt.createdAt || new Date().toISOString() }];
   const paid = getSessionCollected({ ...session, paymentsLog });
   return { ...session, paymentsLog, paid, remain: Math.max(0, positiveMoney(session.amount) - positiveMoney(session.discount) - paid) };
 }
@@ -44,7 +45,7 @@ function getIndependentGeneralPayments(patient: Patient) {
 
   patient.sessions.forEach(session => {
     (session.paymentsLog || [])
-      .filter(payment => !payment.voidedAt)
+      .filter(payment => !payment.voidedAt && !payment.createdAt && payment.id !== `legacy_${session.id}`)
       .forEach(payment => {
         const key = `${payment.date}|${positiveMoney(payment.amount)}`;
         legacyMirrorCounts.set(key, (legacyMirrorCounts.get(key) || 0) + 1);
@@ -56,8 +57,9 @@ function getIndependentGeneralPayments(patient: Patient) {
     if (payment.linkedSessionId && linkedSessionIds.has(payment.linkedSessionId)) return false;
 
     // Older app versions copied every session receipt into `patient.payments`
-    // with a different id. Consume matching date/amount pairs once as mirrors.
-    if (!payment.linkedSessionId) {
+    // with a different id. Only metadata-free historical records participate
+    // in this fallback; equal amounts/dates do not identify new transactions.
+    if (!payment.linkedSessionId && !payment.createdAt) {
       const key = `${payment.date}|${positiveMoney(payment.amount)}`;
       const mirrorCount = legacyMirrorCounts.get(key) || 0;
       if (mirrorCount > 0) {

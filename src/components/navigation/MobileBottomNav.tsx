@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, ClipboardList, X, ChevronLeft } from 'lucide-react';
+import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, X, ChevronLeft } from 'lucide-react';
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
 
 interface Props {
@@ -21,13 +21,12 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
     { key: 'home' as ActiveView, label: labels.tabs.home || 'الرئيسية', icon: Home, allowed: true },
     { key: 'patients' as ActiveView, label: 'المرضى', icon: Users, allowed: permissions?.patientView !== false },
     { key: 'appointments' as ActiveView, label: 'المواعيد', icon: Calendar, allowed: permissions?.appointments !== false },
-    { key: 'secretary-desk' as ActiveView, label: 'الاستقبال', icon: ClipboardList, allowed: permissions?.patientView !== false },
     { key: 'lab' as ActiveView, label: 'التركيبات', icon: Microscope, allowed: permissions?.lab !== false },
     { key: 'summary' as ActiveView, label: 'الماليات', icon: Landmark, allowed: permissions?.summary !== false },
     { key: 'settings' as ActiveView, label: 'الإعدادات', icon: Settings2, allowed: permissions?.controlPanel !== false },
   ].filter(item => item.allowed);
   const extra = items.slice(4);
-  const selected = activeView === 'patient-file' ? 'patients' : activeView === 'lab-detail' ? 'lab' : activeView;
+  const selected = activeView === 'patient-file' ? 'patients' : activeView === 'lab-detail' ? 'lab' : activeView === 'secretary-desk' ? 'home' : activeView;
 
   useEffect(() => {
     if (!open) return;

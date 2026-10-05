@@ -23,7 +23,7 @@ const AppointmentsView = lazy(() => import('./components/appointments/Appointmen
 const LabView = lazy(() => import('./components/lab/LabView').then(m => ({ default: m.LabView })));
 const SummaryView = lazy(() => import('./components/summary/SummaryView').then(m => ({ default: m.SummaryView })));
 const SettingsView = lazy(() => import('./components/settings/SettingsView').then(m => ({ default: m.SettingsView })));
-const SecretaryDeskView = lazy(() => import('./components/secretary/SecretaryDeskView').then(m => ({ default: m.SecretaryDeskView })));
+const HomePaymentModal = lazy(() => import('./components/home/HomePaymentModal').then(m => ({ default: m.HomePaymentModal })));
 
 const QuickWalkInModal = lazy(() => import('./components/walkin/QuickWalkInModal').then(m => ({ default: m.QuickWalkInModal })));
 const DailyReportModal = lazy(() => import('./components/reports/DailyReportModal').then(m => ({ default: m.DailyReportModal })));
@@ -153,6 +153,10 @@ export function AppContent() {
   // Walk-in Visit and End-of-day report modal states
   const [isWalkInModalOpen, setIsWalkInModalOpen] = useState(false);
   const [isDailyReportModalOpen, setIsDailyReportModalOpen] = useState(false);
+  const [isHomePaymentOpen, setIsHomePaymentOpen] = useState(false);
+  useEffect(() => {
+    if (!currentUser?.permissions.patientView || !(currentUser.permissions.registerPayment ?? currentUser.permissions.patientFinance)) setIsHomePaymentOpen(false);
+  }, [currentUser?.id, currentUser?.permissions.patientView, currentUser?.permissions.registerPayment, currentUser?.permissions.patientFinance]);
 
   // AI & Security Modals state
   const [isApprovalQueueOpen, setIsApprovalQueueOpen] = useState(false);
@@ -210,7 +214,7 @@ export function AppContent() {
       remain: remainBal,
       date: todayStr,
       time: timeStr,
-      paymentsLog: payload.visit.paidAmount > 0 ? [{ id: `inst_${Date.now()}`, amount: payload.visit.paidAmount, date: todayStr }] : [],
+      paymentsLog: payload.visit.paidAmount > 0 ? [{ id: `inst_${Date.now()}`, amount: payload.visit.paidAmount, date: todayStr, paymentMethod: 'cash', createdAt: new Date().toISOString() }] : [],
       chiefComplaint: payload.visit.chiefComplaint,
       diagnosis: payload.visit.diagnosis,
       procedurePerformed: payload.visit.procedurePerformed,
@@ -306,7 +310,7 @@ export function AppContent() {
   });
 
   const handleNavigateWithSubTab = useCallback((view: ActiveView, subTab?: string) => {
-    setActiveView(view);
+    setActiveView(view === 'secretary-desk' ? 'home' : view);
     if (subTab) {
       setActiveSubTab(subTab);
     }
@@ -480,7 +484,7 @@ export function AppContent() {
 
   // Navigation handlers
   const handleNavigate = useCallback((view: ActiveView) => {
-    setActiveView(view);
+    setActiveView(view === 'secretary-desk' ? 'home' : view);
   }, []);
 
   const handleSelectPatient = useCallback((patientId: string, origin: NavigationOrigin) => {
@@ -846,7 +850,7 @@ export function AppContent() {
 
       <main className="clinic-workspace flex-1 min-w-0 max-w-7xl 2xl:max-w-[1700px] 3xl:max-w-[2200px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-6">
         <Suspense fallback={<ViewFallbackLoader />}>
-          {activeView === 'home' && (
+          {(activeView === 'home' || activeView === 'secretary-desk') && (
             <HomeView
               clinicName={clinicName}
               clinicLogo={clinicLogo}
@@ -867,6 +871,7 @@ export function AppContent() {
               onOpenDailyReport={() => setIsDailyReportModalOpen(true)}
               onOpenScheduleModal={() => setIsSmartScheduleOpen(true)}
               onOpenInvoiceModal={() => setIsInvoiceOcrOpen(true)}
+              onOpenPayment={() => setIsHomePaymentOpen(true)}
             />
           )}
 
@@ -1027,23 +1032,6 @@ export function AppContent() {
             )
           )}
 
-          {activeView === 'secretary-desk' && (
-            <SecretaryDeskView
-              currentUser={currentUser}
-              patients={patients}
-              appointments={appointments}
-              labCases={labCases}
-              serviceTypes={serviceTypes}
-              clinicName={clinicName}
-              onSelectPatient={handleSelectPatient}
-              onSavePatient={handleSavePatient}
-              onSaveAppointment={handleSaveAppointment}
-              onUpdateApptStatus={handleUpdateApptStatus}
-              onAddPaymentInstallment={handleAddPaymentInstallment}
-              onBackToHome={() => handleNavigateWithSubTab('home')}
-              onNavigate={handleNavigateWithSubTab}
-            />
-          )}
         </Suspense>
       </main>
       <MobileBottomNav
@@ -1067,6 +1055,12 @@ export function AppContent() {
       )}
 
       <Suspense fallback={null}>
+        {isHomePaymentOpen && currentUser?.permissions.patientView && (currentUser.permissions.registerPayment ?? currentUser.permissions.patientFinance) && (
+          <HomePaymentModal patients={patients}
+            showRemaining={!isPrivacyMode && (currentUser.permissions.viewRemainingBalance ?? currentUser.permissions.patientFinance)}
+            onClose={() => setIsHomePaymentOpen(false)} onSave={handleAddPaymentInstallment}
+            onOpenPatient={patientId => handleSelectPatient(patientId, 'home')} />
+        )}
         {/* Quick Walk-in Visit Modal */}
         {isWalkInModalOpen && (
           <QuickWalkInModal
