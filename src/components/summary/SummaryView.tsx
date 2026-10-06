@@ -760,11 +760,11 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       {isExpenseModalOpen && canViewExpenses && (
         <div 
           onClick={handleCloseExpenseModal}
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl"
+          className="clinic-modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll my-auto relative z-10"
+            className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll my-auto relative z-10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
@@ -963,14 +963,14 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       {activeInvoiceLightbox && canViewExpenses && (
         <div 
           onClick={() => setActiveInvoiceLightbox(null)}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fadeIn"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 overflow-y-auto animate-fadeIn"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
-            className="bg-slate-900 rounded-3xl max-w-2xl w-full p-5 text-white shadow-2xl border border-slate-700 space-y-4"
+            className="bg-slate-900 rounded-3xl max-w-2xl w-full p-5 text-white shadow-2xl border border-slate-700 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto min-w-0"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div>
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="min-w-0 break-words">
                 <h3 className="text-base font-extrabold text-emerald-400 font-tajawal flex items-center gap-2">
                   <FileText className="w-5 h-5 text-emerald-400" />
                   <span>{activeInvoiceLightbox.title}</span>
@@ -988,15 +988,15 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </button>
             </div>
 
-            <div className="relative rounded-2xl overflow-hidden bg-black/60 p-2 flex items-center justify-center min-h-[300px] max-h-[70vh]">
+            <div className="relative rounded-2xl overflow-hidden bg-black/60 p-2 flex items-center justify-center min-h-0 max-h-[60dvh]">
               <img
                 src={activeInvoiceLightbox.imageUrl}
                 alt={activeInvoiceLightbox.title}
-                className="max-h-[65vh] w-auto object-contain rounded-lg shadow-lg"
+                className="max-h-[55dvh] max-w-full w-auto object-contain rounded-lg shadow-lg"
               />
             </div>
 
-            <div className="flex items-center justify-between pt-2 text-xs">
+            <div className="flex flex-wrap gap-2 items-center justify-between pt-2 text-xs">
               <a
                 href={activeInvoiceLightbox.imageUrl}
                 download={`فاتورة_${activeInvoiceLightbox.title}_${activeInvoiceLightbox.date}.png`}

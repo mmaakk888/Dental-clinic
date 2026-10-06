@@ -258,8 +258,8 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl font-['Cairo',sans-serif]">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden my-auto flex flex-col max-h-[92vh]">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl font-['Cairo',sans-serif]">
+      <div className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden my-auto flex flex-col max-h-[92dvh]">
         
         {/* Modal Header */}
         <div className="bg-linear-to-r from-indigo-600 via-indigo-700 to-purple-700 text-white p-4 sm:p-5 flex items-center justify-between shrink-0 shadow-xs">
@@ -291,7 +291,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
         </div>
 
         {/* Modal Scrollable Form Body */}
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto space-y-5 flex-1">
+        <form onSubmit={handleSubmit} className="min-h-0 p-4 sm:p-6 overflow-y-auto space-y-5 flex-1">
           
           {/* STEP 1: PATIENT SELECTION MODE TOGGLE */}
           <div className="bg-slate-50 p-1.5 rounded-2xl border border-slate-200 flex items-center gap-2">

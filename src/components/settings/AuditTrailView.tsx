@@ -200,3 +200,4 @@ export const AuditTrailView: React.FC = () => {
     </div>
   );
 };
+

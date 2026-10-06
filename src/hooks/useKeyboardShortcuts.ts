@@ -74,3 +74,4 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [options]);
 }
+

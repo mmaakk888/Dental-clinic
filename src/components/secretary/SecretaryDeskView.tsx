@@ -981,8 +981,8 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 
       {/* MODAL 1: ADD APPOINTMENT */}
       {isApptModalOpen && permissions.appointments && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
-          <div ref={appointmentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-appointment-title" tabIndex={-1} className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
+          <div ref={appointmentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-appointment-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 id="secretary-appointment-title" className="text-base font-extrabold text-slate-900">حجز موعد جديد</h3>
               <button
@@ -1089,8 +1089,8 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 
       {/* MODAL 2: ADD NEW PATIENT */}
       {isNewPatientModalOpen && permissions.patientEdit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div ref={newPatientDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-new-patient-title" tabIndex={-1} className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div ref={newPatientDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-new-patient-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 id="secretary-new-patient-title" className="text-base font-bold text-slate-900">فتح ملف مريض جديد</h3>
               <button type="button" onClick={() => setIsNewPatientModalOpen(false)} aria-label="إلغاء وإغلاق" className="text-slate-400 hover:text-slate-600 cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"><X className="w-5 h-5" /></button>
@@ -1184,8 +1184,8 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 
       {/* MODAL 3: QUICK FINANCIAL COLLECTION */}
       {isPaymentModalOpen && canRegisterPayments && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div ref={paymentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-payment-title" tabIndex={-1} className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div ref={paymentDialogRef} role="dialog" aria-modal="true" aria-labelledby="secretary-payment-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
@@ -1405,4 +1405,3 @@ export const SecretaryDeskView: React.FC<SecretaryDeskViewProps> = React.memo(({
 });
 
 SecretaryDeskView.displayName = 'SecretaryDeskView';
-

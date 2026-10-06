@@ -2,13 +2,9 @@ import React, { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { 
   Search, 
   UserPlus, 
-  Eye, 
-  EyeOff, 
   Edit3, 
   MessageCircle, 
   Trash2, 
-  ArrowRight, 
-  ShieldAlert, 
   Phone, 
   X, 
   MoreVertical, 
@@ -18,26 +14,23 @@ import {
   PhoneCall, 
   FileText, 
   Plus,
-  CheckCircle2,
   Copy,
   Microscope,
-  Clock,
-  UserCheck,
   CreditCard,
-  RefreshCw,
   SlidersHorizontal,
   ChevronDown
 } from 'lucide-react';
-import { Patient, NavigationOrigin, Appointment, LabCase, User, AppointmentStatus } from '../../types';
+import { Patient, NavigationOrigin, Appointment, LabCase, User } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
+import { normalizeDirectoryDigits, getPatientMatchScore, sortDirectoryPatients, type PatientDirectorySort } from '../../utils/patientDirectory';
 import './patientDirectory.css';
 
 const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+const normalizeDigits = normalizeDirectoryDigits;
 
 interface PatientsViewProps {
   patients: Patient[];
@@ -77,29 +70,6 @@ const highlightText = (text: string, query: string) => {
   );
 };
 
-const getPatientMatchScore = (patient: Patient, q: string): number => {
-  if (!q) return 1;
-  const fileOnly = q.startsWith('#');
-  const cleanQ = normalizeDigits(q.replace(/^#\s*/, '').trim()).toLowerCase();
-  if (!cleanQ) return 1;
-  const id = normalizeDigits(patient.id || '').toLowerCase();
-  const name = (patient.name || '').toLowerCase();
-  const mobile = normalizeDigits(patient.mobile || (patient as any).phone || '').replace(/\D/g, '');
-  const cleanQMobile = cleanQ.replace(/\D/g, '');
-
-  if (id === cleanQ) return 100;
-  if (id.startsWith(cleanQ)) return 90;
-  if (fileOnly) return id.includes(cleanQ) ? 50 : 0;
-  if (name === cleanQ) return 85;
-  if (name.startsWith(cleanQ)) return 80;
-  if (cleanQMobile && mobile === cleanQMobile) return 75;
-  if (cleanQMobile && mobile.includes(cleanQMobile)) return 70;
-  if (name.includes(cleanQ)) return 60;
-  if (id.includes(cleanQ)) return 50;
-
-  return 0;
-};
-
 export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   patients,
   appointments = [],
@@ -109,8 +79,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   onSelectPatient,
   onSavePatient,
   onDeletePatient,
-  onSaveAppointment,
-  onBackToHome
+  onSaveAppointment
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const canViewRemainingBalance = !currentUser || Boolean(currentUser.permissions.viewRemainingBalance ?? currentUser.permissions.patientFinance);
@@ -119,9 +88,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [activeFilter, setActiveFilter] = useState<FilterChip>('all');
-  const [showAmounts, setShowAmounts] = useState(!isPrivacyMode && canViewRemainingBalance);
+  const [sortOrder, setSortOrder] = useState<PatientDirectorySort>('fileDesc');
+  const showAmounts = !isPrivacyMode && canViewRemainingBalance;
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  useEffect(() => { setShowAmounts(!isPrivacyMode && canViewRemainingBalance); }, [isPrivacyMode, canViewRemainingBalance]);
   useEffect(() => { if (!canViewRemainingBalance && activeFilter === 'debt') setActiveFilter('all'); }, [canViewRemainingBalance, activeFilter]);
 
   // Modals & Bottom Sheets State
@@ -133,7 +102,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   useEffect(() => {
     setVisibleCount(30);
-  }, [deferredSearchQuery, activeFilter]);
+  }, [deferredSearchQuery, activeFilter, sortOrder]);
 
   // Options Bottom Sheet State
   const [activeBottomSheetPatient, setActiveBottomSheetPatient] = useState<Patient | null>(null);
@@ -328,27 +297,35 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   const todayStr = clinicToday();
 
-  // Helper getters for patient status flags
-  const getPatientMetrics = (p: Patient) => {
-    const financial = getPatientFinancialSummary(p);
-    const totalRequired = Math.max(0, financial.totalRequired - financial.totalDiscounts);
-    const totalPaid = financial.totalCollected;
-    const totalRemain = financial.totalRemaining;
-    const hasAllergy = Boolean(p.allergy && p.allergy.trim());
-    const hasTodayAppointment = appointments.some(a => (a.patientId === p.id || a.fileNo === p.id) && a.date === todayStr && !['cancelled', 'no_show', 'apologized'].includes(a.status));
-    const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
-    const hasLabCase = labCases.some(c => c.patientId === p.id && c.status !== 'completed');
+  // Compute summaries once per update instead of repeatedly scanning 400+ files.
+  const patientMetrics = useMemo(() => {
+    const todayPatients = new Set(appointments.filter(a => a.date === todayStr && !['cancelled', 'no_show', 'apologized'].includes(a.status)).flatMap(a => [a.patientId, a.fileNo].filter(Boolean)));
+    const labPatients = new Set(labCases.filter(c => c.status !== 'completed').map(c => c.patientId));
+    return new Map(patients.map(p => {
+      const financial = getPatientFinancialSummary(p);
+      const totalRequired = Math.max(0, financial.totalRequired - financial.totalDiscounts);
+      const totalPaid = financial.totalCollected;
+      const totalRemain = financial.totalRemaining;
+      const hasAllergy = Boolean(p.allergy && p.allergy.trim());
+      const hasTodayAppointment = todayPatients.has(p.id);
+      const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
+      const hasLabCase = labPatients.has(p.id);
+      const lastSessionDate = (p.sessions || []).map(session => session.date).filter(Boolean).sort().at(-1);
 
-    return {
-      totalRequired,
-      totalPaid,
-      totalRemain,
-      hasAllergy,
-      hasTodayAppointment,
-      hasIncompleteTreatment,
-      hasLabCase
-    };
-  };
+      return [p.id, {
+        totalRequired,
+        totalPaid,
+        totalRemain,
+        hasAllergy,
+        hasTodayAppointment,
+        hasIncompleteTreatment,
+        hasLabCase,
+        lastSessionDate,
+        sessionCount: p.sessions?.length || 0
+      }] as const;
+    }));
+  }, [patients, appointments, labCases, todayStr]);
+  const getPatientMetrics = (p: Patient) => patientMetrics.get(p.id)!;
 
   // Compute dynamic counters for all filter chips
   const filterCounts = useMemo(() => {
@@ -379,13 +356,13 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       lab,
       noAppt
     };
-  }, [patients, appointments, labCases, todayStr]);
+  }, [patients, patientMetrics]);
 
   // Filtered and ranked patients with debounced search & filter chip support
   const filteredPatients = useMemo(() => {
     const q = deferredSearchQuery.trim();
 
-    return patients
+    const matchingPatients = patients
       .filter(p => {
         const metrics = getPatientMetrics(p);
         if (activeFilter === 'todayAppt' && !metrics.hasTodayAppointment) return false;
@@ -397,23 +374,28 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
         return true;
       })
-      .map(p => ({ patient: p, score: getPatientMatchScore(p, q) }))
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.patient);
-  }, [patients, deferredSearchQuery, activeFilter, appointments, labCases, canViewRemainingBalance]);
+      .filter(p => getPatientMatchScore(p, q) > 0);
+    return sortDirectoryPatients(matchingPatients, q, sortOrder);
+  }, [patients, deferredSearchQuery, activeFilter, patientMetrics, canViewRemainingBalance, sortOrder]);
 
   const isDoctor = currentUser?.role === 'doctor' || !currentUser?.role;
   const canEditPatient = !currentUser || currentUser.permissions.patientEdit === true;
   const canBookAppointment = Boolean(onSaveAppointment) && (!currentUser || currentUser.permissions.appointments === true);
   const canDeletePatient = currentUser ? currentUser.permissions?.deletePatients === true : isDoctor;
+  const openQuickAppointment = (patient: Patient) => {
+    setActiveBottomSheetPatient(null);
+    setQuickApptDate(clinicToday());
+    setQuickApptTime('10:00');
+    setQuickApptService('كشف واستشارة أسنان');
+    setQuickApptPatient(patient);
+  };
   const primaryFilters: { id: FilterChip; label: string; icon?: React.ReactNode }[] = [
     { id: 'all', label: 'الكل' },
-    { id: 'todayAppt', label: 'مواعيد اليوم', icon: <Calendar /> },
-    { id: 'ongoing', label: 'علاج جارٍ', icon: <Activity /> },
-    { id: 'debt', label: 'رصيد متبقٍ', icon: <DollarSign /> }
+    { id: 'todayAppt', label: 'مواعيد اليوم', icon: <Calendar /> }
   ];
   const extraFilters: { id: FilterChip; label: string; icon: React.ReactNode }[] = [
+    { id: 'ongoing', label: 'علاج جارٍ', icon: <Activity /> },
+    { id: 'debt', label: 'رصيد متبقٍ', icon: <DollarSign /> },
     { id: 'lab', label: 'تركيبات', icon: <Microscope /> },
     { id: 'noAppt', label: 'بدون موعد اليوم', icon: <Calendar /> },
     { id: 'allergy', label: 'معلومات طبية مسجّلة', icon: <FileText /> }
@@ -432,24 +414,20 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     >
       <header className="patients-page-header">
         <div className="patients-page-heading">
-          <button type="button" onClick={onBackToHome} className="patients-icon-button" aria-label="العودة للرئيسية"><ArrowRight /></button>
           <div>
-            <h1>المرضى</h1>
+            <h1>فهرس المرضى</h1>
             <p>{patients.length.toLocaleString('ar-EG')} ملف مسجّل في العيادة</p>
           </div>
         </div>
         <div className="patients-page-actions">
-          {!isPrivacyMode && canViewRemainingBalance && <button type="button" onClick={() => setShowAmounts(!showAmounts)} className="patients-secondary-button">
-            {showAmounts ? <EyeOff /> : <Eye />}<span>{showAmounts ? 'إخفاء المبالغ' : 'إظهار المبالغ'}</span>
-          </button>}
           {canEditPatient && <button type="button" onClick={handleOpenAddModal} className="patients-add-button"><UserPlus /><span>إضافة مريض</span></button>}
         </div>
       </header>
 
       <section className="patients-search-panel" aria-label="البحث في المرضى">
         <div className="patients-search-heading">
-          <label htmlFor="patients-directory-search" className="patients-search-label">ابحث بالاسم أو رقم الملف أو الهاتف</label>
-          <p id="patients-search-results" role="status">{filteredPatients.length.toLocaleString('ar-EG')} {searchQuery || activeFilter !== 'all' ? 'نتيجة' : 'ملفات'}</p>
+          <label htmlFor="patients-directory-search" className="patients-search-label">البحث في الملفات</label>
+          <p id="patients-search-hint">بالاسم أو رقم الملف أو الهاتف</p>
         </div>
         <div className={'patients-search-control' + (isSearchFocused ? ' patients-search-control--focused' : '')}>
           <Search aria-hidden="true" className="patients-search-icon" />
@@ -457,20 +435,32 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
             value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
             onFocus={() => setIsSearchFocused(true)} onBlur={() => setIsSearchFocused(false)}
             placeholder="الاسم، رقم الملف، أو الهاتف"
-            aria-describedby="patients-search-results" />
+            aria-describedby="patients-search-hint patients-search-results" />
           {searchQuery && <button type="button" onClick={() => setSearchQuery('')} className="patients-search-clear" aria-label="مسح البحث"><X /></button>}
         </div>
         <div className="patients-filter-toolbar">
+          <div className="patients-filters-row" aria-label="الفلاتر الرئيسية">{primaryFilters.filter(filter => filter.id !== 'debt' || canViewRemainingBalance).map(renderFilter)}</div>
           <details className="patients-extra-filters">
-          <summary><SlidersHorizontal /><span>تصفية القائمة</span>
-            {activeFilter !== 'all' && <span className="patients-selected-filter">{[...primaryFilters, ...extraFilters].find(filter => filter.id === activeFilter)?.label}</span>}
+          <summary><SlidersHorizontal /><span>فلاتر إضافية</span>
+            {extraFilters.some(filter => filter.id === activeFilter) && <span className="patients-selected-filter">{extraFilters.find(filter => filter.id === activeFilter)?.label}</span>}
             <ChevronDown className="patients-extra-chevron" />
           </summary>
-          <div className="patients-filters-row" aria-label="فلاتر المرضى">{primaryFilters.filter(filter => filter.id !== 'debt' || canViewRemainingBalance).map(renderFilter)}{extraFilters.map(renderFilter)}</div>
+          <div className="patients-filters-row" aria-label="الفلاتر الإضافية">{extraFilters.filter(filter => filter.id !== 'debt' || canViewRemainingBalance).map(renderFilter)}</div>
           </details>
           {(searchQuery || activeFilter !== 'all') && <button type="button" onClick={() => { setSearchQuery(''); setActiveFilter('all'); }} className="patients-reset-button">مسح البحث والفلاتر</button>}
         </div>
       </section>
+
+      <div className="patients-results-line">
+        <p id="patients-search-results" role="status" aria-live="polite"><strong>{filteredPatients.length.toLocaleString('ar-EG')}</strong> {searchQuery || activeFilter !== 'all' ? 'ملف مطابق' : 'ملفات المرضى'}</p>
+        <div className="patients-sort-control"><label htmlFor="patients-directory-sort">الترتيب</label>
+          <select id="patients-directory-sort" value={sortOrder} onChange={e => setSortOrder(e.target.value as PatientDirectorySort)}>
+            <option value="fileDesc">رقم الملف: الأكبر أولًا</option>
+            <option value="fileAsc">رقم الملف: الأصغر أولًا</option>
+            <option value="name">اسم المريض</option>
+          </select>
+        </div>
+      </div>
 
       <section className="patients-list" aria-label="قائمة المرضى">
         {filteredPatients.length === 0 ? (
@@ -482,35 +472,29 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
           />
         ) : (
           <>
-            <div className="patients-list-heading" aria-hidden="true">
-              <span>المريض ورقم الملف</span><span>الهاتف والسن</span><span>أول زيارة</span><span>حالة الملف</span><span />
-            </div>
             <div className="patients-list-body">
               {filteredPatients.slice(0, visibleCount).map(p => {
                 const metrics = getPatientMetrics(p);
                 return (
-                  <div key={p.id} role="button" tabIndex={0} aria-label={'فتح ملف ' + p.name + '، رقم ' + p.id}
-                    onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onSelectPatient(p.id, 'patients'); } }}
-                    onClick={() => onSelectPatient(p.id, 'patients')} className="patient-directory-row">
+                  <article key={p.id} className="patient-directory-row" aria-labelledby={'patient-name-' + p.id}>
+                    <button type="button" className="patient-card-open" onClick={() => onSelectPatient(p.id, 'patients')} aria-label={'فتح ملف ' + p.name + '، رقم ' + p.id} />
                     <div className="patient-row-identity">
                       <span className="patient-file-number"><span className="patient-file-number-label">ملف</span><b dir="ltr">{highlightText(p.id, searchQuery)}</b></span>
-                      <h2 className="patient-row-name">{highlightText(p.name, searchQuery)}</h2>
+                      <div className="patient-row-name-group"><h2 id={'patient-name-' + p.id} className="patient-row-name">{highlightText(p.name, searchQuery)}</h2><span className="patient-row-age">{p.age} سنة</span></div>
                     </div>
-                    <div className="patient-row-contact">
+                    <div className="patient-row-details"><div className="patient-row-contact">
                       {p.mobile ? <a href={'tel:' + p.mobile} dir="ltr" onClick={e => e.stopPropagation()} aria-label={'الاتصال بـ ' + p.name} className="patient-row-phone"><Phone />{highlightText(p.mobile, searchQuery)}</a> : <span className="patient-row-muted">بدون رقم هاتف</span>}
-                      <span className="patient-row-age">{p.age} سنة</span>
                     </div>
-                    <div className="patient-row-visit"><span className="patient-row-mobile-label">أول زيارة</span><time dateTime={p.firstVisit || undefined}>{p.firstVisit || 'غير مسجّلة'}</time></div>
+                    <div className="patient-row-visit"><div><span className="patient-row-mobile-label">{metrics.lastSessionDate ? 'آخر جلسة' : 'أول زيارة'}</span><time dateTime={metrics.lastSessionDate || p.firstVisit || undefined} dir="ltr">{metrics.lastSessionDate || p.firstVisit || 'غير مسجّلة'}</time></div><span className="patient-row-session-count">{metrics.sessionCount ? `${metrics.sessionCount.toLocaleString('ar-EG')} جلسة مسجّلة` : 'لا توجد جلسات بعد'}</span></div></div>
                     <div className="patient-row-status">
                       {metrics.hasTodayAppointment && <span className="patient-status patient-status--today"><Calendar />موعد اليوم</span>}
                       {metrics.hasIncompleteTreatment && <span className="patient-status">علاج جارٍ</span>}
                       {metrics.hasLabCase && <span className="patient-status">تركيبات</span>}
-                      {canViewRemainingBalance && metrics.totalRemain > 0 && <span className="patient-status">{showAmounts && !isPrivacyMode ? 'متبقٍ ' + metrics.totalRemain.toLocaleString('ar-EG') + ' ج.م' : 'رصيد متبقٍ'}</span>}
-                      {metrics.hasAllergy && <span className="patient-status patient-status--medical" title="توجد معلومات طبية مسجّلة داخل الملف"><FileText />معلومة طبية مسجّلة</span>}
-                      {!metrics.hasTodayAppointment && !metrics.hasIncompleteTreatment && !metrics.hasLabCase && (!canViewRemainingBalance || !metrics.totalRemain) && !metrics.hasAllergy && <span className="patient-row-muted">ملف المريض</span>}
+                      {canViewRemainingBalance && metrics.totalRemain > 0 && <span className="patient-status patient-status--balance">{showAmounts ? 'متبقٍ ' + metrics.totalRemain.toLocaleString('ar-EG') + ' ج.م' : 'رصيد متبقٍ'}</span>}
+                      {metrics.hasAllergy && <span className="patient-status patient-status--medical" title="توجد معلومات طبية مسجّلة داخل الملف"><FileText />ملاحظة طبية</span>}
                     </div>
                     <button type="button" onClick={e => { e.stopPropagation(); setActiveBottomSheetPatient(p); }} className="patients-icon-button patient-row-options" aria-label={'خيارات ملف ' + p.name}><MoreVertical /></button>
-                  </div>
+                  </article>
                 );
               })}
             </div>
@@ -527,7 +511,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
             onClick={() => setActiveBottomSheetPatient(null)}
           />
 
-          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90vh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-3">
+          <div className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-3">
             {/* Drag Handle & Patient Header */}
             <div className="relative pb-2 border-b border-slate-100">
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-3" />
@@ -591,12 +575,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               {canBookAppointment && <button
                 type="button"
                 onClick={() => {
-                  const p = activeBottomSheetPatient;
-                  setActiveBottomSheetPatient(null);
-                  setQuickApptDate(clinicToday());
-                  setQuickApptTime('10:00');
-                  setQuickApptService('كشف واستشارة أسنان');
-                  setQuickApptPatient(p);
+                  openQuickAppointment(activeBottomSheetPatient);
                 }}
                 className="w-full text-right p-3 rounded-2xl bg-slate-50 hover:bg-sky-50 text-slate-900 hover:text-sky-900 flex items-center gap-3 transition-colors cursor-pointer font-bold text-xs sm:text-sm font-tajawal min-h-[48px] active:scale-[0.99] border border-slate-200/60"
               >
@@ -685,11 +664,11 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
       {/* 6. Quick Appointment Modal */}
       {quickApptPatient && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 relative font-cairo dir-rtl">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn" role="dialog" aria-modal="true" aria-labelledby="patient-quick-appointment-title">
+          <div className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 relative font-cairo dir-rtl max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div>
-                <h3 className="font-black text-base text-slate-900 font-tajawal">
+                <h3 id="patient-quick-appointment-title" className="font-black text-base text-slate-900 font-tajawal">
                   حجز موعد للمريض: {quickApptPatient.name}
                 </h3>
                 <span className="text-xs text-slate-500 font-medium">رقم الملف: #{quickApptPatient.id}</span>
@@ -697,7 +676,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <button
                 type="button"
                 onClick={() => setQuickApptPatient(null)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
+                aria-label="إغلاق حجز الموعد"
+                className="w-11 h-11 shrink-0 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -705,8 +685,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
             <form onSubmit={handleSaveQuickAppt} className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">تاريخ الموعد</label>
+                <label htmlFor="patient-quick-appointment-date" className="block text-sm font-bold text-slate-700 mb-1">تاريخ الموعد</label>
                 <input
+                  id="patient-quick-appointment-date"
                   type="date"
                   value={quickApptDate}
                   onChange={e => setQuickApptDate(e.target.value)}
@@ -716,8 +697,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">وقت الموعد</label>
+                <label htmlFor="patient-quick-appointment-time" className="block text-sm font-bold text-slate-700 mb-1">وقت الموعد</label>
                 <input
+                  id="patient-quick-appointment-time"
                   type="time"
                   value={quickApptTime}
                   onChange={e => setQuickApptTime(e.target.value)}
@@ -727,8 +709,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">نوع الإجراء أو الخدمة</label>
+                <label htmlFor="patient-quick-appointment-service" className="block text-sm font-bold text-slate-700 mb-1">نوع الإجراء أو الخدمة</label>
                 <input
+                  id="patient-quick-appointment-service"
                   type="text"
                   value={quickApptService}
                   onChange={e => setQuickApptService(e.target.value)}
@@ -760,10 +743,10 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
       {/* 7. Patient Add/Edit Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
           <div
             id="patientModal"
-            className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 relative max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll font-cairo dir-rtl"
+            className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 relative max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll font-cairo dir-rtl"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base sm:text-lg font-black text-purple-950 font-tajawal">

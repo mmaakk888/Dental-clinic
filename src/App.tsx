@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import { ActiveView, NavigationOrigin, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
-import { Storage, STORAGE_FAILURE_EVENT } from './utils/storage';
-import { getDefaultViewForUser, canAccessView } from './utils/rbac';
+import { ActiveView, NavigationOrigin, LabService, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
+import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY } from './utils/storage';
+import type { ClinicIdentitySettings } from './utils/storage';
+import { cloneContentDraft } from './utils/clinicContent';
+import type { ContentDraft } from './utils/clinicContent';
+import { cloneServiceCatalog, validateServiceCatalog } from './utils/serviceCatalog';
+import type { ServiceCatalogValues } from './utils/serviceCatalog';
+import { getDefaultViewForUser, canAccessView, canPerformAction } from './utils/rbac';
+import type { RBACAction } from './utils/rbac';
 import { canUserLoginNow, matchesSessionIdentity } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
+import { prepareLabMetadataSave, prepareLabPricingSave, mergeLabCaseWorkflowUpdate } from './utils/labManagement';
 import { mergeExpenseUpdate } from './utils/expenseUtils';
 import { appendSessionReceipt } from './utils/financials';
 import { isValidAppointmentDate, appointmentTimeMinutes, localDateISO } from './components/appointments/appointmentScheduling';
@@ -12,6 +19,8 @@ import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
 import { MobileBottomNav } from './components/navigation/MobileBottomNav';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useVisibleViewport } from './hooks/useVisibleViewport';
+import { useAppointmentDialog } from './components/appointments/useAppointmentDialog';
 import { LoginModal } from './components/auth/LoginModal';
 import { OfflineSyncBanner } from './components/common/OfflineSyncBanner';
 import { HomeView } from './components/home/HomeView';
@@ -62,7 +71,19 @@ function PermissionDeniedCard({ title, onBackToHome }: { title: string; onBackTo
   );
 }
 
+function ModalOpeningPlaceholder({ onClose }: { onClose: () => void }) {
+  const dialogRef = useAppointmentDialog(true, onClose);
+  return <div className="clinic-modal-overlay fixed inset-0 z-[80] bg-slate-900/50 flex items-center justify-center" dir="rtl">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="فتح النافذة" tabIndex={-1}
+      className="clinic-modal-panel w-full max-w-xs bg-white p-5 shadow-xl text-center space-y-4">
+      <p role="status" className="font-bold text-slate-700">جارٍ فتح النافذة…</p>
+      <button type="button" onClick={onClose} className="min-h-[44px] px-5 py-2 rounded-xl bg-slate-100 font-bold text-slate-600">إلغاء</button>
+    </div>
+  </div>;
+}
+
 export function AppContent() {
+  useVisibleViewport();
   const { showToast } = useToastAndConfirm();
   useEffect(() => {
     const notifyFailure = () => showToast('تعذر حفظ آخر تعديل على الجهاز. احتفظ بالصفحة مفتوحة وصدّر نسخة احتياطية قبل إغلاقها.', 'error', { duration: 12000 });
@@ -122,22 +143,55 @@ export function AppContent() {
   // Persistent Domain Data
   const [patients, setPatients] = useState<Patient[]>(() => Storage.getPatients());
   const [appointments, setAppointments] = useState<Appointment[]>(() => Storage.getAppointments());
-  const [labs, setLabs] = useState<Lab[]>(() => Storage.getLabs());
+  const [labs, setLabs] = useState<Lab[]>(() => Storage.getLabsFresh());
   const [labCases, setLabCases] = useState<LabCase[]>(() => Storage.getLabCases());
   const [theme, setTheme] = useState<ThemeSettings>(() => Storage.getTheme());
   const [labels, setLabels] = useState<UILabels>(() => Storage.getUILabels());
   const [tileOrder, setTileOrder] = useState<string[]>(() => Storage.getTileOrder());
+  useEffect(() => {
+    const refreshContent = (event: StorageEvent) => {
+      if (event.storageArea && event.storageArea !== localStorage) return;
+      if (event.key !== null && !CLINIC_CONTENT_STORAGE_KEYS.includes(event.key)) return;
+      // Read the latest persisted pair instead of applying an event's partial
+      // newValue. A following key event refreshes again; this is not a DB lock.
+      const latest = Storage.getClinicContent();
+      setLabels(latest.labels);
+      setTileOrder(latest.tileOrder);
+    };
+    window.addEventListener('storage', refreshContent);
+    return () => window.removeEventListener('storage', refreshContent);
+  }, []);
 
-  const [serviceTypes, setServiceTypes] = useState<string[]>(() => Storage.getServiceTypes());
-  const [crownPrices, setCrownPrices] = useState<Record<string, number>>(() => Storage.getCrownPrices());
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogValues>(() => Storage.getServiceCatalog());
+  const { serviceTypes, crownPrices } = serviceCatalog;
   const [clinicName, setClinicName] = useState<string>(() => Storage.getClinicName());
   const [clinicLogo, setClinicLogo] = useState<string | null>(() => Storage.getClinicLogo());
 
   const [expenses, setExpenses] = useState<import('./types').Expense[]>(() => Storage.getExpenses());
   const [materialUsages, setMaterialUsages] = useState<MaterialUsage[]>(() => Storage.getMaterialUsages());
   const [whatsappSettings, setWhatsappSettings] = useState<import('./types').WhatsappSettings>(() => Storage.getWhatsappSettings());
-  const [drugCatalog, setDrugCatalog] = useState<import('./types').DrugCatalogItem[]>(() => Storage.getDrugCatalog());
+  const [drugCatalog, setDrugCatalog] = useState<import('./types').DrugCatalogItem[]>(() => Storage.getDrugCatalogFresh());
   const [isPrivacyMode, setIsPrivacyMode] = useState<boolean>(() => Storage.getPrivacyMode());
+
+  useEffect(() => {
+    const refreshCatalogs = (event: StorageEvent) => {
+      if (event.storageArea && event.storageArea !== localStorage) return;
+      if (event.key === null || SERVICE_CATALOG_STORAGE_KEYS.includes(event.key)) {
+        const latest = Storage.getServiceCatalog();
+        setServiceCatalog(previous => JSON.stringify(previous) === JSON.stringify(latest) ? previous : latest);
+      }
+      if (event.key === null || event.key === LABS_STORAGE_KEY) {
+        const latest = Storage.getLabsFresh();
+        setLabs(previous => JSON.stringify(previous) === JSON.stringify(latest) ? previous : latest);
+      }
+      if (event.key === null || event.key === DRUG_CATALOG_STORAGE_KEY) {
+        const latest = Storage.getDrugCatalogFresh();
+        setDrugCatalog(previous => JSON.stringify(previous) === JSON.stringify(latest) ? previous : latest);
+      }
+    };
+    window.addEventListener('storage', refreshCatalogs);
+    return () => window.removeEventListener('storage', refreshCatalogs);
+  }, []);
 
   // Hybrid Navigation Layout State
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
@@ -149,6 +203,7 @@ export function AppContent() {
 
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<string>('identity');
+  const [labPricingTarget, setLabPricingTarget] = useState<string>();
 
   // Walk-in Visit and End-of-day report modal states
   const [isWalkInModalOpen, setIsWalkInModalOpen] = useState(false);
@@ -397,29 +452,28 @@ export function AppContent() {
     const fontToApply = theme.fontFamily || "'Cairo', 'Tajawal', sans-serif";
     document.documentElement.style.setProperty('--app-font', fontToApply);
     document.body.style.fontFamily = fontToApply;
-
-    // Inject custom Google Font stylesheet if provided
-    if (theme.customFontUrl && theme.customFontUrl.trim()) {
-      let fontLink = document.getElementById('dynamic-google-font') as HTMLLinkElement;
-      if (!fontLink) {
-        fontLink = document.createElement('link');
-        fontLink.id = 'dynamic-google-font';
-        fontLink.rel = 'stylesheet';
-        document.head.appendChild(fontLink);
-      }
-      fontLink.href = theme.customFontUrl;
-    }
   }, [theme]);
+
+  useEffect(() => {
+    // Saved custom fonts have one owner. Built-in choices remove a stale link.
+    document.getElementById('dynamic-google-font')?.remove();
+    if (!theme.customFontUrl?.trim()) return;
+    const fontLink = document.createElement('link');
+    fontLink.id = 'dynamic-google-font';
+    fontLink.rel = 'stylesheet';
+    fontLink.href = theme.customFontUrl;
+    fontLink.onerror = () => showToast('تعذّر تحميل الخط المخصص؛ سيُستخدم الخط البديل مؤقتًا.', 'warning');
+    document.head.appendChild(fontLink);
+    return () => { fontLink.onerror = null; fontLink.remove(); };
+  }, [theme.customFontUrl, showToast]);
 
   // Sync state to storage
   useEffect(() => { Storage.savePatients(patients); }, [patients]);
   useEffect(() => { Storage.saveAppointments(appointments); }, [appointments]);
-  useEffect(() => { Storage.saveLabs(labs); }, [labs]);
   useEffect(() => { Storage.saveLabCases(labCases); }, [labCases]);
   useEffect(() => { Storage.saveExpenses(expenses); }, [expenses]);
   useEffect(() => { Storage.saveMaterialUsages(materialUsages); }, [materialUsages]);
   useEffect(() => { Storage.saveWhatsappSettings(whatsappSettings); }, [whatsappSettings]);
-  useEffect(() => { Storage.saveDrugCatalog(drugCatalog); }, [drugCatalog]);
 
   // Auth Handlers
   const handleLoginSuccess = (user: User, rememberMe: boolean = true) => {
@@ -606,20 +660,55 @@ export function AppContent() {
   };
 
   // Lab Actions
-  const handleSaveLab = (labData: Omit<Lab, 'id'> & { id?: string }) => {
-    if (labData.id) {
-      setLabs(prev => prev.map(l => l.id === labData.id ? (labData as Lab) : l));
-    } else {
-      const newLab: Lab = {
-        ...labData,
-        id: `lab_${Date.now()}`
-      };
-      setLabs(prev => [...prev, newLab]);
+  const handleSaveLab = (labData: Omit<Lab, 'id'> & { id?: string }, baseline?: Lab) => {
+    requireFreshSettingsPermission('manage_lab');
+    requireFreshSettingsPermission('view_lab_costs');
+    if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل تعديل بيانات المعمل.');
+    const latest = Storage.getLabsFresh();
+    try {
+      const next = prepareLabMetadataSave(latest, labData, baseline, crypto.randomUUID());
+      Storage.saveLabsConfirmed(next);
+      setLabs(Storage.getLabsFresh());
+    } catch (error) {
+      setLabs(latest);
+      throw error;
     }
   };
 
   const handleDeleteLab = (labId: string) => {
-    setLabs(prev => prev.filter(l => l.id !== labId));
+    requireFreshSettingsPermission('manage_lab');
+    requireFreshSettingsPermission('view_lab_costs');
+    if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل حذف المعمل.');
+    const latest = Storage.getLabsFresh();
+    if (!latest.some(lab => lab.id === labId)) { setLabs(latest); throw new Error('هذا المعمل لم يعد موجودًا. راجع قائمة المعامل.'); }
+    // Recheck after confirmation, including records saved by another tab.
+    if (Storage.getLabCasesFresh().some(item => item.labId === labId) || labCases.some(item => item.labId === labId)) {
+      throw new Error('لا يمكن حذف معمل له حالات مسجلة، للحفاظ على حساباته وسجل التركيبات.');
+    }
+    Storage.saveLabsConfirmed(latest.filter(lab => lab.id !== labId));
+    setLabs(Storage.getLabsFresh());
+  };
+
+  const handleSaveLabPricing = (labId: string, services: LabService[], baseline: Lab) => {
+    requireFreshSettingsPermission('manage_prices');
+    requireFreshSettingsPermission('view_lab_costs');
+    if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل تعديل تكاليف المعامل.');
+    const latest = Storage.getLabsFresh();
+    try {
+      const next = prepareLabPricingSave(latest, labId, services, baseline);
+      requireFreshSettingsPermission('manage_prices');
+      requireFreshSettingsPermission('view_lab_costs');
+      Storage.saveLabsConfirmed(next);
+      setLabs(Storage.getLabsFresh());
+    } catch (error) {
+      setLabs(latest);
+      throw error;
+    }
+  };
+
+  const handleOpenLabPricing = (labId?: string) => {
+    setLabPricingTarget(labId || '*');
+    handleNavigateWithSubTab('settings', 'services');
   };
 
   const handleSaveLabCase = (caseData: Omit<LabCase, 'id'> & { id?: string }) => {
@@ -638,15 +727,16 @@ export function AppContent() {
     setLabCases(prev => prev.map(c => {
       if (c.id !== updatedCase.id) return c;
       if (c.linkedSessionId !== updatedCase.linkedSessionId) {
-        if (currentUser?.permissions?.labProfit !== true) return c;
+        if (!canPerformAction(currentUser, 'view_lab_costs')) return c;
         if (updatedCase.linkedSessionId && prev.some(other => other.id !== c.id && other.patientId === c.patientId && other.linkedSessionId === updatedCase.linkedSessionId)) return c;
       }
-      return updatedCase;
+      // A status/link change must not replace a newer payment snapshot.
+      return mergeLabCaseWorkflowUpdate(c, updatedCase);
     }));
   };
 
   const handleAddLabCasePayment = (caseId: string, amount: number) => {
-    if (currentUser?.permissions?.labProfit !== true || !Number.isFinite(amount) || amount <= 0) return;
+    if (!currentUser || !canPerformAction(currentUser, 'view_lab_costs') || !Number.isFinite(amount) || amount <= 0) return;
     const receiptId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     setLabCases(prev => prev.map(c => {
@@ -662,7 +752,7 @@ export function AppContent() {
   };
 
   const handleLabBulkPayment = (labId: string, amount: number) => {
-    if (currentUser?.permissions?.labProfit !== true) return;
+    if (!currentUser || !canPerformAction(currentUser, 'view_lab_costs')) return;
     const receiptId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     setLabCases(prev => {
@@ -679,57 +769,92 @@ export function AppContent() {
   };
 
   // Settings Actions
-  const handleSaveClinicInfo = (name: string, logo: string | null) => {
-    setClinicName(name);
-    setClinicLogo(logo);
-    Storage.saveClinicName(name);
-    Storage.saveClinicLogo(logo);
+  const handleSaveIdentity = (values: ClinicIdentitySettings) => {
+    Storage.saveClinicIdentity(values);
+    setClinicName(values.clinicName);
+    setClinicLogo(values.clinicLogo);
+    setTheme({ ...values.theme });
   };
 
-  const handleSaveTheme = (newTheme: ThemeSettings) => {
-    setTheme(newTheme);
-    Storage.saveTheme(newTheme);
+  const handleSaveContent = (values: ContentDraft) => {
+    const latest = Storage.getClinicContent();
+    if (JSON.stringify(latest) !== JSON.stringify(cloneContentDraft({ labels, tileOrder }))) {
+      setLabels(latest.labels);
+      setTileOrder(latest.tileOrder);
+      throw new Error('تغيّرت إعدادات المحتوى في تبويب آخر. المسودة لم تُحذف؛ راجع أحدث الإعدادات قبل الحفظ.');
+    }
+    const next = cloneContentDraft(values);
+    Storage.saveClinicContent(next);
+    setLabels(next.labels);
+    setTileOrder(next.tileOrder);
   };
 
-  const handleSaveLabels = (newLabels: UILabels) => {
-    setLabels(newLabels);
-    Storage.saveUILabels(newLabels);
-  };
-
-  const handleSaveTileOrder = (newOrder: string[]) => {
-    setTileOrder(newOrder);
-    Storage.saveTileOrder(newOrder);
-  };
-
-  const handleSaveUsers = (newUsers: User[]) => {
-    setUsers(newUsers);
-    Storage.saveUsers(newUsers);
-
+  const refreshCurrentAccount = (latestUsers: User[]) => {
     if (currentUser) {
-      const match = newUsers.find(
-        u => u.id === currentUser.id &&
-          u.username === currentUser.username &&
-          (u.credentialVersion ?? 1) === (currentUser.credentialVersion ?? 1) &&
-          u.isActive !== false
-      );
+      const match = latestUsers.find(user => matchesSessionIdentity(user, {
+        userId: currentUser.id, username: currentUser.username, credentialVersion: currentUser.credentialVersion ?? 1,
+      }) && canUserLoginNow(user).allowed);
       if (!match) {
         handleLogout();
         showToast('تغيّرت بيانات الحساب. يرجى تسجيل الدخول مرة أخرى.', 'warning');
       } else {
-        setCurrentUser(match);
-        Storage.saveCurrentUser(match);
+        const { password: _password, ...safeUser } = match;
+        setCurrentUser(safeUser);
+        Storage.saveCurrentUser(safeUser);
       }
     }
   };
 
-  const handleSaveServiceTypes = (types: string[]) => {
-    setServiceTypes(types);
-    Storage.saveServiceTypes(types);
+  const requireFreshSettingsPermission = (action: RBACAction): User[] => {
+    if (!canPerformAction(currentUser, action)) throw new Error('هذا الحساب لا يملك صلاحية حفظ هذه الإعدادات.');
+    const latestUsers = Storage.getUsers();
+    const latestUser = latestUsers.find(user => currentUser && matchesSessionIdentity(user, {
+      userId: currentUser.id, username: currentUser.username, credentialVersion: currentUser.credentialVersion ?? 1,
+    }));
+    if (!latestUser || !canUserLoginNow(latestUser).allowed) {
+      setUsers(latestUsers);
+      handleLogout();
+      throw new Error('تغيّرت صلاحية جلسة الحساب. سجّل الدخول مرة أخرى قبل الحفظ.');
+    }
+    if (!canPerformAction(latestUser, action)) {
+      setUsers(latestUsers);
+      refreshCurrentAccount(latestUsers);
+      throw new Error('تغيّرت صلاحيات هذا الحساب؛ لم تُحفظ الإعدادات.');
+    }
+    return latestUsers;
   };
 
-  const handleSaveCrownPrices = (prices: Record<string, number>) => {
-    setCrownPrices(prices);
-    Storage.saveCrownPrices(prices);
+  const handleSaveUsers = (newUsers: User[]) => {
+    const latest = requireFreshSettingsPermission('manage_users');
+    if (JSON.stringify(latest) !== JSON.stringify(users)) {
+      setUsers(latest);
+      refreshCurrentAccount(latest);
+      throw new Error('تغيّرت الحسابات في تبويب آخر. المسودة لم تُحذف؛ راجع أحدث الحسابات قبل الحفظ.');
+    }
+    const checked = requireFreshSettingsPermission('manage_users');
+    if (JSON.stringify(checked) !== JSON.stringify(latest)) {
+      setUsers(checked);
+      refreshCurrentAccount(checked);
+      throw new Error('تغيّرت الحسابات أثناء المراجعة. راجع أحدث الحسابات ثم أعد المحاولة.');
+    }
+    Storage.saveUsersConfirmed(newUsers);
+    const savedUsers = Storage.getUsers();
+    setUsers(savedUsers);
+    refreshCurrentAccount(savedUsers);
+  };
+
+  const handleSaveServiceCatalog = (values: ServiceCatalogValues) => {
+    requireFreshSettingsPermission('manage_prices');
+    const latest = Storage.getServiceCatalog();
+    if (JSON.stringify(latest) !== JSON.stringify(cloneServiceCatalog(serviceCatalog))) {
+      setServiceCatalog(latest);
+      throw new Error('تغيّرت الخدمات أو الأسعار في تبويب آخر. المسودة لم تُحذف؛ راجع أحدث الإعدادات قبل الحفظ.');
+    }
+    const checked = validateServiceCatalog(values, latest);
+    if (!checked.valid) throw new Error(Object.values(checked.errors)[0]);
+    requireFreshSettingsPermission('manage_prices');
+    Storage.saveServiceCatalog(checked.value);
+    setServiceCatalog(cloneServiceCatalog(checked.value));
   };
 
   const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }) => {
@@ -764,8 +889,15 @@ export function AppContent() {
   };
 
   const handleSaveDrugCatalog = (catalog: import('./types').DrugCatalogItem[]) => {
-    setDrugCatalog(catalog);
-    Storage.saveDrugCatalog(catalog);
+    requireFreshSettingsPermission('access_control_panel');
+    const latest = Storage.getDrugCatalogFresh();
+    if (JSON.stringify(latest) !== JSON.stringify(drugCatalog)) {
+      setDrugCatalog(latest);
+      throw new Error('تغيّر فهرس الأدوية في تبويب آخر. المسودة لم تُحذف؛ راجع أحدث الفهرس قبل الحفظ.');
+    }
+    requireFreshSettingsPermission('access_control_panel');
+    Storage.saveDrugCatalogConfirmed(catalog);
+    setDrugCatalog(Storage.getDrugCatalogFresh());
   };
 
   const handleTogglePrivacyMode = () => {
@@ -781,19 +913,47 @@ export function AppContent() {
   };
 
   const handleRestoreFullData = (data: any) => {
+    requireFreshSettingsPermission('backup_restore');
+    const restoredCatalogs: import('./utils/storage').RestoredCatalogs = {};
+    if (Array.isArray(data.serviceTypes)) restoredCatalogs.serviceTypes = data.serviceTypes;
+    if (data.crownPrices && typeof data.crownPrices === 'object' && !Array.isArray(data.crownPrices)) restoredCatalogs.crownPrices = data.crownPrices;
+    if (Array.isArray(data.labs)) restoredCatalogs.labs = data.labs;
+    if (Array.isArray(data.drugCatalog)) restoredCatalogs.drugCatalog = data.drugCatalog;
+    if (Array.isArray(data.users)) restoredCatalogs.users = data.users;
+    if (restoredCatalogs.serviceTypes !== undefined || restoredCatalogs.crownPrices !== undefined) {
+      requireFreshSettingsPermission('manage_prices');
+      const latest = Storage.getServiceCatalog();
+      const checked = validateServiceCatalog({ serviceTypes: restoredCatalogs.serviceTypes ?? latest.serviceTypes,
+        crownPrices: restoredCatalogs.crownPrices ?? latest.crownPrices }, latest);
+      if (!checked.valid) throw new Error(Object.values(checked.errors)[0]);
+      restoredCatalogs.serviceTypes = checked.value.serviceTypes;
+      restoredCatalogs.crownPrices = checked.value.crownPrices;
+    }
+    if (restoredCatalogs.labs !== undefined) {
+      requireFreshSettingsPermission('manage_lab');
+      requireFreshSettingsPermission('view_lab_costs');
+    }
+    if (restoredCatalogs.drugCatalog !== undefined) requireFreshSettingsPermission('access_control_panel');
+    if (restoredCatalogs.users !== undefined) requireFreshSettingsPermission('manage_users');
+    requireFreshSettingsPermission('backup_restore');
+    Storage.saveRestoredCatalogs(restoredCatalogs);
     if (Array.isArray(data.patients)) setPatients(data.patients);
     if (Array.isArray(data.appointments)) setAppointments(data.appointments);
-    if (Array.isArray(data.labs)) setLabs(data.labs);
+    if (restoredCatalogs.labs !== undefined) setLabs(Storage.getLabsFresh());
     if (Array.isArray(data.labCases)) setLabCases(data.labCases);
     if (Array.isArray(data.expenses)) setExpenses(data.expenses);
     if (Array.isArray(data.materialUsages)) setMaterialUsages(data.materialUsages);
     else if (Array.isArray(data.expenses)) setMaterialUsages([]);
-    if (Array.isArray(data.users)) setUsers(data.users);
-    if (Array.isArray(data.serviceTypes)) setServiceTypes(data.serviceTypes);
+    if (restoredCatalogs.serviceTypes !== undefined || restoredCatalogs.crownPrices !== undefined) setServiceCatalog(Storage.getServiceCatalog());
     if (data.whatsappSettings) setWhatsappSettings(data.whatsappSettings);
-    if (Array.isArray(data.drugCatalog)) setDrugCatalog(data.drugCatalog);
+    if (restoredCatalogs.drugCatalog !== undefined) setDrugCatalog(Storage.getDrugCatalogFresh());
     if (typeof data.clinicName === 'string') setClinicName(data.clinicName);
     if (data.clinicLogo !== undefined) setClinicLogo(data.clinicLogo);
+    if (restoredCatalogs.users !== undefined) {
+      const savedUsers = Storage.getUsers();
+      setUsers(savedUsers);
+      refreshCurrentAccount(savedUsers);
+    }
   };
 
   const handleResetAllData = () => {
@@ -958,9 +1118,10 @@ export function AppContent() {
                 onUpdateLabCase={handleUpdateLabCase}
                 onAddLabCasePayment={handleAddLabCasePayment}
                 onBulkPayment={handleLabBulkPayment}
-                onSaveCrownPrices={handleSaveCrownPrices}
+                onManageLabPrices={canAccessView(currentUser, 'settings') ? handleOpenLabPricing : undefined}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
-                canViewFinancials={currentUser?.permissions?.labProfit === true && !isPrivacyMode}
+                canViewFinancials={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
+                canManagePrices={canPerformAction(currentUser, 'manage_prices')}
               />
             ) : (
               <PermissionDeniedCard title="متابعة حالات التركيبات" onBackToHome={() => handleNavigateWithSubTab('home')} />
@@ -1005,7 +1166,10 @@ export function AppContent() {
                 labels={labels}
                 tileOrder={tileOrder}
                 users={users}
+                currentUser={currentUser}
                 serviceTypes={serviceTypes}
+                crownPrices={crownPrices}
+                canManagePrices={canPerformAction(currentUser, 'manage_prices')}
                 patients={patients}
                 appointments={appointments}
                 labs={labs}
@@ -1013,13 +1177,16 @@ export function AppContent() {
                 expenses={expenses}
                 materialUsages={materialUsages}
                 whatsappSettings={whatsappSettings}
+                canViewPatientFinance={!isPrivacyMode && (currentUser?.permissions.viewRemainingBalance ?? currentUser?.permissions.patientFinance ?? false)}
                 drugCatalog={drugCatalog}
-                onSaveClinicInfo={handleSaveClinicInfo}
-                onSaveTheme={handleSaveTheme}
-                onSaveLabels={handleSaveLabels}
-                onSaveTileOrder={handleSaveTileOrder}
+                onSaveIdentity={handleSaveIdentity}
+                onSaveContent={handleSaveContent}
                 onSaveUsers={handleSaveUsers}
-                onSaveServiceTypes={handleSaveServiceTypes}
+                onSaveServiceCatalog={handleSaveServiceCatalog}
+                onSaveLabPricing={handleSaveLabPricing}
+                initialPricingLabId={labPricingTarget}
+                canViewLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
+                canManageLabPrices={canPerformAction(currentUser, 'manage_prices') && canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 onSaveWhatsappSettings={handleSaveWhatsappSettings}
                 onSaveDrugCatalog={handleSaveDrugCatalog}
                 onImportPatients={handleImportPatients}
@@ -1037,6 +1204,7 @@ export function AppContent() {
       <MobileBottomNav
         activeView={activeView}
         labels={labels}
+        tileOrder={tileOrder}
         currentUser={currentUser}
         appointments={appointments}
         labCases={labCases}
@@ -1054,7 +1222,10 @@ export function AppContent() {
         />
       )}
 
-      <Suspense fallback={null}>
+      <Suspense fallback={<ModalOpeningPlaceholder onClose={() => {
+        setIsHomePaymentOpen(false); setIsWalkInModalOpen(false); setIsDailyReportModalOpen(false);
+        setIsApprovalQueueOpen(false); setIsSmartScheduleOpen(false); setIsInvoiceOcrOpen(false); setIsEndoHelperOpen(false);
+      }} />}>
         {isHomePaymentOpen && currentUser?.permissions.patientView && (currentUser.permissions.registerPayment ?? currentUser.permissions.patientFinance) && (
           <HomePaymentModal patients={patients}
             showRemaining={!isPrivacyMode && (currentUser.permissions.viewRemainingBalance ?? currentUser.permissions.patientFinance)}

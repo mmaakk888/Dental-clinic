@@ -289,6 +289,8 @@ export interface UILabels {
   welcomeText: string;
   tiles: Record<string, { title: string; desc: string }>;
   tabs: Record<string, string>;
+  /** Floating navigation labels, separate from legacy patient-file tab labels. */
+  navigationLabels?: Partial<Record<'home' | 'patients' | 'appointments' | 'lab' | 'summary' | 'settings', string>>;
 }
 
 export interface UserPermission {

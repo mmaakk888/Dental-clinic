@@ -60,15 +60,15 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[90dvh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-cyan-950 via-teal-900 to-slate-900 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-300">
+        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-cyan-950 via-teal-900 to-slate-900 text-white flex items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-3">
+            <div className="shrink-0 w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-300">
               <Ruler className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0 break-words">
               <h3 className="text-base font-bold">مساعد علاج الجذور (Working Length AI)</h3>
               <p className="text-xs text-teal-200/80">
                 قياس طول العمل وحساب القنوات للسن رقم #{toothNumber} للمريض {patientName}
@@ -77,14 +77,14 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition"
+            className="shrink-0 min-w-[44px] min-h-[44px] p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 p-5 space-y-4 overflow-y-auto">
           {/* Upload Area */}
           {!selectedImage ? (
             <div className="border-2 border-dashed border-teal-200 hover:border-teal-400 bg-teal-50/40 rounded-2xl p-6 text-center transition cursor-pointer relative">
@@ -166,7 +166,7 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+        <div className="shrink-0 p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onClose}
             className="px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-200 rounded-xl transition"
@@ -187,4 +187,3 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
     </div>
   );
 };
-

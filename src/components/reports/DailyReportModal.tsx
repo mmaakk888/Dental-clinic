@@ -87,8 +87,8 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
   const mask = (val: number) => isPrivacyMode ? '***' : `${val.toLocaleString()} ج.م`;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl font-['Cairo',sans-serif]">
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="تقرير التحصيل" tabIndex={-1} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-auto flex flex-col max-h-[92dvh]">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl font-['Cairo',sans-serif]">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="تقرير التحصيل" tabIndex={-1} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-auto flex flex-col max-h-[92dvh]">
         
         {/* Header */}
         <div className="bg-linear-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 flex items-center justify-between shrink-0 shadow-sm">
@@ -202,7 +202,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
         </div>
 
         {/* Scrollable Report Content */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 bg-slate-50/50">
+        <div className="min-h-0 p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 bg-slate-50/50">
           
           {/* SECTION 1: MAIN REVENUE METRICS CARDS */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -426,7 +426,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="bg-slate-50 border-t border-slate-200 p-3 sm:p-4 flex items-center justify-between shrink-0">
+        <div className="bg-slate-50 border-t border-slate-200 p-3 sm:p-4 flex flex-wrap gap-2 items-center justify-between shrink-0">
           <div className="text-xs font-bold text-slate-500 font-mono">
             تقرير التحصيل: {new Date().toLocaleDateString('ar-EG')}
           </div>
@@ -444,4 +444,3 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
     </div>
   );
 };
-

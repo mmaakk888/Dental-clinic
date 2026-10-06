@@ -139,7 +139,7 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn"
+      className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn"
       onClick={closeDialog}
     >
       <div
@@ -149,7 +149,7 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
         aria-labelledby="appointment-status-title"
         tabIndex={-1}
         dir="rtl"
-        className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll font-tajawal"
+        className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll font-tajawal"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -237,4 +237,3 @@ export const AppointmentStatusModal: React.FC<AppointmentStatusModalProps> = ({
     </div>
   );
 };
-

@@ -135,3 +135,4 @@ export const ClinicLogo: React.FC<ClinicLogoProps> = ({
     </div>
   );
 };
+

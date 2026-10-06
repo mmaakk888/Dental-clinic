@@ -278,7 +278,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       </div>
 
       {isForgotOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/85 p-4" dir="rtl">
+        <div className="clinic-modal-overlay fixed inset-0 z-60 flex items-center justify-center bg-slate-950/85 p-4" dir="rtl">
           <div ref={recoveryRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="login-recovery-title"
             onKeyDown={e => {
               if (e.key === 'Escape') { e.stopPropagation(); closeForgotModal(); return; }
@@ -288,7 +288,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               if (e.shiftKey && (document.activeElement === first || document.activeElement === recoveryRef.current)) { e.preventDefault(); last?.focus(); }
               else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
             }}
-            className="bg-[#0f182e] rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-700 space-y-4 max-h-[90dvh] overflow-y-auto">
+            className="clinic-modal-panel bg-[#0f182e] rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-700 space-y-4 max-h-[90dvh] overflow-y-auto">
             <h3 id="login-recovery-title" className="flex items-center gap-2 text-base font-bold text-white">
               <HelpCircle className="w-5 h-5 text-amber-400" />نسيت كلمة السر؟
             </h3>

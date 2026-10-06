@@ -55,9 +55,9 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6" dir="rtl">
+  return <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6" dir="rtl">
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="home-payment-title" tabIndex={-1}
-      className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-xl space-y-5">
+      className="clinic-modal-panel w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-xl space-y-5">
       <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Banknote aria-hidden="true" /></span>
           <div><h2 id="home-payment-title" className="text-xl font-extrabold text-slate-950">تسجيل دفعة</h2><p className="text-sm text-slate-500">اختَر المريض والخدمة، ثم سجل المبلغ المحصّل.</p></div></div>

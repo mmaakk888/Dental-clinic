@@ -36,29 +36,29 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
   const processedRequests = requests.filter(r => r.status !== 'pending');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-3">
+            <div className="shrink-0 w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0 break-words">
               <h2 className="text-lg font-bold">مركز أذونات وتأكيدات الطبيب</h2>
               <p className="text-xs text-slate-300">مراجعة التعديلات والحذوفات الحساسة المطلوبة من المساعد / الاستقبال</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition"
+            className="shrink-0 min-h-[44px] min-w-[44px] p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-4 pt-3 gap-2">
+        <div className="shrink-0 flex flex-wrap border-b border-slate-200 bg-slate-50 px-4 pt-3 gap-2">
           <button
             onClick={() => setActiveTab('pending')}
             className={`px-4 py-2 font-medium text-sm rounded-t-xl transition flex items-center gap-2 ${
@@ -84,7 +84,7 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
         </div>
 
         {/* Body List */}
-        <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-3">
+        <div className="min-h-0 p-4 sm:p-5 flex-1 overflow-y-auto space-y-3">
           {activeTab === 'pending' ? (
             pendingRequests.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
@@ -95,10 +95,10 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
             ) : (
               pendingRequests.map(req => (
                 <div key={req.id} className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 shadow-sm space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex items-center gap-2">
                       <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                      <div>
+                      <div className="min-w-0">
                         <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
                           {req.actionType === 'DELETE_PATIENT' && 'حذف سجل مريض'}
                           {req.actionType === 'DELETE_SESSION' && 'إلغاء جلسة علاجية'}
@@ -106,35 +106,35 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
                           {req.actionType === 'FINANCIAL_DISCOUNT_OVERRIDE' && 'تعديل خصم مالي'}
                           {req.actionType === 'MODIFY_SETTINGS' && 'تعديل إعدادات النظام'}
                         </span>
-                        <h4 className="text-sm font-bold text-slate-900 mt-1">{req.details}</h4>
+                        <h4 className="break-words text-sm font-bold text-slate-900 mt-1">{req.details}</h4>
                       </div>
                     </div>
                     <span className="text-xs text-slate-500 whitespace-nowrap">{req.createdAt}</span>
                   </div>
 
-                  <div className="text-xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-amber-100 flex items-center justify-between">
+                  <div className="text-xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-amber-100 flex flex-wrap items-center justify-between gap-2 break-words">
                     <span>المُطالب: <strong>{req.requestedBy.userName}</strong> ({req.requestedBy.role === 'secretary' ? 'مساعد / استقبال' : req.requestedBy.role})</span>
                     <span>معرف السجل: {req.entityId}</span>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     <input
                       type="text"
                       placeholder="ملاحظة الطبيب (اختياري)..."
                       value={doctorNotes[req.id] || ''}
                       onChange={e => setDoctorNotes({ ...doctorNotes, [req.id]: e.target.value })}
-                      className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="min-w-0 w-full basis-full sm:w-auto sm:basis-auto flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                     <button
                       onClick={() => handleAction(req, true)}
-                      className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium px-3.5 py-1.5 rounded-lg transition"
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium px-3.5 py-1.5 rounded-lg transition"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>موافقة</span>
                     </button>
                     <button
                       onClick={() => handleAction(req, false)}
-                      className="flex items-center gap-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-medium px-3.5 py-1.5 rounded-lg transition"
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-medium px-3.5 py-1.5 rounded-lg transition"
                     >
                       <XCircle className="w-3.5 h-3.5" />
                       <span>رفض</span>
@@ -171,7 +171,7 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+        <div className="shrink-0 p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
           <button
             onClick={onClose}
             className="px-5 py-2 text-sm font-medium bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl transition"

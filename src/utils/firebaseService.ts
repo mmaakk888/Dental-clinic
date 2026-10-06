@@ -108,3 +108,4 @@ export async function removeFirebaseBackup(backupId: string): Promise<void> {
   const backupRef = doc(db, 'backups', backupId);
   await deleteDoc(backupRef);
 }
+

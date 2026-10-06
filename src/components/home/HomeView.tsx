@@ -5,7 +5,7 @@ import {
   Stethoscope, UserPlus, X
 } from 'lucide-react';
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
-import { DEFAULT_UI_LABELS } from '../../data/initialData';
+import { getHomeSubtitle, getHomeWelcome } from '../../utils/clinicContent';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 
 interface HomeViewProps {
@@ -115,8 +115,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 
   const showAlerts = (canAppointments && stats.noShow > 0)
     || (canLab && activeLabCount > 0) || (canViewExpenses && stats.spent > 0);
-  const subtitle = !labels.homeSubtitle || labels.homeSubtitle === DEFAULT_UI_LABELS.homeSubtitle
-    ? 'مواعيد اليوم والمهام الأساسية في مكان واحد.' : labels.homeSubtitle;
+  const subtitle = getHomeSubtitle(labels);
 
   const filteredPatients = useMemo(() => {
     const query = normalizeSearch(searchQuery).replace(/^#\s*/, '');
@@ -222,7 +221,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 
 
       <section className="dashboard-footer-strip">
-        <Stethoscope aria-hidden="true" /><span>{!labels.welcomeText || labels.welcomeText === DEFAULT_UI_LABELS.welcomeText ? 'اختر الإجراء المطلوب للمتابعة' : labels.welcomeText}</span>
+        <Stethoscope aria-hidden="true" /><span>{getHomeWelcome(labels)}</span>
         {canSettings && <button type="button" onClick={() => onNavigate('settings')}>إعدادات العيادة <ChevronLeft aria-hidden="true" /></button>}
       </section>
     </div>

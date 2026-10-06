@@ -248,3 +248,4 @@ export const VisualFinancialCard: React.FC<VisualFinancialCardProps> = ({
   );
 };
 
+

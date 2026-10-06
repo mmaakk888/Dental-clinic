@@ -184,3 +184,4 @@ export function canPerformAction(user: User | null, action: RBACAction): boolean
 export function getDefaultViewForUser(user: User, isMobile: boolean): ActiveView {
   return 'home';
 }
+

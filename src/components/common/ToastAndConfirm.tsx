@@ -176,8 +176,8 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
 
       {/* Confirm Modal */}
       {confirmState && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div ref={confirmRef} role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message" className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+        <div className="clinic-modal-overlay fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div ref={confirmRef} role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message" className="clinic-modal-panel bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start gap-4">
               <div className={`p-3 rounded-xl shrink-0 ${
                 confirmState.tone === 'danger'
@@ -194,7 +194,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                   <AlertCircle className="w-6 h-6" />
                 )}
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1 break-words">
                 <h3 id="confirmation-title" className="text-lg font-bold text-slate-900 font-tajawal">
                   {confirmState.title}
                 </h3>
@@ -204,7 +204,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setConfirmState(null)}
@@ -235,4 +235,3 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
     </ToastAndConfirmContext.Provider>
   );
 };
-

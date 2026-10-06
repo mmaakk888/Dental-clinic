@@ -144,10 +144,10 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div id="smart-schedule-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="smart-schedule-title" tabIndex={-1} dir="rtl" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[92dvh] overflow-hidden flex flex-col">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div id="smart-schedule-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="smart-schedule-title" tabIndex={-1} dir="rtl" className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[92dvh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between">
+        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
               <Sparkles className="w-5 h-5" />
@@ -313,4 +313,3 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
     </div>
   );
 };
-

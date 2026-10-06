@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local visual QA screenshots may include clinic or account details.
+review-proofs/

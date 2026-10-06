@@ -1,18 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Appointment, Patient, WhatsappSettings } from '../../types';
-import { cleanEgyptianPhone, extraMessageTemplates, fillMessageTemplate, format12HourAr, formatArabicDate, getWhatsAppUrl } from '../../utils/whatsappUtils';
+import { cleanEgyptianPhone, extraMessageTemplates, format12HourAr, formatArabicDate, getWhatsAppUrl } from '../../utils/whatsappUtils';
 import { getPatientFinancialSummary } from '../../utils/financials';
+import { prepareSafeWhatsAppMessage, whatsAppComposerContextKey } from '../../utils/whatsappSafety';
+import { appointmentTimeMinutes, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 
 interface Props {
+  key?: string;
   patient: Patient;
   appointments: Appointment[];
   settings: WhatsappSettings;
   clinicName: string;
   onClose: () => void;
+  canViewPatientFinance?: boolean;
   campaign?: { template: 'greeting' | 'offer'; message: string; link: string; attachment: File | null; onOpened: () => void };
 }
 
-export function WhatsAppComposer({ patient, appointments, settings, clinicName, onClose, campaign }: Props) {
+export function WhatsAppComposer(props: Props) {
+  // A new recipient/access context must never inherit the previous patient's edited text or photo.
+  return <WhatsAppComposerBody key={whatsAppComposerContextKey(props.patient.id, props.patient.mobile, props.canViewPatientFinance === true, props.campaign?.template)} {...props} />;
+}
+
+function WhatsAppComposerBody({ patient, appointments, settings, clinicName, onClose, campaign, canViewPatientFinance = false }: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -29,26 +38,33 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
   const [link, setLink] = useState(campaign?.link ?? '');
   const [attachment, setAttachment] = useState<File | null>(campaign?.attachment ?? null);
   const [notice, setNotice] = useState('');
-  const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', accountBalance: 'الرصيد المتبقي', postOp: 'تعليمات عامة',
+  const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', ...(canViewPatientFinance && !campaign ? { accountBalance: 'الرصيد المتبقي' } : {}), postOp: 'تعليمات عامة',
     ...Object.fromEntries(Object.entries(extraMessageTemplates).map(([key, value]) => [key, value.title])) };
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const appts = appointments.filter(a => (a.patientId === patient.id || a.fileNo === patient.id) && !['cancelled', 'no_show', 'apologized', 'attended'].includes(a.status) && a.date >= today)
     .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   const selected = appts.find(a => a.id === appointmentId);
-  const activeDate = selected?.date || date;
-  const activeTime = selected?.time || time;
+  const activeDate = selected?.date || (appointmentId === 'manual' ? date : '');
+  const activeTime = selected?.time || (appointmentId === 'manual' ? time : '');
   const storedTemplate = campaign?.message ?? settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
   const raw = template === 'reminderTomorrow' ? storedTemplate.replace('غداً {date}', 'يوم {date}') : storedTemplate;
-  const message = edited ?? fillMessageTemplate(raw, { patientName: patient.name, clinicName, fileNo: patient.id,
-    date: formatArabicDate(activeDate), time: format12HourAr(activeTime), remainingBalance: getPatientFinancialSummary(patient).totalRemaining.toLocaleString('ar-EG') });
+  const values: Record<string, string> = { patientName: patient.name, clinicName, fileNo: patient.id };
+  if (isValidAppointmentDate(activeDate)) values.date = formatArabicDate(activeDate);
+  if (appointmentTimeMinutes(activeTime) !== null) values.time = format12HourAr(activeTime);
+  if (canViewPatientFinance && !campaign) values.remainingBalance = getPatientFinancialSummary(patient).totalRemaining.toLocaleString('ar-EG');
+  const safety = prepareSafeWhatsAppMessage({ templateName: template, rawTemplate: raw, editedText: edited, values, phone: patient.mobile,
+    canViewPatientFinance, isCampaign: Boolean(campaign), campaignConsent: settings.campaignConsent });
+  const message = safety.message;
   const text = message + (link.trim() ? `\n${link.trim()}` : '');
   const phone = cleanEgyptianPhone(patient.mobile);
   const validPhone = /^[1-9]\d{7,14}$/.test(phone);
-  const missingDate = ['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) && (!activeDate || !activeTime);
-  const unfinished = /\[[^\]]+\]|\{\w+\}/.test(text);
-  const validLink = !link.trim() || /^https?:\/\/\S+$/i.test(link.trim());
-  const ready = validPhone && !missingDate && !unfinished && validLink && !!message.trim();
-  return <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
+  const needsDate = !campaign && (['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) || /\{(?:date|time)\}/.test(raw));
+  const missingDate = needsDate && (!isValidAppointmentDate(activeDate) || appointmentTimeMinutes(activeTime) === null);
+  const unfinished = safety.unfinished || /\[[^\]]+\]|\{[^{}]+\}/.test(text);
+  let validLink = !link.trim();
+  try { const url = new URL(link.trim()); validLink = ['https:', 'http:'].includes(url.protocol) && Boolean(url.hostname) && !/\s/.test(link.trim()); } catch { /* Optional blank links remain valid. */ }
+  const ready = validPhone && !missingDate && !unfinished && validLink && !!message.trim() && safety.financeAllowed && safety.consentAllowed && !safety.unsupportedVariables.length;
+  return <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
     <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تجهيز رسالة واتساب" onKeyDown={e => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
       if (e.key !== 'Tab') return;
@@ -56,12 +72,12 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       const first = items[0], last = items[items.length - 1];
       if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { e.preventDefault(); last?.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
-    }} className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 space-y-4">
+    }} className="clinic-modal-panel w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 space-y-4">
       <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg min-w-0 break-words">رسالة إلى {patient.name}</h2><button type="button" onClick={onClose} className="p-3 min-h-[44px] shrink-0 rounded-xl bg-slate-100">إغلاق</button></div>
       <p className="text-sm text-slate-600">تجهّز الرسالة هنا ثم تراجعها وتضغط إرسال داخل واتساب.</p>
       <p className="text-xs text-slate-500">راجع التاريخ والتعليمات الطبية والمبلغ قبل الإرسال. لا تُرسل عروضاً إلا لمن وافق على استقبالها.</p>
       {!campaign && <label className="block text-sm font-bold">نوع الرسالة<select value={template} onChange={e => { setTemplate(e.target.value); setEdited(null); }} className="block w-full border rounded-xl p-3 mt-1">{Object.entries(options).map(([key, title]) => <option key={key} value={key}>{title}</option>)}</select></label>}
-      {['reminderTomorrow', 'newAppt', 'rootCanal'].includes(template) && <div className="space-y-2">
+      {needsDate && <div className="space-y-2">
         <label className="block text-sm">الموعد<select value={appointmentId} onChange={e => { setAppointmentId(e.target.value); setEdited(null); }} className="block border rounded-xl p-3 w-full"><option value="manual">تحديد موعد يدوياً</option>{appts.map(a => <option key={a.id} value={a.id}>{formatArabicDate(a.date)} — {format12HourAr(a.time)}</option>)}</select></label>
         {appointmentId === 'manual' && <div className="grid grid-cols-2 gap-2"><input aria-label="تاريخ الموعد" type="date" value={date} onChange={e => { setDate(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /><input aria-label="وقت الموعد" type="time" value={time} onChange={e => { setTime(e.target.value); setEdited(null); }} className="border rounded-xl p-3 min-w-0" /></div>}
       </div>}
@@ -69,7 +85,7 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       <label className="block text-sm">رابط اختياري<input type="url" value={link} onChange={e => setLink(e.target.value)} placeholder="https://" className="block w-full border rounded-xl p-3" dir="ltr" /></label>
       <label className="block text-sm">إرفاق صورة<input type="file" accept="image/jpeg,image/png,image/webp" className="block w-full mt-2" onChange={e => {
         const file = e.target.files?.[0];
-        if (file && (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024)) { setNotice('اختر صورة JPG أو PNG أو WebP أقل من 8 ميجابايت'); setAttachment(null); e.target.value = ''; return; }
+        if (file && (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || !file.size || file.size > 8 * 1024 * 1024)) { setNotice('اختر صورة JPG أو PNG أو WebP حتى 8 ميجابايت'); setAttachment(null); e.target.value = ''; return; }
         setAttachment(file || null); setNotice('');
       }} /></label>
       {attachment && <p className="text-sm text-slate-600">{attachment.name} — مشاركة الصورة تفتح قائمة المشاركة؛ اختر واتساب ثم المريض. رابط واتساب وحده لا يرفق صورة.</p>}
@@ -77,12 +93,16 @@ export function WhatsAppComposer({ patient, appointments, settings, clinicName, 
       {missingDate && <p className="text-amber-800 text-sm">حدد تاريخ الموعد ووقته.</p>}
       {unfinished && <p className="text-amber-800 text-sm">أكمل النص الموجود بين الأقواس قبل فتح واتساب.</p>}
       {!validLink && <p className="text-rose-700 text-sm">اكتب رابطاً كاملاً يبدأ بـ https://</p>}
+      {!safety.financeAllowed && <p className="text-rose-700 text-sm">{campaign ? 'لا تُستخدم بيانات حساب المريض في الحملات العامة.' : 'هذه الرسالة تحتاج صلاحية الاطلاع على حساب المريض.'}</p>}
+      {!safety.consentAllowed && <p className="text-amber-800 text-sm">لا يمكن فتح المعايدات والعروض قبل تسجيل موافقة المريض الفعلية على رسائل الحملات.</p>}
+      {safety.unsupportedVariables.length > 0 && <p className="text-amber-800 text-sm">{campaign ? 'الحملات تدعم اسم المريض واسم العيادة فقط. ' : ''}راجع المتغيرات غير المتاحة: {safety.unsupportedVariables.join('، ')}.</p>}
       {notice && <p role="status" className="text-sm text-slate-700">{notice}</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!ready} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => { window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer'); campaign?.onOpened(); }}>فتح الرسالة في واتساب</button>
+        <button type="button" disabled={!ready} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => { if (!ready) return; window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer'); campaign?.onOpened(); setNotice('طُلب فتح واتساب؛ راجع المستلم والإرسال داخله. هذا ليس تأكيد إرسال أو تسليم.'); }}>فتح الرسالة في واتساب</button>
         {attachment && <button type="button" disabled={!ready} className="rounded-xl bg-slate-100 px-4 py-3 disabled:opacity-40" onClick={async () => {
+          if (!ready || !attachment) return;
           if (!navigator.canShare?.({ files: [attachment] })) { setNotice('مشاركة الصور غير متاحة في هذا المتصفح. افتح الرسالة وأرفق الصورة من واتساب يدوياً.'); return; }
-          try { await navigator.share({ files: [attachment], text }); setNotice('تم فتح المشاركة؛ تحقق من المستلم والإرسال داخل واتساب.'); }
+          try { await navigator.share({ files: [attachment], text }); setNotice('أُغلقت نافذة المشاركة؛ تحقق من المستلم والإرسال داخل واتساب. هذا ليس تأكيد إرسال أو تسليم.'); }
           catch (error) { setNotice(error instanceof Error && error.name === 'AbortError' ? 'تم إلغاء المشاركة' : 'تعذرت المشاركة؛ أرفق الصورة يدوياً داخل واتساب.'); }
         }}>مشاركة الصورة والنص</button>}
       </div>

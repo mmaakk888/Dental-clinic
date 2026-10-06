@@ -40,3 +40,4 @@ export const PermissionDeniedCard: React.FC<PermissionDeniedCardProps> = ({
     </div>
   );
 };
+

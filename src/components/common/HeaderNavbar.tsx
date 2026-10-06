@@ -9,6 +9,7 @@ import { GlobalSearchModal } from './GlobalSearchModal';
 import { NotificationCenterModal } from './NotificationCenterModal';
 import { OfflineSyncEngine, PendingMutation } from '../../utils/offlineSync';
 import { getPatientFinancialSummary } from '../../utils/financials';
+import { getNavigationLabel } from '../../utils/clinicContent';
 
 interface HeaderNavbarProps {
   activeView: ActiveView;
@@ -197,7 +198,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 title="العودة للشاشة الرئيسية"
               >
                 <ArrowRight className="w-4 h-4 shrink-0" />
-                <span className="font-tajawal hidden sm:inline">{labels.tabs.home || 'الرئيسية'}</span>
+                <span className="font-tajawal hidden sm:inline">{getNavigationLabel(labels, 'home')}</span>
               </button>
             )}
 
@@ -351,7 +352,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
 
           {/* Bottom Sheet Card */}
           <div 
-            className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[88vh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+            className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[88dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]"
             ref={profileRef}
           >
             {/* Sheet Handle & Header */}
@@ -470,7 +471,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
             onClick={() => setIsSyncModalOpen(false)}
           />
 
-          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90vh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          <div className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]">
             {/* Sheet Handle & Header */}
             <div className="relative mb-3.5">
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto" />

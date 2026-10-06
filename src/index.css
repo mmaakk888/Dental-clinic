@@ -80,7 +80,85 @@ html, body {
 /* Prevent body scroll when modal is open */
 body.modal-open {
   overflow: hidden !important;
-  touch-action: none;
+}
+
+/* One viewport contract for dialogs: safe edges, keyboard-aware height and
+   scrolling inside the card rather than behind it. Keep each dialog's width
+   and top/bottom alignment so small confirmations never become full-screen. */
+:root {
+  --clinic-modal-gutter: 12px;
+  --clinic-modal-top-gap: max(var(--clinic-modal-gutter), env(safe-area-inset-top, 0px));
+  --clinic-modal-bottom-gap: max(var(--clinic-modal-gutter), env(safe-area-inset-bottom, 0px));
+  --clinic-modal-available: calc(var(--clinic-visible-height, 100dvh) - var(--clinic-modal-top-gap) - var(--clinic-modal-bottom-gap));
+}
+
+#root .clinic-modal-overlay {
+  --clinic-modal-available: calc(var(--clinic-visible-height, 100dvh) - var(--clinic-modal-top-gap) - var(--clinic-modal-bottom-gap));
+  top: var(--clinic-viewport-top, 0px) !important;
+  bottom: auto !important;
+  height: var(--clinic-visible-height, 100dvh);
+  padding: var(--clinic-modal-top-gap) max(var(--clinic-modal-gutter), env(safe-area-inset-right, 0px)) var(--clinic-modal-bottom-gap) max(var(--clinic-modal-gutter), env(safe-area-inset-left, 0px));
+  overflow: hidden;
+  overscroll-behavior: contain;
+  animation: fadeIn 140ms ease-out backwards;
+}
+
+#root .clinic-modal-panel,
+#root .clinic-modal-sheet {
+  min-width: 0;
+  min-height: 0;
+  max-height: var(--clinic-modal-available) !important;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 18px;
+  animation: clinicDialogIn 180ms cubic-bezier(.2, .75, .3, 1) backwards;
+}
+
+#root .clinic-modal-panel--framed {
+  overflow: hidden;
+}
+
+#root .clinic-modal-panel--framed > .overflow-y-auto {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+/* On landscape phones or with a keyboard, fixed headers must not consume the
+   entire body. Let the whole dialog scroll instead of trapping its actions. */
+html[data-clinic-compact-viewport] #root .clinic-modal-panel--framed {
+  overflow-y: auto;
+}
+
+html[data-clinic-compact-viewport] #root .clinic-modal-panel--framed > * {
+  flex-shrink: 0;
+}
+
+html[data-clinic-compact-viewport] #root .clinic-modal-panel--framed > .overflow-y-auto,
+html[data-clinic-compact-viewport] #root .clinic-modal-panel--framed > .settings-picker-groups {
+  overflow-y: visible;
+}
+
+#root .clinic-modal-sheet {
+  bottom: max(0px, calc(100dvh - var(--clinic-visible-height, 100dvh) - var(--clinic-viewport-top, 0px))) !important;
+}
+
+#root .clinic-modal-overlay--top {
+  --clinic-modal-top-gap: max(var(--clinic-modal-gutter), min(4.5rem, calc(var(--clinic-visible-height, 100dvh) * .12)), env(safe-area-inset-top, 0px));
+}
+
+@keyframes clinicDialogIn {
+  from { opacity: 0; transform: translateY(10px) scale(.99); }
+  to { opacity: 1; transform: none; }
+}
+
+button {
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease,
+    box-shadow 120ms ease, opacity 120ms ease, transform 140ms ease, scale 100ms ease;
+}
+
+button:not(:disabled):not(.patient-card-open):active {
+  scale: .985;
 }
 
 h1, h2, h3, h4, h5, h6, button, input, select, textarea, .font-tajawal, .font-cairo, .font-alexandria, .font-sans {
@@ -240,8 +318,8 @@ h1, h2, h3, h4, h5, h6, .font-tajawal, .font-cairo {
 
 @keyframes slideUp {
   from {
-    transform: translateY(100%);
-    opacity: 0.8;
+    transform: translateY(10px);
+    opacity: 0;
   }
   to {
     transform: translateY(0);
@@ -259,11 +337,15 @@ h1, h2, h3, h4, h5, h6, .font-tajawal, .font-cairo {
 }
 
 .animate-slideUp {
-  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: slideUp 0.18s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
-.animate-fadeIn {
-  animation: fadeIn 0.15s ease-out forwards;
+.animate-fadeIn, .animate-fade-in {
+  animation: fadeIn 0.15s ease-out backwards;
+}
+
+.animate-scaleUp {
+  animation: clinicDialogIn 180ms ease-out backwards;
 }
 
 /* Custom scrollbar */
@@ -333,7 +415,7 @@ h1, h2, h3, h4, h5, h6, .font-tajawal, .font-cairo {
 html[dir="rtl"] { text-align: start; }
 
 body {
-  min-width: 320px;
+  min-width: min(320px, 100%);
   min-height: 100dvh;
   background:
     radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 28rem),
@@ -378,6 +460,8 @@ th, td { text-align: start; }
 .clinic-dock-option { display: flex; align-items: center; gap: .75rem; width: 100%; min-height: 56px; padding: .9rem; border-radius: 1rem; background: #f8fafc; text-align: start; font-weight: 700; }
 .clinic-dock-option svg { width: 20px; height: 20px; flex-shrink: 0; color: #64748b; }
 .clinic-dock-option span { flex: 1; }
+.clinic-dock-option strong { display: block; overflow-wrap: anywhere; }
+.clinic-dock-description { display: block; margin-top: 4px; color: #64748b; font-size: .75rem; font-weight: 500; line-height: 1.8; overflow-wrap: anywhere; }
 .clinic-dock-option[aria-current="page"] { background: #eef2ff; color: #4338ca; }
 @media (width < 768px) {
   .clinic-dock-desktop { display: none; }
@@ -460,13 +544,14 @@ th, td { text-align: start; }
 
 .dashboard-eyebrow {
   margin: 0 0 .25rem;
-  color: var(--primary);
+  color: var(--secondary, var(--primary));
   font-size: .72rem;
   font-weight: 900;
   letter-spacing: .02em;
 }
 
 .dashboard-title { margin: 0; font-size: clamp(1.25rem, 2.4vw, 2rem); font-weight: 900; line-height: 1.4; overflow-wrap: anywhere; }
+.dashboard-hero { border-inline-start: 3px solid var(--accent, #6366f1); }
 .dashboard-subtitle { max-width: 58rem; margin: .4rem 0 0; color: #64748b; font-size: .9rem; font-weight: 600; }
 .dashboard-date { display: inline-flex; align-items: center; gap: .5rem; flex: 0 0 auto; padding: .65rem .8rem; border-radius: .9rem; background: #f1f5f9; color: #475569; font-size: .75rem; font-weight: 800; }
 .dashboard-date svg { width: 1rem; height: 1rem; }
@@ -611,7 +696,8 @@ button.dashboard-card:hover { transform: translateY(-2px); box-shadow: 0 14px 30
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  button:not(:disabled):active { scale: none; }
 }
 
 @media screen and (min-width: 1024px) {

@@ -793,11 +793,11 @@ export const QuickActions: React.FC<QuickActionsProps> = React.memo(({
         {/* Mobile Bottom Sheet Modal Overlay */}
         {isMobileSheetOpen && (
           <div 
-            className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-end justify-center animate-fadeIn dir-rtl"
+            className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-end justify-center animate-fadeIn dir-rtl"
             onClick={() => setIsMobileSheetOpen(false)}
           >
             <div 
-              className="w-full max-w-lg bg-white rounded-t-3xl p-5 shadow-2xl border-t border-slate-200 animate-slideUp font-tajawal space-y-4 max-h-[85vh] overflow-y-auto"
+              className="clinic-modal-panel w-full max-w-lg bg-white rounded-t-3xl p-5 shadow-2xl border-t border-slate-200 animate-slideUp font-tajawal space-y-4 max-h-[85dvh] overflow-y-auto"
               onClick={e => e.stopPropagation()}
             >
               {/* Sheet Drag Handle & Title */}
@@ -888,11 +888,11 @@ export const QuickActions: React.FC<QuickActionsProps> = React.memo(({
       */}
       {showShortcutsModal && (
         <div 
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn dir-rtl"
+          className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn dir-rtl"
           onClick={() => setShowShortcutsModal(false)}
         >
           <div 
-            className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-slate-200 space-y-4 font-tajawal animate-scaleUp"
+            className="clinic-modal-panel w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-slate-200 space-y-4 font-tajawal max-h-[90dvh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">

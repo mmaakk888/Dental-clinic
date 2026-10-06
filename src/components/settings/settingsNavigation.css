@@ -1,0 +1,334 @@
+.settings-mobile-nav-anchor {
+  display: block;
+}
+
+.settings-mobile-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce4e0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgb(23 38 42 / 4%);
+}
+
+.settings-mobile-nav.is-pinned {
+  position: fixed;
+  top: 12px;
+  z-index: 32;
+  box-shadow: 0 6px 22px rgb(23 38 42 / 12%);
+}
+
+.settings-mobile-nav-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #f0f4f2;
+}
+
+.settings-mobile-nav-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.settings-mobile-nav-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-mobile-nav-title small,
+.settings-mobile-nav-title strong {
+  display: block;
+}
+
+.settings-mobile-nav-title small {
+  margin-bottom: 3px;
+  color: #687a73;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-mobile-nav-title strong {
+  color: #17262a;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-mobile-nav-change {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid #dce7e0;
+  border-radius: 12px;
+  background: #edf5f0;
+  color: #235e49;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.settings-mobile-nav-change svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(15 23 42 / 46%);
+  animation: settings-picker-overlay-in 160ms ease-out;
+}
+
+.settings-picker-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 600px;
+  max-height: 88vh;
+  max-height: 88dvh;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #dce4e0;
+  border-radius: 24px;
+  background: #fff;
+  color: #17262a;
+  box-shadow: 0 20px 70px rgb(15 23 42 / 22%);
+  animation: settings-content-in 190ms ease-out;
+}
+
+.settings-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 20px;
+  border-bottom: 1px solid #e8ece9;
+}
+
+.settings-picker-header h2 {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.5;
+  font-weight: 800;
+}
+
+.settings-picker-header p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #63736b;
+}
+
+.settings-picker-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #e5ebe7;
+  border-radius: 12px;
+  color: #586b63;
+  background: #f5f7f6;
+  cursor: pointer;
+}
+
+.settings-picker-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-picker-groups {
+  display: grid;
+  gap: 20px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+}
+
+.settings-picker-group h3 {
+  margin: 0 3px 9px;
+  color: #63736b;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.6;
+}
+
+.settings-picker-options {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-width: 0;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid #e5ebe7;
+  border-radius: 14px;
+  color: #17262a;
+  background: #fafcfb;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.settings-picker-option[aria-current='page'] {
+  border-color: #99c4ad;
+  background: #eef6f1;
+}
+
+.settings-picker-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  height: 40px;
+  border: 1px solid #e5ebe7;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.settings-picker-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-picker-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-picker-label strong,
+.settings-picker-label small {
+  display: block;
+}
+
+.settings-picker-label strong {
+  font-size: 14px;
+  line-height: 1.6;
+  font-weight: 750;
+}
+
+.settings-picker-label small {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #687a73;
+}
+
+.settings-picker-indicator {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #6e8178;
+}
+
+.settings-picker-option[aria-current='page'] .settings-picker-indicator {
+  color: #235e49;
+}
+
+.settings-content-panel {
+  scroll-margin-top: 110px;
+}
+
+.settings-section-enter {
+  animation: settings-content-in 190ms ease-out;
+}
+
+.settings-mobile-nav-change:focus-visible,
+.settings-picker-close:focus-visible,
+.settings-picker-option:focus-visible,
+.settings-content-panel:focus-visible {
+  outline: 3px solid #7ebd9f;
+  outline-offset: 3px;
+}
+
+.settings-content-panel:focus-visible {
+  border-radius: 24px;
+}
+
+.settings-desktop-nav button[aria-current='page'] svg {
+  color: inherit;
+}
+
+@media (hover: hover) {
+  .settings-mobile-nav-change:hover {
+    background: #e2efe7;
+  }
+
+  .settings-picker-option:hover,
+  .settings-picker-close:hover {
+    background: #f0f5f2;
+    border-color: #b9cec1;
+  }
+}
+
+@media (min-width: 1024px) {
+  .settings-mobile-nav-anchor {
+    display: none;
+  }
+
+  .settings-content-panel {
+    scroll-margin-top: 24px;
+  }
+}
+
+@media (max-width: 359px) {
+  .settings-mobile-nav {
+    flex-wrap: wrap;
+  }
+
+  .settings-mobile-nav-change {
+    flex: 1 0 100%;
+  }
+
+  .settings-picker-header {
+    padding: 16px;
+  }
+
+  .settings-picker-groups {
+    padding: 12px;
+  }
+}
+
+@keyframes settings-content-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes settings-picker-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-section-enter,
+  .settings-picker-overlay,
+  .settings-picker-dialog {
+    animation: none;
+  }
+
+  .settings-mobile-nav-change,
+  .settings-picker-option,
+  .settings-picker-close {
+    transition: none;
+  }
+}

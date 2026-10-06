@@ -674,7 +674,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   return (
     <div className="space-y-4 pb-28 font-tajawal antialiased text-slate-800">
-      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} onClose={() => setIsWhatsAppOpen(false)} />}
+      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={!isPrivacyMode && canViewRemainingBalance} onClose={() => setIsWhatsAppOpen(false)} />}
 
       {/* 1. Header & Profile Redesign (Mobile First, Desktop Grid) */}
       <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-sm space-y-4">
@@ -1642,8 +1642,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 8.1 Tooth Details & Quick Service Bottom Sheet */}
       {canEditPatients && toothSheetId && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end md:items-center md:justify-center bg-slate-900/60 backdrop-blur-xs p-0 md:p-4 animate-fadeIn">
-          <div id="toothServiceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="bg-white rounded-t-3xl md:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll animate-slideUp">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex flex-col justify-end md:items-center md:justify-center bg-slate-900/60 backdrop-blur-xs p-0 md:p-4 animate-fadeIn">
+          <div id="toothServiceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-t-3xl md:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll animate-slideUp">
             {/* Sheet Drag Handle */}
             <div className="w-12 h-1.5 bg-slate-300 rounded-full mx-auto md:hidden" />
 
@@ -1784,8 +1784,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 8.2 Standard Service Modal */}
       {canEditPatients && isServiceModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="serviceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="bg-white rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="serviceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-lg font-bold text-[#0f3d3e]">
                 تسجيل خدمة طبية جديدة
@@ -1888,8 +1888,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 8.3 Payment Modal */}
       {canRegisterPayment && isPaymentModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="paymentModal" role="dialog" aria-modal="true" aria-label="تحصيل دفعة" className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="paymentModal" role="dialog" aria-modal="true" aria-label="تحصيل دفعة" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 تحصيل دفعة مالية جديدة
@@ -1978,8 +1978,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 8.4 Appointment Modal */}
       {canManageAppointments && isApptModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 {editingAppt ? 'تعديل موعد العيادة' : 'حجز موعد جديد للمريض'}
@@ -2071,8 +2071,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
       {/* 8.5 Edit Patient Demographics Modal */}
       {canEditPatients && isEditPatientModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="editPatientModal" className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="editPatientModal" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 تعديل بيانات ملف المريض #{patient.id}

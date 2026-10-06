@@ -122,14 +122,14 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-end p-3 sm:p-4 pt-16 sm:pt-20 bg-slate-900/40">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-start sm:items-center justify-end p-3 sm:p-4 bg-slate-900/40">
       <div
         ref={dialogRef} id="clinic-notifications-dialog" role="dialog" aria-modal="true" aria-labelledby="clinic-notifications-title" tabIndex={-1}
-        className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[85dvh]"
+        className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[90dvh]"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
+        <div className="shrink-0 p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50/80">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
               <Bell className="w-5 h-5" />
@@ -156,7 +156,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         </div>
 
         {/* Action controls & filter tabs */}
-        <div className="p-3 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+        <div className="shrink-0 p-3 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5 text-sm font-bold">
             <button
               onClick={() => setFilterType('all')}
@@ -203,7 +203,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         </div>
 
         {/* Notifications List */}
-        <div className="p-3 overflow-y-auto space-y-2 flex-1">
+        <div className="min-h-0 p-3 overflow-y-auto space-y-2 flex-1">
           {filteredNotifications.length === 0 ? (
             <div className="py-12 text-center text-slate-400 space-y-2">
               <CheckCircle className="w-12 h-12 mx-auto text-emerald-400 stroke-1" />

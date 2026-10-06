@@ -729,7 +729,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
 
       {/* Add Appointment Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
           <div
             id="apptModal"
             ref={bookingDialogRef}
@@ -737,7 +737,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
             aria-modal="true"
             aria-labelledby="booking-title"
             tabIndex={-1}
-            className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 font-tajawal relative max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll"
+            className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 font-tajawal relative max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -893,4 +893,3 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
 });
 
 AppointmentsView.displayName = 'AppointmentsView';
-

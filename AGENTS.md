@@ -25,3 +25,4 @@ This application is a full-featured Dental Clinic Management System built with R
 
 6. **Touch-First Modal Controls (زر إلغاء وإغلاق لمس لجميع النوافذ)**:
    - All modals, search overlays, popups, and lightboxes feature clear, dedicated "إلغاء وإغلاق" touch buttons, enabling effortless operation on mobile phones, tablets, and 60-inch touchscreens without requiring a physical keyboard or Esc key.
+

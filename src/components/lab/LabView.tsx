@@ -1,24 +1,28 @@
 import React, { useState, useMemo } from 'react';
 import { Microscope, ArrowRight, Plus, Phone, MapPin, DollarSign, Edit3, Trash2, CheckCircle, Search, TrendingUp, ChevronLeft, AlertCircle, Clock, CheckCircle2, Truck, AlertTriangle, Filter } from 'lucide-react';
-import { Lab, LabCase, Patient, LabService } from '../../types';
+import { Lab, LabCase, Patient } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
 import { allocateLabPayment, getLabCaseFinancials } from '../../utils/labFinancials';
-import { BalanceProgressMeter, CompactBalanceBadge, VisualFinancialCard } from '../common/FinancialBadge';
+import { BalanceProgressMeter, VisualFinancialCard } from '../common/FinancialBadge';
+import { cloneLab } from '../../utils/labPricing';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import './labView.css';
 
 interface LabViewProps {
   labs: Lab[];
   labCases: LabCase[];
   patients: Patient[];
   crownPrices: Record<string, number>;
-  onSaveLab: (lab: Omit<Lab, 'id'> & { id?: string }) => void;
+  onSaveLab: (lab: Omit<Lab, 'id'> & { id?: string }, baseline?: Lab) => void;
   onDeleteLab: (labId: string) => void;
   onSaveLabCase: (caseData: Omit<LabCase, 'id'>) => void;
   onUpdateLabCase?: (updatedCase: LabCase) => void;
   onAddLabCasePayment: (caseId: string, amount: number) => void;
-  onSaveCrownPrices: (prices: Record<string, number>) => void;
+  onManageLabPrices?: (labId?: string) => void;
   onBackToHome: () => void;
   canViewFinancials?: boolean;
+  canManagePrices?: boolean;
   onBulkPayment: (labId: string, amount: number) => void;
 }
 
@@ -32,9 +36,10 @@ export const LabView: React.FC<LabViewProps> = ({
   onSaveLabCase,
   onUpdateLabCase,
   onAddLabCasePayment,
-  onSaveCrownPrices,
+  onManageLabPrices,
   onBackToHome,
   canViewFinancials = false,
+  canManagePrices = false,
   onBulkPayment
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
@@ -55,11 +60,10 @@ export const LabView: React.FC<LabViewProps> = ({
   // Modals
   const [isLabModalOpen, setIsLabModalOpen] = useState(false);
   const [isCaseModalOpen, setIsCaseModalOpen] = useState(false);
-  const [isCrownPricingModalOpen, setIsCrownPricingModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
   React.useEffect(() => {
-    const isAnyModalOpen = isLabModalOpen || isCaseModalOpen || isCrownPricingModalOpen || isPaymentModalOpen;
+    const isAnyModalOpen = isLabModalOpen || isCaseModalOpen || isPaymentModalOpen;
     if (isAnyModalOpen) {
       document.body.classList.add('modal-open');
     } else {
@@ -68,7 +72,7 @@ export const LabView: React.FC<LabViewProps> = ({
     return () => {
       document.body.classList.remove('modal-open');
     };
-  }, [isLabModalOpen, isCaseModalOpen, isCrownPricingModalOpen, isPaymentModalOpen]);
+  }, [isLabModalOpen, isCaseModalOpen, isPaymentModalOpen]);
   
   const [editingLab, setEditingLab] = useState<Lab | null>(null);
   const [selectedCaseForPayment, setSelectedCaseForPayment] = useState<LabCase | null>(null);
@@ -78,7 +82,10 @@ export const LabView: React.FC<LabViewProps> = ({
   const [labPhone, setLabPhone] = useState('');
   const [labAddress, setLabAddress] = useState('');
   const [labNotes, setLabNotes] = useState('');
-  const [labServices, setLabServices] = useState<LabService[]>([]);
+  const [labFormError, setLabFormError] = useState('');
+  const labDialogRef = useAppointmentDialog(isLabModalOpen, () => setIsLabModalOpen(false));
+  const caseDialogRef = useAppointmentDialog(isCaseModalOpen, () => setIsCaseModalOpen(false));
+  const paymentDialogRef = useAppointmentDialog(isPaymentModalOpen, () => setIsPaymentModalOpen(false));
 
   // Form State for Lab Case
   const [casePatientId, setCasePatientId] = useState('');
@@ -101,7 +108,7 @@ export const LabView: React.FC<LabViewProps> = ({
       return { key: 'ready', label: 'جاهز للاستلام', color: 'bg-blue-100 text-blue-800 border-blue-300', dot: '🔵' };
     }
     if (activeStatus === 'delayed') {
-      return { key: 'delayed', label: 'متأخر عن الموعد', color: 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse', dot: '🔴' };
+      return { key: 'delayed', label: 'متأخر عن الموعد', color: 'bg-rose-100 text-rose-800 border-rose-300', dot: '🔴' };
     }
     return { key: 'pending', label: 'قيد التنفيذ', color: 'bg-amber-100 text-amber-800 border-amber-300', dot: '🟠' };
   };
@@ -112,9 +119,6 @@ export const LabView: React.FC<LabViewProps> = ({
       showToast(`تم تحديث حالة التركيبة إلى (${newStatus === 'delivered' ? 'تم التسليم' : newStatus === 'ready' ? 'جاهز للاستلام' : 'قيد التنفيذ'})`, 'success');
     }
   };
-
-  // Form State for Crown Pricing
-  const [tempCrownPrices, setTempCrownPrices] = useState<Record<string, number>>({ ...crownPrices });
 
   // Payment Form State
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
@@ -127,20 +131,17 @@ export const LabView: React.FC<LabViewProps> = ({
     setLabPhone('');
     setLabAddress('');
     setLabNotes('');
-    setLabServices([
-      { id: 'ls1', category: 'fixed', name: 'PFM', unitLabel: 'طربوش', price: 400 },
-      { id: 'ls2', category: 'fixed', name: 'زيركون', unitLabel: 'طربوش', price: 750 }
-    ]);
+    setLabFormError('');
     setIsLabModalOpen(true);
   };
 
   const handleOpenEditLabModal = (lab: Lab) => {
-    setEditingLab(lab);
+    setEditingLab(cloneLab(lab));
     setLabName(lab.name);
     setLabPhone(lab.phone || '');
     setLabAddress(lab.address || '');
     setLabNotes(lab.notes || '');
-    setLabServices([...lab.services]);
+    setLabFormError('');
     setIsLabModalOpen(true);
   };
 
@@ -148,26 +149,20 @@ export const LabView: React.FC<LabViewProps> = ({
     e.preventDefault();
     if (!canViewFinancials) return;
     if (!labName.trim()) {
-      validationFail('labModal', 'input-lab-name', 'يرجى كتابة اسم المعمل');
+      setLabFormError('يرجى كتابة اسم المعمل.');
+      document.getElementById('input-lab-name')?.focus();
       return;
     }
-    if (!labServices.length || labServices.some(service => !service.name.trim() || !service.unitLabel.trim()
-      || !Number.isFinite(service.price) || service.price < 0)) {
-      showToast('راجع أسماء خدمات المعمل ووحداتها وأسعارها، ثم احفظ البيانات', 'warning');
-      return;
+    try {
+      onSaveLab({
+        id: editingLab?.id, name: labName.trim(), phone: labPhone.trim(),
+        address: labAddress.trim(), notes: labNotes.trim(), services: editingLab?.services || []
+      }, editingLab || undefined);
+      setIsLabModalOpen(false);
+      showToast(editingLab ? 'تم حفظ بيانات المعمل بنجاح' : 'تم إضافة المعمل. حدّد خدماته وأسعاره من قسم أسعار المعامل.', 'success');
+    } catch (error) {
+      setLabFormError(error instanceof Error ? error.message : 'تعذّر الحفظ. مسودتك كما هي؛ أعد المحاولة.');
     }
-
-    onSaveLab({
-      id: editingLab ? editingLab.id : undefined,
-      name: labName.trim(),
-      phone: labPhone.trim(),
-      address: labAddress.trim(),
-      notes: labNotes.trim(),
-      services: labServices.map(service => ({ ...service, name: service.name.trim(), unitLabel: service.unitLabel.trim() }))
-    });
-
-    setIsLabModalOpen(false);
-    showToast(editingLab ? 'تم تعديل بيانات المعمل بنجاح' : 'تم إضافة المعمل الجديد بنجاح', 'success');
   };
 
   const handleDeleteLabConfirmed = (lab: Lab) => {
@@ -182,9 +177,13 @@ export const LabView: React.FC<LabViewProps> = ({
       confirmLabel: 'حذف المعمل',
       tone: 'danger',
       onConfirm: () => {
-        onDeleteLab(lab.id);
-        if (selectedLabId === lab.id) setSelectedLabId(null);
-        showToast('تم حذف المعمل بنجاح', 'warning');
+        try {
+          onDeleteLab(lab.id);
+          if (selectedLabId === lab.id) setSelectedLabId(null);
+          showToast('تم حذف المعمل بنجاح', 'warning');
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : 'تعذّر حذف المعمل؛ لم تتغيّر بياناته.', 'error');
+        }
       }
     });
   };
@@ -192,7 +191,7 @@ export const LabView: React.FC<LabViewProps> = ({
   const handleOpenAddCaseModal = () => {
     if (!selectedLab) return;
     if (!patients.length || !selectedLab.services.length) {
-      showToast(!patients.length ? 'أضف ملف المريض أولًا قبل تسجيل حالة معمل' : 'أضف خدمات المعمل أولًا من تعديل بياناته', 'warning');
+      showToast(!patients.length ? 'أضف ملف المريض أولًا قبل تسجيل حالة معمل' : 'حدّد خدمات المعمل وتكلفتها أولًا من قسم أسعار المعامل', 'warning');
       return;
     }
     setCaseSessionId('');
@@ -299,18 +298,6 @@ export const LabView: React.FC<LabViewProps> = ({
     showToast('تم تسديد الدفعة للمعمل بنجاح', 'success');
   };
 
-  const handleSaveCrownPricesForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canViewFinancials) return;
-    if ((Object.values(tempCrownPrices) as number[]).some(price => !Number.isFinite(price) || price < 0)) {
-      showToast('أسعار البيع يجب أن تكون أرقامًا صحيحة غير سالبة', 'warning');
-      return;
-    }
-    onSaveCrownPrices(tempCrownPrices);
-    setIsCrownPricingModalOpen(false);
-    showToast('تم تحديث أسعار بيع التركيبات للمرضى بنجاح', 'success');
-  };
-
   // Lab Cases for selected lab
   const currentLabCases = selectedLab
     ? labCases.filter(c => c.labId === selectedLab.id)
@@ -362,7 +349,7 @@ export const LabView: React.FC<LabViewProps> = ({
     if (!canViewFinancials) return null;
     const financial = getLabCaseFinancials(item, patients);
     const patient = patients.find(p => p.id === item.patientId);
-    return <div className="w-full rounded-xl border border-teal-200 bg-teal-50 p-3 space-y-2 text-xs">
+    return <details className="lab-reservation w-full rounded-xl border border-teal-200 bg-teal-50 text-xs"><summary>التحصيل والمحجوز لهذه الحالة</summary><div className="p-3 pt-0 space-y-2">
       <label className="block font-bold">الخدمة المرتبطة بحساب المريض</label>
       <select className="w-full min-h-11 rounded-lg border border-slate-200 bg-white px-2" value={item.linkedSessionId || ''}
         disabled={!onUpdateLabCase}
@@ -377,7 +364,7 @@ export const LabView: React.FC<LabViewProps> = ({
         <span>متبقي للمعمل: <strong>{financial.remaining.toLocaleString()} ج.م</strong></span>
         <span>المتاح بعد تكلفة المعمل: <strong>{financial.availableToClinic.toLocaleString()} ج.م</strong></span>
       </div> : <p className="text-amber-800">لم تُربط الخدمة بعد؛ لا يُحسب مبلغ محجوز لهذه الحالة.</p>}
-    </div>;
+    </div></details>;
   };
 
   let bulkAllocations: ReturnType<typeof allocateLabPayment> = [];
@@ -386,14 +373,14 @@ export const LabView: React.FC<LabViewProps> = ({
   }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto py-2">
+    <div className="lab-view space-y-4 max-w-7xl mx-auto py-2">
       {/* View Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
           <button
             onClick={onBackToHome}
             className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-            title="رجوع للشاشة الرئيسية"
+            title="رجوع للشاشة الرئيسية" aria-label="رجوع للشاشة الرئيسية"
           >
             <ArrowRight className="w-5 h-5" />
           </button>
@@ -408,16 +395,10 @@ export const LabView: React.FC<LabViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {canViewFinancials && <button
-            type="button"
-            onClick={() => {
-              setTempCrownPrices({ ...crownPrices });
-              setIsCrownPricingModalOpen(true);
-            }}
-            className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200/60 transition-colors cursor-pointer"
-          >
-            ⚙️ تسعير البيع للمريض
-          </button>}
+          {canManagePrices && canViewFinancials && onManageLabPrices && <button
+            type="button" onClick={() => onManageLabPrices(selectedLabId || undefined)}
+            className="lab-pricing-shortcut"
+          ><DollarSign className="h-4 w-4" /> أسعار المعامل</button>}
 
           {canViewFinancials && <button
             type="button"
@@ -432,27 +413,27 @@ export const LabView: React.FC<LabViewProps> = ({
 
       {/* View Selection Tabs */}
       {!selectedLabId && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-1">
+        <div className="lab-section-tabs">
           <button
-            onClick={() => setActiveTab('labs')}
+            aria-pressed={activeTab === 'labs'} onClick={() => setActiveTab('labs')}
             className={`px-5 py-2.5 rounded-xl font-tajawal font-bold text-xs sm:text-sm transition-all cursor-pointer ${
               activeTab === 'labs'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            قائمة المعامل المسجلة ({labs.length})
+            المعامل ({labs.length})
           </button>
 
           <button
-            onClick={() => setActiveTab('all-cases')}
+            aria-pressed={activeTab === 'all-cases'} onClick={() => setActiveTab('all-cases')}
             className={`px-5 py-2.5 rounded-xl font-tajawal font-bold text-xs sm:text-sm transition-all cursor-pointer ${
               activeTab === 'all-cases'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            جميع حالات التركيبات ({labCases.length})
+            حالات التركيبات ({labCases.length})
           </button>
         </div>
       )}
@@ -461,7 +442,7 @@ export const LabView: React.FC<LabViewProps> = ({
       {selectedLabId && selectedLab ? (
         <div className="space-y-6 animate-fadeIn">
           {/* Dedicated Lab Header */}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-md space-y-5">
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-xs space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <button
                 onClick={() => setSelectedLabId(null)}
@@ -476,7 +457,7 @@ export const LabView: React.FC<LabViewProps> = ({
                   type="button"
                   onClick={() => handleOpenEditLabModal(selectedLab)}
                   className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-                  title="تعديل بيانات المعمل والخدمات"
+                  title="تعديل بيانات المعمل" aria-label="تعديل بيانات المعمل"
                 >
                   <Edit3 className="w-4 h-4" />
                 </button>
@@ -484,7 +465,7 @@ export const LabView: React.FC<LabViewProps> = ({
                   type="button"
                   onClick={() => handleDeleteLabConfirmed(selectedLab)}
                   className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors cursor-pointer"
-                  title="حذف المعمل"
+                  title="حذف المعمل" aria-label="حذف المعمل"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -519,15 +500,16 @@ export const LabView: React.FC<LabViewProps> = ({
                 paid={currentLabPaid}
                 remaining={currentLabRemain}
                 label="الموقف المالي الكلي لهذا المعمل"
-                size="lg"
+                size="md"
                 type="lab"
               />
             </div>}
           </div>
 
           {/* Lab Services Catalog */}
-          {canViewFinancials && <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-            <h3 className="font-bold">دفعة مجمعة للمعمل</h3>
+          {canViewFinancials && <details className="lab-disclosure bg-white rounded-2xl border border-slate-200">
+            <summary>دفعة مجمعة وسجل المدفوعات</summary>
+            <div className="p-4 pt-0 space-y-3">
             <p className="text-sm text-slate-600">المحجوز حالياً: {currentLabCases.reduce((sum, c) => sum + getLabCaseFinancials(c, patients).reserved, 0).toLocaleString()} ج.م. توزع الدفعة على أقدم الحالات المستحقة.</p>
             <label className="block text-sm">مبلغ الدفعة (ج.م)
               <input type="number" min="0.01" step="0.01" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} className="block w-full border rounded-xl p-3 mt-1" />
@@ -544,23 +526,25 @@ export const LabView: React.FC<LabViewProps> = ({
               {currentLabCases.flatMap(c => (c.paymentsLog || []).map(p => <div key={`${c.id}-${p.id}`} className="border-b py-2">{p.date} · {c.patientName} · {p.amount.toLocaleString()} ج.م · {p.note || 'دفعة للمعمل'}</div>))}
               <p className="text-xs text-slate-500 mt-2">الدفعات القديمة التي حُفظت كإجمالي فقط لا تملك تفاصيل إيصالات.</p>
             </details>
-          </section>}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-3">
+            </div>
+          </details>}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3">
             <h3 className="text-sm font-bold text-[#0f3d3e] font-tajawal">
               {canViewFinancials ? 'كتالوج خدمات وأسعار المعمل المعتمدة' : 'خدمات المعمل المعتمدة'}
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {!selectedLab.services.length && <p className="text-sm text-slate-500">لم تُضف خدمات لهذا المعمل بعد.{canManagePrices && onManageLabPrices && <button type="button" className="lab-inline-link" onClick={() => onManageLabPrices(selectedLab.id)}>إضافة الخدمات والأسعار</button>}</p>}
+            <div className="lab-service-list">
               {selectedLab.services.map(s => (
-                <div key={s.id} className="p-3 bg-[#f7f5ef] rounded-xl border border-slate-200">
-                  <span className="font-bold text-slate-800 block">{s.name}</span>
-                  <span className="text-slate-500 block text-[11px] mt-0.5">{s.unitLabel}{canViewFinancials ? ` — ${s.price} ج.م` : ''}</span>
+                <div key={s.id} className="lab-service-row">
+                  <span className="font-bold text-slate-800">{s.name}<small className="block text-slate-500 font-normal">{s.unitLabel}</small></span>
+                  {canViewFinancials && <strong>{s.price.toLocaleString()} <small>ج.م / {s.unitLabel}</small></strong>}
                 </div>
               ))}
             </div>
           </div>
 
           {/* Lab Cases List */}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3">
             <h3 className="text-base font-bold text-slate-800 font-tajawal">
               حالات المعمل الحالية ({currentLabCases.length})
             </h3>
@@ -623,74 +607,31 @@ export const LabView: React.FC<LabViewProps> = ({
           </div>
         </div>
       ) : activeTab === 'labs' ? (
-        /* LAB CARDS VIEW WITH VISUAL BALANCE METERS */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="lab-overview-grid">
           {!labs.length && <div className="col-span-full"><EmptyState icon={<Microscope className="h-8 w-8" />} title="لا توجد معامل مسجلة بعد"
-            description={canViewFinancials ? 'أضف المعامل وأسعار خدماتها، ثم اربط طلبات التركيبات بملفات المرضى.' : 'تظهر المعامل هنا بعد إضافتها من حساب الطبيب.'}
+            description={canViewFinancials ? 'أضف المعمل، ثم حدّد خدماته وأسعاره من قسم أسعار المعامل.' : 'تظهر المعامل هنا بعد إضافتها من حساب الطبيب.'}
             ctaLabel={canViewFinancials ? 'إضافة معمل' : undefined} onCtaClick={canViewFinancials ? handleOpenAddLabModal : undefined} /></div>}
           {labs.map(lab => {
             const cases = labCases.filter(c => c.labId === lab.id);
-            const total = cases.reduce((acc, c) => acc + c.labTotal, 0);
-            const paid = cases.reduce((acc, c) => acc + c.labPaid, 0);
-            const remain = total - paid;
-            const paidPercent = total > 0 ? Math.round((paid / total) * 100) : 100;
-
-            return (
-              <div
-                key={lab.id}
-                role="button"
-                tabIndex={0}
-                aria-label={`عرض تفاصيل معمل ${lab.name}`}
-                onClick={() => setSelectedLabId(lab.id)}
-                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedLabId(lab.id); } }}
-                className="group bg-white rounded-3xl p-6 border border-slate-200/90 shadow-sm hover:shadow-xl hover:border-[#c9a227]/50 transition-all duration-300 text-right flex flex-col justify-between min-h-72 cursor-pointer relative overflow-hidden transform hover:-translate-y-1 space-y-4"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="w-12 h-12 rounded-2xl bg-[#e4ede9] text-[#0f3d3e] flex items-center justify-center font-bold shadow-inner">
-                      <Microscope className="w-6 h-6 text-[#0f3d3e]" />
-                    </div>
-                    {canViewFinancials
-                      ? <CompactBalanceBadge remaining={remain} total={total} />
-                      : <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-black text-indigo-700">{cases.length} حالة</span>}
-                  </div>
-
-                  <div>
-                    <h3 className="text-xl font-bold text-[#0f3d3e] group-hover:text-[#1b5e5a] font-tajawal transition-colors">
-                      {lab.name}
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-1 line-clamp-1">
-                      {lab.phone || lab.address || `${cases.length} حالة تركيبات مسجلة`}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Embedded Visual Progress Meter */}
-                {canViewFinancials && <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
-                  <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-500 font-sans text-[11px]">نسبة التسديد للمعمل:</span>
-                    <span className="font-bold text-slate-800">{paidPercent}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
-                    <div
-                      className={`h-full transition-all duration-500 ${remain <= 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                      style={{ width: `${paidPercent}%` }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] font-mono pt-0.5">
-                    <span className="text-slate-600">المطلوب: {total.toLocaleString()}</span>
-                    <span className={remain > 0 ? 'text-rose-700 font-bold' : 'text-emerald-700 font-bold'}>
-                      {remain > 0 ? `متبقي: ${remain.toLocaleString()}` : 'خالص السداد'}
-                    </span>
-                  </div>
-                </div>}
-
-                <div className="pt-2 flex items-center justify-between text-xs font-bold text-[#0f3d3e] group-hover:text-[#c9a227]">
-                  <span>عرض كشف المعمل والتفاصيل</span>
-                  <ChevronLeft className="w-4 h-4 transform group-hover:-translate-x-1 transition-transform" />
-                </div>
-              </div>
-            );
+            const total = cases.reduce((sum, c) => sum + c.labTotal, 0);
+            const paid = cases.reduce((sum, c) => sum + c.labPaid, 0);
+            const remain = cases.reduce((sum, c) => sum + Math.max(0, c.labTotal - c.labPaid), 0);
+            return <button key={lab.id} type="button" className="lab-overview-card"
+              aria-label={`عرض تفاصيل معمل ${lab.name}`} onClick={() => setSelectedLabId(lab.id)}>
+              <span className="lab-card-heading">
+                <span className="lab-card-icon"><Microscope className="h-5 w-5" /></span>
+                <span className="min-w-0 flex-1"><span className="lab-card-name">{lab.name}</span>
+                  <span className="lab-card-contact">{lab.phone || lab.address || 'لم تُسجّل بيانات تواصل'}</span></span>
+                <ChevronLeft className="h-4 w-4 text-slate-400 shrink-0" />
+              </span>
+              <span className="lab-card-meta">{cases.length} حالة <span>·</span> {lab.services.length} خدمة</span>
+              {canViewFinancials && <span className="lab-card-finances">
+                <span><small>إجمالي التكلفة</small><strong>{total.toLocaleString()} <small>ج.م</small></strong></span>
+                <span><small>المسدّد</small><strong>{paid.toLocaleString()} <small>ج.م</small></strong></span>
+                <span><small>المتبقي</small><strong className={remain > 0 ? 'text-rose-700' : 'text-emerald-700'}>{remain.toLocaleString()} <small>ج.م</small></strong></span>
+              </span>}
+              <span className="lab-card-footer">عرض ملف المعمل والتفاصيل</span>
+            </button>;
           })}
         </div>
       ) : (
@@ -938,24 +879,25 @@ export const LabView: React.FC<LabViewProps> = ({
 
       {/* Modal: Add/Edit Lab */}
       {isLabModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="labModal" className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="labModal" ref={labDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-modal-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
+              <h2 id="lab-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 {editingLab ? 'تعديل بيانات المعمل' : 'إضافة معمل جديد'}
               </h2>
-              <button onClick={() => setIsLabModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق بيانات المعمل" onClick={() => setIsLabModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
 
             <form onSubmit={handleSaveLabForm} className="space-y-4">
+              {labFormError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{labFormError}</p>}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label htmlFor="input-lab-name" className="block text-xs font-bold text-slate-700 mb-1">
                   اسم المعمل <span className="text-rose-500">*</span>
                 </label>
                 <input
-                  id="input-lab-name"
+                  id="input-lab-name" maxLength={100} data-dialog-autofocus
                   type="text"
                   value={labName}
                   onChange={e => setLabName(e.target.value)}
@@ -966,12 +908,11 @@ export const LabView: React.FC<LabViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label htmlFor="input-lab-phone" className="block text-xs font-bold text-slate-700 mb-1">
                     رقم الهاتف
                   </label>
                   <input
-                    type="text"
-                    value={labPhone}
+                    id="input-lab-phone" type="tel" maxLength={40} value={labPhone}
                     onChange={e => setLabPhone(e.target.value)}
                     placeholder="01001122334"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:outline-none focus:border-[#0f3d3e]"
@@ -979,12 +920,12 @@ export const LabView: React.FC<LabViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label htmlFor="input-lab-address" className="block text-xs font-bold text-slate-700 mb-1">
                     العنوان
                   </label>
                   <input
                     type="text"
-                    value={labAddress}
+                    id="input-lab-address" maxLength={200} value={labAddress}
                     onChange={e => setLabAddress(e.target.value)}
                     placeholder="الدقي - القاهرة"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-[#0f3d3e]"
@@ -993,46 +934,14 @@ export const LabView: React.FC<LabViewProps> = ({
               </div>
 
               <label className="block text-xs font-bold text-slate-700">ملاحظات المعمل
-                <textarea value={labNotes} onChange={event => setLabNotes(event.target.value)} rows={2}
+                <textarea maxLength={1000} value={labNotes} onChange={event => setLabNotes(event.target.value)} rows={2}
                   className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm" />
               </label>
 
-              <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-bold text-slate-800">خدمات المعمل وتكلفتها</h3>
-                  <button type="button" onClick={() => setLabServices(services => [...services, {
-                    id: crypto.randomUUID(), category: 'fixed', name: '', unitLabel: 'طربوش', price: 0
-                  }])} className="rounded-xl bg-white border border-slate-300 px-3 py-2 text-xs font-bold text-indigo-700">إضافة خدمة</button>
-                </div>
-                <p className="text-xs text-slate-500">تعديل الأسعار يطبّق على الطلبات الجديدة، وتظل تكلفة الحالات السابقة محفوظة.</p>
-                {labServices.map((service, index) => <div key={service.id} className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-500">الخدمة {index + 1}</span>
-                    <button type="button" aria-label={`حذف خدمة ${service.name || index + 1}`} onClick={() => setLabServices(services => services.filter(item => item.id !== service.id))}
-                      className="min-h-11 min-w-11 rounded-lg text-rose-700 hover:bg-rose-50"><Trash2 className="mx-auto h-4 w-4" /></button>
-                  </div>
-                  <label className="block text-xs font-bold">اسم الخدمة
-                    <input required value={service.name} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, name: event.target.value } : item))}
-                      placeholder="مثال: زيركون" className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
-                  </label>
-                  <label className="block text-xs font-bold">التصنيف
-                    <select value={service.category} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, category: event.target.value as LabService['category'] } : item))}
-                      className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm">
-                      <option value="fixed">تركيبات ثابتة</option><option value="removable">تركيبات متحركة</option><option value="other">خدمات أخرى</option>
-                    </select>
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block text-xs font-bold">الوحدة
-                      <input required value={service.unitLabel} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, unitLabel: event.target.value } : item))}
-                        className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
-                    </label>
-                    <label className="block text-xs font-bold">تكلفة الوحدة (ج.م)
-                      <input type="number" min="0" step="0.01" required value={service.price} onChange={event => setLabServices(services => services.map(item => item.id === service.id ? { ...item, price: Number(event.target.value) } : item))}
-                        className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" />
-                    </label>
-                  </div>
-                </div>)}
-              </section>
+              <p className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm leading-relaxed text-teal-900">
+                خدمات المعمل وتكلفتها تُضبط من لوحة التحكم ← الخدمات والأسعار ← أسعار المعامل.
+                {editingLab ? ` لهذا المعمل ${editingLab.services.length} خدمة مسجلة؛ تعديل بياناته هنا لا يغيّر أسعارها.` : ' أضف بيانات المعمل هنا أولًا، ثم حدّد خدماته وأسعاره.'}
+              </p>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
@@ -1056,13 +965,13 @@ export const LabView: React.FC<LabViewProps> = ({
 
       {/* Modal: Add Case to Lab */}
       {isCaseModalOpen && selectedLab && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="caseModal" className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="caseModal" ref={caseDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-case-modal-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
+              <h2 id="lab-case-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 إضافة حالة جديدة لمعمل ({selectedLab.name})
               </h2>
-              <button onClick={() => setIsCaseModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق إضافة الحالة" onClick={() => setIsCaseModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
@@ -1169,66 +1078,15 @@ export const LabView: React.FC<LabViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Crown Pricing Settings */}
-      {isCrownPricingModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
-                تسعير بيع التركيبات للمرضى
-              </h2>
-              <button onClick={() => setIsCrownPricingModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveCrownPricesForm} className="space-y-4">
-              {Object.keys(tempCrownPrices).map(crownKey => (
-                <div key={crownKey}>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    سعر طربوش ({crownKey}) للمريض (ج.م)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={tempCrownPrices[crownKey]}
-                    onChange={e => setTempCrownPrices({ ...tempCrownPrices, [crownKey]: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono"
-                  />
-                </div>
-              ))}
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsCrownPricingModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#0f3d3e] text-white text-xs font-bold shadow-md cursor-pointer"
-                >
-                  حفظ أسعار البيع
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Modal: Pay Lab */}
-      {isPaymentModalOpen && selectedCaseForPayment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="labPaymentModal" className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+      {isPaymentModalOpen && selectedCaseForPayment && canViewFinancials && (
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div id="labPaymentModal" ref={paymentDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-payment-modal-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
+              <h2 id="lab-payment-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 تسديد دفعة للمعمل
               </h2>
-              <button onClick={() => setIsPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق تسديد الدفعة" onClick={() => setIsPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>

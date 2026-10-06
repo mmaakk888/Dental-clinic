@@ -1,0 +1,34 @@
+.lab-view button, .lab-view summary { min-height: 44px; }
+.lab-view button:has(> svg:only-child) { min-width: 44px; }
+.lab-view input, .lab-view select, .lab-view textarea { min-height: 44px; font-size: 16px; min-width: 0; max-width: 100%; }
+.lab-view button:focus-visible, .lab-view summary:focus-visible { outline: 3px solid #51a99e; outline-offset: 3px; }
+.lab-overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; align-items: start; }
+.lab-section-tabs { display: flex; gap: 8px; align-items: center; }
+@media (max-width:480px) { .lab-section-tabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); } .lab-section-tabs button { padding-inline: 8px; font-size: 13px; min-width: 0; } }
+.lab-overview-card { display: flex; flex-direction: column; gap: 10px; width: 100%; padding: 14px; text-align: right; border: 1px solid #dce5e6; border-radius: 16px; background: #fff; box-shadow: 0 2px 7px #13373805; transition: border-color 140ms ease, background-color 140ms ease; cursor: pointer; min-width: 0; }
+.lab-overview-card:hover { border-color: #6ca79e; background: #fbfefd; }
+.lab-card-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lab-card-icon { display: flex; align-items: center; justify-content: center; height: 34px; width: 34px; border-radius: 10px; background: #edf5f2; color: #17615b; flex-shrink: 0; }
+.lab-card-name { display: block; font-size: 16px; font-weight: 800; color: #123f40; overflow-wrap: anywhere; }
+.lab-card-contact { display: block; font-size: 12px; color: #64748b; overflow-wrap: anywhere; margin-top: 2px; }
+.lab-card-meta { display: flex; gap: 8px; color: #64748b; font-size: 12px; }
+.lab-card-finances { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 10px 0; border-top: 1px solid #eef2f3; border-bottom: 1px solid #eef2f3; }
+.lab-card-finances > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lab-card-finances small { font-size: 11px; color: #64748b; font-weight: 500; }
+.lab-card-finances strong { font-size: 14px; font-weight: 800; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.lab-card-footer { font-size: 12px; font-weight: 700; color: #256a64; }
+.lab-pricing-shortcut { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; border: 1px solid #c6dfda; background: #eff8f5; color: #155e57; border-radius: 12px; font-size: 13px; font-weight: 800; }
+.lab-service-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 8px; }
+.lab-service-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #e5ebed; border-radius: 10px; background: #f9fbfb; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.lab-service-row small { font-size: 11px; }
+.lab-service-row > strong { text-align: left; color: #155e57; }
+.lab-inline-link { display: block; color: #155e57; font-weight: 800; }
+.lab-disclosure > summary, .lab-reservation > summary { padding: 12px; cursor: pointer; font-size: 13px; font-weight: 800; color: #174b47; }
+.lab-disclosure > summary { padding: 14px 16px; }
+.lab-view .clinic-modal-panel { padding: 20px; border-radius: 20px; }
+@media (max-width: 480px) {
+  .lab-view > div:first-child > div:last-child { flex-wrap: wrap; width: 100%; }
+  .lab-view > div:first-child > div:last-child > button { flex: 1 1 auto; }
+  .lab-view .clinic-modal-panel { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .lab-overview-card { transition: none; } }

@@ -1,30 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, X, ChevronLeft } from 'lucide-react';
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
+import { getNavigationItems } from '../../utils/clinicContent';
 
 interface Props {
   activeView: ActiveView;
   labels: UILabels;
+  tileOrder: string[];
   currentUser: User | null;
   appointments?: Appointment[];
   labCases?: LabCase[];
   onNavigate: (view: ActiveView) => void;
 }
 
-export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, onNavigate }: Props) => {
+const navigationIcons = { home: Home, patients: Users, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
+
+export const MobileBottomNav = React.memo(({ activeView, labels, tileOrder, currentUser, onNavigate }: Props) => {
   const [open, setOpen] = useState(false);
   const dock = useRef<HTMLElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const permissions = currentUser?.permissions;
-  const items = [
-    { key: 'home' as ActiveView, label: labels.tabs.home || 'الرئيسية', icon: Home, allowed: true },
-    { key: 'patients' as ActiveView, label: 'المرضى', icon: Users, allowed: permissions?.patientView !== false },
-    { key: 'appointments' as ActiveView, label: 'المواعيد', icon: Calendar, allowed: permissions?.appointments !== false },
-    { key: 'lab' as ActiveView, label: 'التركيبات', icon: Microscope, allowed: permissions?.lab !== false },
-    { key: 'summary' as ActiveView, label: 'الماليات', icon: Landmark, allowed: permissions?.summary !== false },
-    { key: 'settings' as ActiveView, label: 'الإعدادات', icon: Settings2, allowed: permissions?.controlPanel !== false },
-  ].filter(item => item.allowed);
+  const items = getNavigationItems(labels, tileOrder, permissions).map(item => ({ ...item, icon: navigationIcons[item.key] }));
   const extra = items.slice(4);
   const selected = activeView === 'patient-file' ? 'patients' : activeView === 'lab-detail' ? 'lab' : activeView === 'secretary-desk' ? 'home' : activeView;
 
@@ -42,6 +39,7 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
   }, [open]);
 
   useEffect(() => { setOpen(false); }, [activeView, currentUser?.id]);
+  useEffect(() => { setOpen(false); }, [tileOrder, labels]);
 
   useEffect(() => {
     const element = dock.current;
@@ -88,12 +86,11 @@ export const MobileBottomNav = React.memo(({ activeView, labels, currentUser, on
         </div>
         <div className="grid gap-2">{extra.map(item => <button key={item.key} type="button" onClick={() => navigate(item.key)}
           aria-current={selected === item.key ? 'page' : undefined} className="clinic-dock-option">
-          <item.icon aria-hidden="true" /><span>{item.label}</span><ChevronLeft aria-hidden="true" />
+          <item.icon aria-hidden="true" /><span><strong>{item.label}</strong>{item.description && <small className="clinic-dock-description">{item.description}</small>}</span><ChevronLeft aria-hidden="true" />
         </button>)}</div>
       </div>
     </dialog>}
   </>;
 });
 MobileBottomNav.displayName = 'MobileBottomNav';
-
 

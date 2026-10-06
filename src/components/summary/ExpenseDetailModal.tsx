@@ -102,11 +102,11 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   };
 
   return (
-    <div onClick={onClose} className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
-      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="expense-detail-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
+    <div onClick={onClose} className="clinic-modal-overlay fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="expense-detail-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
         
         {/* ERP Invoice Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex flex-wrap gap-3 items-center justify-between border-b border-slate-800">
+        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex flex-wrap gap-3 items-center justify-between border-b border-slate-800">
           <div className="flex min-w-0 items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 shadow-inner">
               <Receipt className="w-6 h-6" />
@@ -150,7 +150,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           
           {/* Supplier Info & Quick Status Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -372,7 +372,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between">
+        <div className="shrink-0 p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between">
           <span className="text-xs text-slate-500 font-medium break-all">معرّف الفاتورة: {expense.id}</span>
           <button
             type="button"
@@ -386,10 +386,10 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
 
       {/* Fullscreen Image Overlay */}
       {isFullscreenImage && expense.invoiceImageUrl && (
-        <div ref={fullscreenRef} role="dialog" aria-modal="true" aria-label="صورة الفاتورة كاملة" tabIndex={-1} onClick={event => event.stopPropagation()} className="fixed inset-0 z-[70] bg-slate-950/95 flex flex-col p-4 animate-fadeIn">
-          <div className="flex items-center justify-between text-white pb-3 border-b border-slate-800">
-            <h4 className="text-sm font-bold">{expense.supplierName || 'صورة الفاتورة الأصلية'}</h4>
-            <div className="flex items-center gap-2">
+        <div ref={fullscreenRef} role="dialog" aria-modal="true" aria-label="صورة الفاتورة كاملة" tabIndex={-1} onClick={event => event.stopPropagation()} className="fixed inset-0 z-[70] h-dvh bg-slate-950/95 flex flex-col p-4 animate-fadeIn">
+          <div className="shrink-0 flex items-center justify-between gap-3 text-white pb-3 border-b border-slate-800">
+            <h4 className="min-w-0 break-words text-sm font-bold">{expense.supplierName || 'صورة الفاتورة الأصلية'}</h4>
+            <div className="shrink-0 flex items-center gap-2">
               <button type="button" onClick={handleDownloadImage} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer" title="تنزيل">
                 <Download className="w-4 h-4" />
               </button>
@@ -398,7 +398,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
               </button>
             </div>
           </div>
-          <div className="flex-1 flex items-center justify-center p-4 overflow-auto">
+          <div className="min-h-0 flex-1 flex items-center justify-center p-4 overflow-auto">
             <img src={expense.invoiceImageUrl} alt="صورة الفاتورة كاملة" className="object-contain max-h-full max-w-full" />
           </div>
         </div>
@@ -406,4 +406,3 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
     </div>
   );
 };
-

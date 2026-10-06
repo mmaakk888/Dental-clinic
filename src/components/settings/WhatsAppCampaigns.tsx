@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight, ChevronLeft, ChevronRight, ExternalLink, ImagePlus, Info, Link, MessageCircle, RotateCcw, Search, Users, X } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, ExternalLink, Filter, ImagePlus, Info, Link, MessageCircle, RotateCcw, Search, Users, X } from 'lucide-react';
 import { Patient, WhatsappSettings } from '../../types';
 import { extraMessageTemplates, fillMessageTemplate } from '../../utils/whatsappUtils';
 import { campaignRecipients } from '../../utils/campaigns';
@@ -25,9 +25,15 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
   const [attachment, setAttachment] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const previousPreset = useRef(settings.templates.greeting ?? extraMessageTemplates.greeting.text);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
+  const [consentFilter, setConsentFilter] = useState<'all' | 'allowed' | 'unknown' | 'declined'>('all');
+  const [selectedOnly, setSelectedOnly] = useState(false);
+  const [sortOrder, setSortOrder] = useState<'name' | 'file'>('name');
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'pending' | 'opened'>('all');
+  const [reviewPage, setReviewPage] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [opened, setOpened] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null);
@@ -50,7 +56,10 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
   const contacts = campaignRecipients(patients);
   const consent = settings.campaignConsent ?? {};
   const query = normalizeDigits(search.trim().toLowerCase());
-  const filtered = contacts.filter(({ patient, phone }) => `${patient.name.toLowerCase()} ${normalizeDigits(patient.id)} ${phone}`.includes(query));
+  const filtered = contacts.filter(({ patient, phone }) => `${patient.name.toLowerCase()} ${normalizeDigits(patient.id)} ${phone}`.includes(query)
+    && (consentFilter === 'all' || (consent[phone] || 'unknown') === consentFilter)
+    && (!selectedOnly || selected.includes(phone) && consent[phone] === 'allowed'))
+    .sort((a, b) => sortOrder === 'name' ? a.patient.name.localeCompare(b.patient.name, 'ar') : normalizeDigits(a.patient.id).localeCompare(normalizeDigits(b.patient.id), 'en', { numeric: true }));
   const eligible = contacts.filter(contact => consent[contact.phone] === 'allowed' && selected.includes(contact.phone));
   const approvedCount = contacts.filter(contact => consent[contact.phone] === 'allowed').length;
   const current = eligible.find(contact => contact.phone === active);
@@ -60,6 +69,12 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
   const pages = Math.max(1, Math.ceil(filtered.length / 20));
   const effectivePage = Math.min(page, pages - 1);
   const visibleContacts = filtered.slice(effectivePage * 20, effectivePage * 20 + 20);
+  const matchingApproved = filtered.filter(contact => consent[contact.phone] === 'allowed');
+  const excludedCount = patients.length - contacts.length;
+  const reviewContacts = eligible.filter(contact => reviewFilter === 'all' || opened.includes(contact.phone) === (reviewFilter === 'opened'));
+  const reviewPages = Math.max(1, Math.ceil(reviewContacts.length / 10));
+  const effectiveReviewPage = Math.min(reviewPage, reviewPages - 1);
+  const visibleReviewContacts = reviewContacts.slice(effectiveReviewPage * 10, effectiveReviewPage * 10 + 10);
   let validLink = !link.trim();
   try {
     const url = new URL(link.trim());
@@ -70,7 +85,16 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
   const ready = Boolean(eligible.length && message.trim() && validLink && !unknownVariables.length && !unfinished);
   const previewText = fillMessageTemplate(message, { patientName: step === 'review' ? previewContact?.patient.name || 'أحمد محمد' : 'أحمد محمد', clinicName }) + (link.trim() ? `\n${link.trim()}` : '');
 
-  const clearProgress = () => { setOpened([]); setNotice(''); };
+  const clearProgress = () => { setOpened([]); setReviewPage(0); setNotice(''); };
+  const insertVariable = (key: 'patientName' | 'clinicName') => {
+    const editor = messageInputRef.current as HTMLTextAreaElement | null;
+    const start = editor?.selectionStart ?? message.length;
+    const end = editor?.selectionEnd ?? start;
+    const token = `{${key}}`;
+    setMessage(message.slice(0, start) + token + message.slice(end));
+    clearProgress();
+    requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
+  };
   const updateConsent = (phone: string, value: string) => {
     const next = { ...consent };
     if (value === 'allowed' || value === 'declined') next[phone] = value; else delete next[phone];
@@ -119,10 +143,11 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
 
     {step === 'audience' && <div className="wa-campaign-stage">
       <div className="wa-stage-heading"><div><h4>من سيستقبل الحملة؟</h4><p>اختر المرضى الذين وافقوا على استقبال المعايدات والعروض.</p></div><span className="wa-count-badge">{eligible.length.toLocaleString('ar-EG')} محدد</span></div>
-      <div className="wa-audience-stats"><span><strong>{contacts.length.toLocaleString('ar-EG')}</strong> رقم صالح</span><span><strong>{approvedCount.toLocaleString('ar-EG')}</strong> وافق على الحملات</span></div>
+      <div className="wa-audience-stats"><span><strong>{contacts.length.toLocaleString('ar-EG')}</strong> رقم صالح</span><span><strong>{approvedCount.toLocaleString('ar-EG')}</strong> وافق على الحملات</span><span><strong>{excludedCount.toLocaleString('ar-EG')}</strong> ملف مستبعد لتكرار الرقم أو عدم صلاحيته</span></div>
       <p className="wa-context-note"><Info size={16} /> تُحفظ الموافقة فورًا. سجّل «وافق» بعد موافقة المريض الفعلية فقط؛ كل رقم يظهر مرة واحدة.</p>
       <div className="wa-audience-toolbar"><div className="wa-search-field"><Search size={18} /><input aria-label="بحث المرضى للحملة" placeholder="الاسم أو رقم الملف أو الهاتف" value={search} onChange={event => { setSearch(event.target.value); setPage(0); }} />{search && <button type="button" aria-label="مسح البحث" onClick={() => { setSearch(''); setPage(0); }}><X size={16} /></button>}</div><button type="button" className="wa-button wa-button-secondary" onClick={() => setSelected(ids => [...new Set([...ids, ...visibleContacts.filter(contact => consent[contact.phone] === 'allowed').map(contact => contact.phone)])])} disabled={!visibleContacts.some(contact => consent[contact.phone] === 'allowed')}>تحديد موافقي هذه الصفحة</button></div>
-      <div className="wa-selection-tools"><button type="button" onClick={() => setSelected(contacts.filter(contact => consent[contact.phone] === 'allowed').map(contact => contact.phone))} disabled={!approvedCount}>تحديد كل الموافقين ({approvedCount.toLocaleString('ar-EG')})</button><button type="button" onClick={() => setSelected([])} disabled={!eligible.length}>إلغاء التحديد</button></div>
+      <div className="wa-audience-filters"><label><Filter size={15} /><span>الموافقة</span><select value={consentFilter} onChange={event => { setConsentFilter(event.target.value as typeof consentFilter); setPage(0); }}><option value="all">جميع الحالات</option><option value="allowed">وافقوا على الحملات</option><option value="unknown">بدون موافقة مسجلة</option><option value="declined">رفضوا / أوقفوا الرسائل</option></select></label><label><span>الترتيب</span><select value={sortOrder} onChange={event => { setSortOrder(event.target.value as typeof sortOrder); setPage(0); }}><option value="name">اسم المريض</option><option value="file">رقم الملف</option></select></label><label className="wa-filter-check"><input type="checkbox" checked={selectedOnly} onChange={event => { setSelectedOnly(event.target.checked); setPage(0); }} /> المحددون فقط</label><span className="wa-result-count">{filtered.length.toLocaleString('ar-EG')} نتيجة</span></div>
+      <div className="wa-selection-tools"><button type="button" onClick={() => setSelected(ids => [...new Set([...ids, ...matchingApproved.map(contact => contact.phone)])])} disabled={!matchingApproved.length}>تحديد الموافقين في النتائج ({matchingApproved.length.toLocaleString('ar-EG')})</button><button type="button" onClick={() => setSelected([])} disabled={!eligible.length}>إلغاء التحديد</button><span>تغيير البحث والفلاتر لا يلغي اختياراتك.</span></div>
       <div className="wa-audience-list">{visibleContacts.map(({ patient, phone }) => <div key={phone} className={`wa-audience-row ${selected.includes(phone) && consent[phone] === 'allowed' ? 'is-selected' : ''}`}>
         <label className="wa-contact-select"><input type="checkbox" disabled={consent[phone] !== 'allowed'} checked={selected.includes(phone) && consent[phone] === 'allowed'} onChange={event => setSelected(ids => event.target.checked ? [...new Set([...ids, phone])] : ids.filter(id => id !== phone))} /><span><strong>{patient.name}</strong><small>ملف #{patient.id} <span dir="ltr">+{phone}</span></small></span></label>
         <label className="wa-consent-select"><span>موافقة الحملات</span><select aria-label={`موافقة ${patient.name}`} value={consent[phone] ?? 'unknown'} onChange={event => updateConsent(phone, event.target.value)}><option value="unknown">موافقة غير مسجلة</option><option value="allowed">وافق على الحملات</option><option value="declined">رفض / أوقف الرسائل</option></select></label>
@@ -137,8 +162,10 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
       <div className="wa-editor-layout">
         <div className="wa-template-editor">
           <div className="wa-kind-options" aria-label="نوع الحملة">{[{ key: 'greeting' as const, title: 'معايدة' }, { key: 'offer' as const, title: 'عرض أو إعلان' }].map(option => <button key={option.key} type="button" aria-pressed={kind === option.key} className={kind === option.key ? 'is-active' : ''} onClick={() => { if (kind === option.key) return; setKind(option.key); setMessage(settings.templates[option.key] ?? extraMessageTemplates[option.key].text); clearProgress(); }}>{option.title}</button>)}</div>
-          <label htmlFor="wa-campaign-message" className="wa-field-label">نص الحملة</label><textarea id="wa-campaign-message" rows={8} value={message} onChange={event => { setMessage(event.target.value); clearProgress(); }} placeholder="اكتب رسالة الحملة…" />
-          <p className="wa-field-help">يمكن استخدام <code dir="ltr">{'{patientName}'}</code> و<code dir="ltr">{'{clinicName}'}</code>. للأرقام المشتركة بين أفراد الأسرة، استخدم تحية عامة.</p>
+          <label htmlFor="wa-campaign-message" className="wa-field-label">نص الحملة</label><textarea id="wa-campaign-message" ref={messageInputRef} rows={8} value={message} onChange={event => { setMessage(event.target.value); clearProgress(); }} placeholder="اكتب رسالة الحملة…" />
+          <div className="wa-editor-meta"><span>{Array.from(message).length.toLocaleString('ar-EG')} حرف · {message.trim() ? message.trim().split(/\s+/).length.toLocaleString('ar-EG') : '٠'} كلمة</span><span>مسودة هذه الحملة فقط</span></div>
+          <div className="wa-variable-buttons"><button type="button" onClick={() => insertVariable('patientName')}>اسم المريض <code dir="ltr">{'{patientName}'}</code></button><button type="button" onClick={() => insertVariable('clinicName')}>اسم العيادة <code dir="ltr">{'{clinicName}'}</code></button></div>
+          <p className="wa-field-help">للأرقام المشتركة بين أفراد الأسرة، استخدم تحية عامة. تعديل هذه الرسالة لا يغيّر القالب المحفوظ.</p>
           <label htmlFor="wa-campaign-link" className="wa-field-label wa-label-icon"><Link size={16} /> رابط اختياري</label><input id="wa-campaign-link" type="url" value={link} onChange={event => { setLink(event.target.value); clearProgress(); }} dir="ltr" placeholder="https://" />
           {!validLink && <p className="wa-inline-notice">اكتب رابطًا كاملًا يبدأ بـ https:// أو http://.</p>}
           <div className="wa-image-upload"><div><strong>صورة الحملة</strong><span>اختيارية · JPG أو PNG أو WebP حتى ٨ ميجابايت</span></div><label className="wa-button wa-button-secondary" htmlFor="wa-campaign-image"><ImagePlus size={17} /> {attachment ? 'تغيير الصورة' : 'اختيار صورة'}</label><input ref={imageInputRef} id="wa-campaign-image" type="file" accept="image/png,image/jpeg,image/webp" className="wa-file-input" onChange={event => chooseImage(event.target.files?.[0])} />{attachment && <div className="wa-attachment-meta"><span>{attachment.name}</span><button type="button" onClick={removeImage} aria-label="إزالة صورة الحملة"><X size={16} /></button></div>}</div>
@@ -159,9 +186,11 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
           <label htmlFor="wa-preview-patient" className="wa-field-label">معاينة لمريض من الجمهور</label><select id="wa-preview-patient" value={previewContact?.phone || ''} onChange={event => setPreviewPhone(event.target.value)}>{eligible.map(contact => <option key={contact.phone} value={contact.phone}>{contact.patient.name} — ملف #{contact.patient.id}</option>)}</select>
           <div className="wa-open-progress"><strong>{openedCount} من {eligible.length}</strong><span>طُلب فتح الرسالة في واتساب</span><div className="wa-progress-track" role="progressbar" aria-label="طلبات فتح واتساب" aria-valuemin={0} aria-valuemax={eligible.length || 1} aria-valuenow={openedCount}><span style={{ width: `${eligible.length ? openedCount / eligible.length * 100 : 0}%` }} /></div></div>
           <p className="wa-field-help">هذه قائمة الفتح، وليست تأكيدًا على الإرسال أو التسليم.</p>
-          <ol className="wa-review-contact-list">{eligible.slice(0, 20).map(contact => <li key={contact.phone}><div><strong>{contact.patient.name}</strong><small dir="ltr">+{contact.phone}</small></div><span className={opened.includes(contact.phone) ? 'is-opened' : ''}>{opened.includes(contact.phone) ? <><ExternalLink size={14} /> طُلب الفتح</> : 'بانتظار المراجعة'}</span></li>)}</ol>
-          {eligible.length > 20 && <p className="wa-field-help">تعرض القائمة أول ٢٠ مستلمًا؛ زر المراجعة يتابع جميع المحددين.</p>}
-          <button type="button" className="wa-button wa-button-primary wa-open-next" disabled={!ready || !nextContact} onClick={() => { if (nextContact) setActive(nextContact.phone); }}><ExternalLink size={17} /><span>{nextContact ? `مراجعة رسالة ${nextContact.patient.name}` : 'طُلب الفتح لكل المحددين'}</span></button>
+          <div className="wa-review-filters" aria-label="فلترة قائمة المراجعة">{[{ key: 'all' as const, label: 'الجميع', count: eligible.length }, { key: 'pending' as const, label: 'بانتظار الفتح', count: eligible.length - openedCount }, { key: 'opened' as const, label: 'طُلب فتحها', count: openedCount }].map(item => <button key={item.key} type="button" aria-pressed={reviewFilter === item.key} onClick={() => { setReviewFilter(item.key); setReviewPage(0); }}>{item.label} <span>{item.count.toLocaleString('ar-EG')}</span></button>)}</div>
+          <ol className="wa-review-contact-list">{visibleReviewContacts.map(contact => <li key={contact.phone}><div><strong>{contact.patient.name}</strong><small dir="ltr">+{contact.phone}</small></div><span className={opened.includes(contact.phone) ? 'is-opened' : ''}>{opened.includes(contact.phone) ? <><ExternalLink size={14} /> طُلب الفتح</> : 'بانتظار المراجعة'}</span><button type="button" className="wa-review-row-action" disabled={!ready} onClick={() => { setPreviewPhone(contact.phone); if (opened.includes(contact.phone)) askConfirm({ title: 'مراجعة رسالة فُتحت سابقًا', message: 'طُلب فتح رسالة هذا المريض سابقًا في هذه الحملة. راجع واتساب لتجنب إرسالها مرتين.', confirmLabel: 'مراجعة الرسالة', tone: 'warning', onConfirm: () => setActive(contact.phone) }); else setActive(contact.phone); }} aria-label={`مراجعة رسالة ${contact.patient.name}`}><ExternalLink size={15} /> مراجعة</button></li>)}</ol>
+          {!reviewContacts.length && <p className="wa-field-help">لا يوجد مستلمون في حالة المراجعة المختارة.</p>}
+          {reviewPages > 1 && <div className="wa-pagination"><button type="button" disabled={effectiveReviewPage === 0} onClick={() => setReviewPage(effectiveReviewPage - 1)}><ChevronRight size={15} /> السابق</button><span>{effectiveReviewPage + 1} / {reviewPages}</span><button type="button" disabled={effectiveReviewPage + 1 >= reviewPages} onClick={() => setReviewPage(effectiveReviewPage + 1)}>التالي <ChevronLeft size={15} /></button></div>}
+          <button type="button" className="wa-button wa-button-primary wa-open-next" disabled={!ready || !nextContact} onClick={() => { if (nextContact) { setPreviewPhone(nextContact.phone); setActive(nextContact.phone); } }}><ExternalLink size={17} /><span>{nextContact ? `مراجعة رسالة ${nextContact.patient.name}` : 'طُلب الفتح لكل المحددين'}</span></button>
           <p className="wa-field-help">راجع المستلم والنص والصورة داخل النافذة، ثم أكمل الإرسال في واتساب.</p>
           {openedCount > 0 && <button type="button" className="wa-button wa-button-plain" onClick={() => askConfirm({ title: 'إعادة قائمة الفتح', message: 'سيبدأ عداد الفتح من جديد. راجع واتساب قبل إعادة الرسائل لتجنب إرسالها مرتين.', confirmLabel: 'إعادة القائمة', tone: 'warning', onConfirm: () => { setOpened([]); setNotice('أُعيدت قائمة الفتح. راجع الرسائل السابقة قبل الإرسال مرة أخرى.'); } })}><RotateCcw size={15} /> إعادة قائمة الفتح</button>}
         </div>
@@ -170,6 +199,6 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
       <div className="wa-stage-actions"><button type="button" className="wa-button wa-button-plain" onClick={() => goToStep('message')}><ArrowRight size={17} /> تعديل الرسالة</button><span className="wa-field-help">الصورة والنص والاختيارات تخص إعداد هذه الحملة.</span></div>
     </div>}
     {notice && <p role="status" className="wa-inline-notice">{notice}</p>}
-    {current && <WhatsAppComposer patient={current.patient} appointments={[]} settings={settings} clinicName={clinicName} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
+    {current && <WhatsAppComposer key={current.phone} patient={current.patient} appointments={[]} settings={settings} clinicName={clinicName} canViewPatientFinance={false} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
   </section>;
 }

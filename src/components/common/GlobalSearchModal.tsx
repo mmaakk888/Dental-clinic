@@ -209,22 +209,22 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-end sm:items-start justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 pt-0 sm:pt-16 animate-fadeIn"
+      className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn"
       onClick={onClose}
     >
       <div
         id="globalSearchModal"
-        className="bg-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[92dvh] sm:max-h-[85vh] dir-rtl transition-all"
+        className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[92dvh] sm:max-h-[90dvh] dir-rtl"
         onClick={e => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         {/* Mobile Handle Bar Indicator */}
-        <div className="sm:hidden flex justify-center pt-2.5 pb-1">
+        <div className="shrink-0 sm:hidden flex justify-center pt-2.5 pb-1">
           <div className="w-10 h-1.5 rounded-full bg-slate-300" />
         </div>
 
         {/* Search Input Bar */}
-        <div className="p-3.5 sm:p-4 border-b border-slate-100 flex items-center gap-3 bg-slate-50/90">
+        <div className="shrink-0 p-3.5 sm:p-4 border-b border-slate-100 flex items-center gap-2 sm:gap-3 bg-slate-50/90">
           <Search className="w-5 h-5 text-indigo-600 shrink-0" />
           <input
             ref={inputRef}
@@ -232,7 +232,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="بحث بالاسم، رقم الهاتف، رقم الملف، موعد أو معمل..."
-            className="w-full bg-transparent text-slate-900 placeholder:text-slate-400 text-base font-bold outline-none"
+            className="min-w-0 w-full bg-transparent text-slate-900 placeholder:text-slate-400 text-base font-bold outline-none"
           />
           {query && (
             <button
@@ -254,7 +254,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
         </div>
 
         {/* Filter Pills */}
-        <div className="p-2.5 bg-white border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto text-xs font-bold">
+        <div className="shrink-0 p-2.5 bg-white border-b border-slate-100 flex flex-wrap items-center gap-1.5 text-xs font-bold">
           <button
             type="button"
             onClick={() => setCategory('all')}
@@ -303,7 +303,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
         </div>
 
         {/* Results Body */}
-        <div className="p-3.5 sm:p-4 overflow-y-auto space-y-4 flex-1">
+        <div className="min-h-0 p-3.5 sm:p-4 overflow-y-auto space-y-4 flex-1">
           {!query.trim() ? (
             <div className="py-6 space-y-6">
               <div className="text-center text-slate-400 space-y-2">

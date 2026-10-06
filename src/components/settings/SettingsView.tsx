@@ -1,32 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { extraMessageTemplates, fillMessageTemplate } from '../../utils/whatsappUtils';
-import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, Edit3, MessageCircle, Pill, Link, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, Type, ChevronLeft, ChevronDown, FileText, Megaphone, Plug, Clock, Info } from 'lucide-react';
-import { ThemeSettings, UILabels, User, UserPermission, Patient, Appointment, Lab, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
+import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, MessageCircle, Pill, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
+import { ThemeSettings, UILabels, User, Patient, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
-import { ClinicLogo } from '../common/ClinicLogo';
+import { IdentityAppearance } from './IdentityAppearance';
+import { ContentLayout } from './ContentLayout';
+import { ServiceCatalogManagement } from './ServiceCatalogManagement';
+import { DrugCatalogManagement } from './DrugCatalogManagement';
+import { UserAccountsManagement } from './UserAccountsManagement';
+import type { ServiceCatalogValues } from '../../utils/serviceCatalog';
+import type { ContentDraft } from '../../utils/clinicContent';
+import type { ClinicIdentitySettings } from '../../utils/storage';
 import { AuditTrailView } from './AuditTrailView';
-import { WhatsAppCampaigns } from './WhatsAppCampaigns';
+import { WhatsAppManagement } from './WhatsAppManagement';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
-import './WhatsAppManagement.css';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import './settingsNavigation.css';
 
-type WhatsAppTemplateKey = keyof WhatsappSettings['templates'];
-const whatsappTemplateCatalog: Array<{ key: WhatsAppTemplateKey; title: string; group: string; description: string; fallback: string }> = [
-  { key: 'reminderTomorrow', title: 'تذكير بالموعد', group: 'المواعيد والحساب', description: 'تذكير بموعد مسجل أو موعد تحدده يدويًا من ملف المريض.', fallback: 'أهلاً {patientName}، نذكرك بموعدك في {clinicName} يوم {date} الساعة {time}. يسعدنا حضورك.' },
-  { key: 'newAppt', title: 'تأكيد موعد جديد', group: 'المواعيد والحساب', description: 'رسالة بتفاصيل الحجز بعد الاتفاق مع المريض على الموعد.', fallback: 'أهلاً {patientName}، تم حجز موعدك في {clinicName} يوم {date} الساعة {time}. للاستفسار أو تعديل الموعد تواصل معنا.' },
-  { key: 'accountBalance', title: 'الرصيد المتبقي', group: 'المواعيد والحساب', description: 'رسالة فردية بالمتبقي على ملف المريض، تُراجع قبل الإرسال.', fallback: 'أهلاً {patientName}، المتبقي على ملفك رقم {fileNo} هو {remainingBalance} ج.م. لأي استفسار تواصل مع {clinicName}.' },
-  { key: 'postOp', title: 'تعليمات عامة بعد الجلسة', group: 'تعليمات المريض', description: 'مقدمة للتعليمات التي يحددها الطبيب حسب الحالة.', fallback: 'أهلاً {patientName}، نتمنى لك دوام الصحة.\nتعليمات الطبيب بعد الجلسة:\n[أضف التعليمات المناسبة للحالة]\nللاستفسار تواصل مع {clinicName}.' },
-  { key: 'extraction', title: 'تعليمات بعد الخلع', group: 'تعليمات المريض', description: 'تعليمات يراجعها الطبيب ويكملها قبل مشاركتها مع المريض.', fallback: extraMessageTemplates.extraction.text },
-  { key: 'filling', title: 'تعليمات بعد الحشو', group: 'تعليمات المريض', description: 'مقدمة قابلة للتخصيص بعد الحشو، وفق تعليمات الطبيب.', fallback: extraMessageTemplates.filling.text },
-  { key: 'rootCanal', title: 'تعليمات علاج العصب', group: 'تعليمات المريض', description: 'تعليمات الجلسة وموعد المتابعة الذي تختاره عند تجهيز الرسالة.', fallback: extraMessageTemplates.rootCanal.text },
-  { key: 'greeting', title: 'معايدة', group: 'رسائل الحملات', description: 'قالب لطيف للأعياد والمناسبات، للموافقين على الحملات.', fallback: extraMessageTemplates.greeting.text },
-  { key: 'offer', title: 'عرض أو إعلان', group: 'رسائل الحملات', description: 'أضف تفاصيل العرض ومدته قبل إعداد الحملة.', fallback: extraMessageTemplates.offer.text },
-];
-const whatsappVariables = [
-  { key: 'patientName', title: 'اسم المريض' }, { key: 'clinicName', title: 'اسم العيادة' },
-  { key: 'date', title: 'تاريخ الموعد' }, { key: 'time', title: 'وقت الموعد' },
-  { key: 'fileNo', title: 'رقم الملف' }, { key: 'remainingBalance', title: 'المتبقي' },
-];
+const settingsSections = [
+  { key: 'identity', group: 'appearance', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
+  { key: 'layout', group: 'appearance', label: 'المحتوى والترتيب', description: 'نصوص الرئيسية وأقسام التنقل', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
+  { key: 'services', group: 'practice', label: 'الخدمات والأسعار', description: 'الخدمات وأسعار البيع وتكاليف المعامل', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
+  { key: 'whatsapp', group: 'practice', label: 'إدارة واتساب', description: 'الرسائل الجاهزة والحملات والربط', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
+  { key: 'drugs', group: 'practice', label: 'فهرس الأدوية', description: 'فهرس الأدوية المستخدم في الروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
+  { key: 'firebase', group: 'data', label: 'النسخ السحابي', description: 'إعدادات النسخ الاحتياطي السحابي', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
+  { key: 'users', group: 'people', label: 'المستخدمون والصلاحيات', description: 'حسابات العمل وصلاحيات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },
+  { key: 'audit', group: 'people', label: 'سجل النشاطات', description: 'الدخول والعمليات المسجلة', icon: <ShieldAlert className="w-4 h-4 text-rose-500" /> },
+  { key: 'excel', group: 'data', label: 'تصدير واستيراد Excel', description: 'تصدير بيانات المرضى واستيرادها', icon: <FileSpreadsheet className="w-4 h-4 text-teal-500" /> },
+  { key: 'system', group: 'data', label: 'عرض النظام والتأمين', description: 'إعدادات النظام والعمليات الحساسة', icon: <Server className="w-4 h-4 text-purple-600" /> },
+] as const;
+type SettingsSectionKey = typeof settingsSections[number]['key'];
+const isSettingsSection = (value: string | undefined): value is SettingsSectionKey => settingsSections.some(section => section.key === value);
+const settingsSectionGroups = [
+  { key: 'appearance', label: 'مظهر العيادة' },
+  { key: 'practice', label: 'الخدمات والتواصل' },
+  { key: 'people', label: 'الفريق والخصوصية' },
+  { key: 'data', label: 'البيانات والنظام' },
+] as const;
+
+function SettingsSectionPicker({ activeSection, onSelect, onClose }: {
+  activeSection: SettingsSectionKey;
+  onSelect: (section: SettingsSectionKey) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useAppointmentDialog(true, onClose);
+  return (
+    <div className="clinic-modal-overlay settings-picker-overlay" dir="rtl" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} id="settings-section-picker" role="dialog" aria-modal="true" aria-labelledby="settings-picker-title" tabIndex={-1} className="clinic-modal-panel clinic-modal-panel--framed settings-picker-dialog">
+        <div className="settings-picker-header">
+          <div><h2 id="settings-picker-title">أقسام الإعدادات</h2><p>اختَر القسم الذي تريد تعديله.</p></div>
+          <button type="button" onClick={onClose} aria-label="إغلاق أقسام الإعدادات" className="settings-picker-close"><X aria-hidden="true" /></button>
+        </div>
+        <div className="settings-picker-groups">
+          {settingsSectionGroups.map(group => (
+            <section key={group.key} aria-label={group.label} className="settings-picker-group">
+              <h3>{group.label}</h3>
+              <div className="settings-picker-options">
+                {settingsSections.filter(section => section.group === group.key).map(section => {
+                  const isActive = section.key === activeSection;
+                  return <button key={section.key} type="button" className="settings-picker-option" aria-current={isActive ? 'page' : undefined}
+                    data-dialog-autofocus={isActive ? true : undefined} onClick={() => onSelect(section.key)}>
+                    <span className="settings-picker-icon" aria-hidden="true">{section.icon}</span>
+                    <span className="settings-picker-label"><strong>{section.label}</strong><small>{section.description}</small></span>
+                    {isActive ? <Check aria-hidden="true" className="settings-picker-indicator" /> : <ChevronLeft aria-hidden="true" className="settings-picker-indicator" />}
+                  </button>;
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface SettingsViewProps {
   activeSubTab?: string;
@@ -37,7 +83,13 @@ interface SettingsViewProps {
   labels: UILabels;
   tileOrder: string[];
   users: User[];
+  currentUser: User | null;
   serviceTypes: string[];
+  crownPrices: Record<string, number>;
+  canManagePrices: boolean;
+  canViewLabCosts: boolean;
+  canManageLabPrices: boolean;
+  initialPricingLabId?: string;
   patients: Patient[];
   appointments: Appointment[];
   labs: Lab[];
@@ -45,13 +97,13 @@ interface SettingsViewProps {
   expenses: Expense[];
   materialUsages: MaterialUsage[];
   whatsappSettings: WhatsappSettings;
+  canViewPatientFinance?: boolean;
   drugCatalog: DrugCatalogItem[];
-  onSaveClinicInfo: (name: string, logo: string | null) => void;
-  onSaveTheme: (theme: ThemeSettings) => void;
-  onSaveLabels: (labels: UILabels) => void;
-  onSaveTileOrder: (order: string[]) => void;
+  onSaveIdentity: (values: ClinicIdentitySettings) => void;
+  onSaveContent: (values: ContentDraft) => void;
   onSaveUsers: (users: User[]) => void;
-  onSaveServiceTypes: (types: string[]) => void;
+  onSaveServiceCatalog: (values: ServiceCatalogValues) => void;
+  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void;
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void;
   onSaveDrugCatalog: (catalog: DrugCatalogItem[]) => void;
   onImportPatients: (newPatients: Patient[]) => void;
@@ -69,7 +121,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   labels,
   tileOrder,
   users,
+  currentUser,
   serviceTypes,
+  crownPrices,
+  canManagePrices,
+  canViewLabCosts,
+  canManageLabPrices,
+  initialPricingLabId,
   patients,
   appointments,
   labs,
@@ -77,13 +135,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   expenses,
   materialUsages,
   whatsappSettings,
+  canViewPatientFinance = false,
   drugCatalog,
-  onSaveClinicInfo,
-  onSaveTheme,
-  onSaveLabels,
-  onSaveTileOrder,
+  onSaveIdentity,
+  onSaveContent,
   onSaveUsers,
-  onSaveServiceTypes,
+  onSaveServiceCatalog,
+  onSaveLabPricing,
   onSaveWhatsappSettings,
   onSaveDrugCatalog,
   onImportPatients,
@@ -93,89 +151,69 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
 
-  const [activeSubTab, setActiveSubTab] = useState<'identity' | 'layout' | 'services' | 'whatsapp' | 'drugs' | 'firebase' | 'users' | 'excel' | 'system' | 'audit'>(
-    (externalSubTab as any) || 'identity'
+  const [activeSubTab, setActiveSubTab] = useState<SettingsSectionKey>(
+    isSettingsSection(externalSubTab) ? externalSubTab : 'identity'
   );
   const selectedSettingsContent = useRef<HTMLDivElement>(null);
+  const mobileSettingsAnchor = useRef<HTMLDivElement>(null);
+  const mobileSettingsToolbar = useRef<HTMLDivElement>(null);
+  const [isSettingsPickerOpen, setIsSettingsPickerOpen] = useState(false);
+  const [settingsToolbarLayout, setSettingsToolbarLayout] = useState({ pinned: false, left: 0, width: 0, height: 0 });
+  const activeSettingsSection = settingsSections.find(section => section.key === activeSubTab)!;
 
   useEffect(() => {
     if (externalSubTab) {
-      setActiveSubTab(externalSubTab as any);
+      setActiveSubTab(isSettingsSection(externalSubTab) ? externalSubTab : 'identity');
     }
   }, [externalSubTab]);
 
-  const handleSelectSubTab = (tab: any) => {
+  useEffect(() => {
+    // App's overflow container prevents a regular sticky child from following
+    // the viewport. Pin only this local section control, keeping its space.
+    let frame: number | undefined;
+    const measure = () => {
+      frame = undefined;
+      const anchor = mobileSettingsAnchor.current;
+      const toolbar = mobileSettingsToolbar.current;
+      if (!anchor || !toolbar) return;
+      const isMobile = window.matchMedia('(max-width: 1023px)').matches;
+      const bounds = anchor.getBoundingClientRect();
+      const next = { pinned: isMobile && bounds.top < 12, left: bounds.left, width: bounds.width, height: toolbar.getBoundingClientRect().height };
+      setSettingsToolbarLayout(previous => previous.pinned === next.pinned && Math.abs(previous.left - next.left) < 0.5
+        && Math.abs(previous.width - next.width) < 0.5 && Math.abs(previous.height - next.height) < 0.5 ? previous : next);
+      if (!isMobile) setIsSettingsPickerOpen(false);
+    };
+    const schedule = () => { if (frame === undefined) frame = requestAnimationFrame(measure); };
+    const observer = new ResizeObserver(schedule);
+    if (mobileSettingsAnchor.current) observer.observe(mobileSettingsAnchor.current);
+    if (mobileSettingsToolbar.current) observer.observe(mobileSettingsToolbar.current);
+    window.addEventListener('scroll', schedule, { passive: true, capture: true });
+    window.addEventListener('resize', schedule);
+    measure();
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+    };
+  }, []);
+
+  const handleSelectSubTab = (tab: SettingsSectionKey) => {
     setActiveSubTab(tab);
+    setIsSettingsPickerOpen(false);
     if (onSubTabChange) {
       onSubTabChange(tab);
     }
     requestAnimationFrame(() => {
       if (!window.matchMedia('(max-width: 1023px)').matches) return;
-      selectedSettingsContent.current?.scrollIntoView({ block: 'start',
+      const content = selectedSettingsContent.current;
+      if (!content) return;
+      const toolbarHeight = mobileSettingsToolbar.current?.getBoundingClientRect().height || 0;
+      window.scrollTo({ top: Math.max(0, content.getBoundingClientRect().top + window.scrollY - toolbarHeight - 28),
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      content.focus({ preventScroll: true });
     });
   };
-
-  // WhatsApp Form State
-  const [waState, setWaState] = useState<WhatsappSettings>({ ...whatsappSettings });
-  const [waSection, setWaSection] = useState<'templates' | 'campaigns' | 'connection'>('templates');
-  const waManagementRef = useRef<HTMLElement>(null);
-  const handleSelectWaSection = (section: 'templates' | 'campaigns' | 'connection') => {
-    setWaSection(section);
-    requestAnimationFrame(() => {
-      if (window.matchMedia('(max-width: 1023px)').matches) waManagementRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
-    });
-  };
-  const [waTemplateKey, setWaTemplateKey] = useState<WhatsAppTemplateKey>('reminderTomorrow');
-  const waEditorRef = useRef<HTMLTextAreaElement>(null);
-  const previousWhatsappSettings = useRef(whatsappSettings);
-  useEffect(() => {
-    const previous = previousWhatsappSettings.current as WhatsappSettings;
-    setWaState(current => ({
-      ...whatsappSettings,
-      templates: JSON.stringify(current.templates) === JSON.stringify(previous.templates) ? whatsappSettings.templates : current.templates,
-    }));
-    previousWhatsappSettings.current = whatsappSettings;
-  }, [whatsappSettings]);
-  const activeWhatsAppTemplate = whatsappTemplateCatalog.find(template => template.key === waTemplateKey)!;
-  const activeWhatsAppText = waState.templates[waTemplateKey] ?? activeWhatsAppTemplate.fallback;
-  const hasWhatsappChanges = JSON.stringify(waState.templates) !== JSON.stringify(whatsappSettings.templates);
-  const whatsappPreviewDate = new Date();
-  whatsappPreviewDate.setDate(whatsappPreviewDate.getDate() + 1);
-  const whatsappPreview = fillMessageTemplate(activeWhatsAppText, {
-    patientName: 'أحمد محمد', clinicName, fileNo: '٤٠١', remainingBalance: '٥٠٠',
-    date: whatsappPreviewDate.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }), time: '٥:٣٠ مساءً',
-  });
-  const unknownWhatsappVariables = Array.from(new Set((activeWhatsAppText.match(/\{[^{}]+\}/g) || [])
-    .filter(token => !whatsappVariables.some(variable => token === `{${variable.key}}`))));
-  const updateWhatsAppTemplate = (value: string) => setWaState(current => ({ ...current, templates: { ...current.templates, [waTemplateKey]: value } }));
-  const insertWhatsAppVariable = (variable: string) => {
-    const editor = waEditorRef.current as HTMLTextAreaElement | null;
-    const start = editor?.selectionStart ?? activeWhatsAppText.length;
-    const end = editor?.selectionEnd ?? start;
-    const token = `{${variable}}`;
-    updateWhatsAppTemplate(activeWhatsAppText.slice(0, start) + token + activeWhatsAppText.slice(end));
-    requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
-  };
-
-  // Drug Catalog Form State
-  const [catalogList, setCatalogList] = useState<DrugCatalogItem[]>([...drugCatalog]);
-  const [isDrugModalOpen, setIsDrugModalOpen] = useState(false);
-  const [editingDrug, setEditingDrug] = useState<DrugCatalogItem | null>(null);
-  const [drugName, setDrugName] = useState('');
-  const [drugCategory, setDrugCategory] = useState('');
-  const [drugDosage, setDrugDosage] = useState('');
-  const [drugDuration, setDrugDuration] = useState('');
-
-  // Form States
-  const [tempClinicName, setTempClinicName] = useState(clinicName);
-  const [tempLogo, setTempLogo] = useState<string | null>(clinicLogo);
-  const [tempTheme, setTempTheme] = useState<ThemeSettings>(theme);
-  const [customFontInput, setCustomFontInput] = useState('');
-  const [tempLabels, setTempLabels] = useState<UILabels>(labels);
-  const [tempTileOrder, setTempTileOrder] = useState<string[]>([...tileOrder]);
-  const [tempServiceTypes, setTempServiceTypes] = useState<string[]>([...serviceTypes]);
-  const [newServiceInput, setNewServiceInput] = useState('');
 
   // Excel Export Column Checkboxes
   const excelBusyRef = useRef(false);
@@ -189,143 +227,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     totalPaid: true,
     totalRemain: true
   });
-
-  // User Management Modal
-  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [userName, setUserName] = useState('');
-  const [userUsername, setUserUsername] = useState('');
-  const [userPassword, setUserPassword] = useState('');
-  const [userEmail, setUserEmail] = useState('');
-  const [userPhone, setUserPhone] = useState('');
-  const [userRole, setUserRole] = useState<'doctor' | 'secretary' | 'admin'>('secretary');
-  const [userIsActive, setUserIsActive] = useState(true);
-  const [userScheduleEnabled, setUserScheduleEnabled] = useState(false);
-  const [userScheduleDays, setUserScheduleDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
-  const [userScheduleStart, setUserScheduleStart] = useState('09:00');
-  const [userScheduleEnd, setUserScheduleEnd] = useState('21:00');
-  const [userPermissions, setUserPermissions] = useState<UserPermission>({
-    patientView: true,
-    patientEdit: true,
-    deletePatients: false,
-    patientFinance: true,
-    appointments: true,
-    lab: false,
-    labProfit: false,
-    summary: false,
-    controlPanel: false
-  });
-
-  // Handle Logo Upload
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        showToast('حجم الصورة كبير جداً، يرجى اختيار صورة أقل من 2 ميجابايت', 'error');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setTempLogo(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const applyNamedGoogleFont = (fontName: string) => {
-    if (!fontName.trim()) return;
-    const cleanName = fontName.trim();
-    const encodedName = cleanName.replace(/\s+/g, '+');
-    const fontUrl = `https://fonts.googleapis.com/css2?family=${encodedName}:wght@300;400;500;600;700;800;900&display=swap`;
-    const fontFamilyStr = `'${cleanName}', sans-serif`;
-
-    const updatedTheme: ThemeSettings = {
-      ...tempTheme,
-      fontFamily: fontFamilyStr,
-      customFontUrl: fontUrl
-    };
-
-    setTempTheme(updatedTheme);
-    onSaveTheme(updatedTheme);
-
-    // Inject immediately into document head
-    let link = document.getElementById('dynamic-google-font') as HTMLLinkElement;
-    if (!link) {
-      link = document.createElement('link');
-      link.id = 'dynamic-google-font';
-      link.rel = 'stylesheet';
-      document.head.appendChild(link);
-    }
-    link.href = fontUrl;
-
-    document.body.style.fontFamily = fontFamilyStr;
-    showToast(`تم تطبيق الخط العربي الجديد (${cleanName}) بنجاح`, 'success');
-  };
-
-  const handleApplyCustomGoogleFont = () => {
-    if (!customFontInput.trim()) {
-      showToast('يرجى كتابة اسم الخط العربي المطلوب أولاً', 'warning');
-      return;
-    }
-    applyNamedGoogleFont(customFontInput);
-  };
-
-  const handleApplyThemeColors = (newTheme: ThemeSettings) => {
-    setTempTheme(newTheme);
-    onSaveTheme(newTheme);
-    document.documentElement.style.setProperty('--primary', newTheme.primary);
-    document.documentElement.style.setProperty('--secondary', newTheme.secondary);
-    document.documentElement.style.setProperty('--accent', newTheme.accent);
-    document.documentElement.style.setProperty('--bg-main', newTheme.background);
-    if (newTheme.fontFamily) {
-      document.body.style.fontFamily = newTheme.fontFamily;
-    }
-  };
-
-  const handleSaveIdentity = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSaveClinicInfo(tempClinicName, tempLogo);
-    onSaveTheme(tempTheme);
-    showToast('تم حفظ إعدادات الهوية والمظهر بنجاح', 'success');
-  };
-
-  const handleMoveTile = (index: number, direction: 'up' | 'down') => {
-    const newOrder = [...tempTileOrder];
-    const targetIdx = direction === 'up' ? index - 1 : index + 1;
-    if (targetIdx < 0 || targetIdx >= newOrder.length) return;
-    const temp = newOrder[index];
-    newOrder[index] = newOrder[targetIdx];
-    newOrder[targetIdx] = temp;
-    setTempTileOrder(newOrder);
-    onSaveTileOrder(newOrder);
-  };
-
-  const handleSaveLayout = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSaveLabels(tempLabels);
-    onSaveTileOrder(tempTileOrder);
-    showToast('تم حفظ ترتيب ومسميات الواجهة بنجاح', 'success');
-  };
-
-  const handleAddServiceType = () => {
-    if (!newServiceInput.trim()) return;
-    if (tempServiceTypes.includes(newServiceInput.trim())) {
-      showToast('نوع الخدمة موجود بالفعل بالقائمة', 'warning');
-      return;
-    }
-    const updated = [...tempServiceTypes, newServiceInput.trim()];
-    setTempServiceTypes(updated);
-    onSaveServiceTypes(updated);
-    setNewServiceInput('');
-    showToast('تم إضافة نوع الخدمة الجديد', 'success');
-  };
-
-  const handleDeleteServiceType = (st: string) => {
-    const updated = tempServiceTypes.filter(s => s !== st);
-    setTempServiceTypes(updated);
-    onSaveServiceTypes(updated);
-    showToast('تم حذف نوع الخدمة', 'warning');
-  };
 
   // Excel Export Handler
   const handleExportExcel = async () => {
@@ -510,200 +411,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // User Save
-  const handleOpenAddUser = () => {
-    setEditingUser(null);
-    setUserName('');
-    setUserUsername('');
-    setUserPassword('123');
-    setUserEmail('');
-    setUserPhone('');
-    setUserRole('secretary');
-    setUserIsActive(true);
-    setUserScheduleEnabled(false);
-    setUserScheduleDays([0, 1, 2, 3, 4, 5, 6]);
-    setUserScheduleStart('09:00');
-    setUserScheduleEnd('21:00');
-    setUserPermissions({
-      patientView: true,
-      patientEdit: true,
-      deletePatients: false,
-      patientFinance: true,
-      appointments: true,
-      lab: false,
-      labProfit: false,
-      summary: false,
-      controlPanel: false
-    });
-    setIsUserModalOpen(true);
-  };
-
-  const handleOpenEditUser = (user: User) => {
-    setEditingUser(user);
-    setUserName(user.name);
-    setUserUsername(user.username || '');
-    setUserPassword(user.password || '');
-    setUserEmail(user.email || '');
-    setUserPhone(user.phone || '');
-    setUserRole(user.role);
-    setUserIsActive(user.isActive !== false);
-    setUserScheduleEnabled(user.accessSchedule?.enabled ?? false);
-    setUserScheduleDays(user.accessSchedule?.days ?? [0, 1, 2, 3, 4, 5, 6]);
-    setUserScheduleStart(user.accessSchedule?.startTime ?? '09:00');
-    setUserScheduleEnd(user.accessSchedule?.endTime ?? '21:00');
-    setUserPermissions({
-      ...user.permissions,
-      patientView: user.permissions?.patientView ?? true,
-      patientEdit: user.permissions?.patientEdit ?? true,
-      deletePatients: user.permissions?.deletePatients ?? false,
-      patientFinance: user.permissions?.patientFinance ?? true,
-      appointments: user.permissions?.appointments ?? true,
-      lab: user.permissions?.lab ?? false,
-      labProfit: user.permissions?.labProfit ?? false,
-      summary: user.permissions?.summary ?? false,
-      controlPanel: user.permissions?.controlPanel ?? false
-    });
-    setIsUserModalOpen(true);
-  };
-
-  const handleSaveUserForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userName.trim()) {
-      validationFail('userModal', 'input-user-name', 'يرجى كتابة الاسم الكامل للمستخدم');
-      return;
-    }
-
-    if (!userUsername.trim()) {
-      validationFail('userModal', 'input-user-username', 'يرجى كتابة اسم المستخدم للدخول');
-      return;
-    }
-
-    const normalizedUsername = userUsername.trim().toLowerCase();
-    if (users.some(user => user.id !== editingUser?.id && user.username.toLowerCase() === normalizedUsername)) {
-      validationFail('userModal', 'input-user-username', 'اسم المستخدم مستخدم بالفعل. اختر اسمًا مختلفًا.');
-      return;
-    }
-    if (!editingUser && !userPassword.trim()) {
-      showToast('اكتب كلمة سر للحساب الجديد.', 'warning');
-      return;
-    }
-    const nextPassword = userPassword.trim() || editingUser?.password || '';
-    const grantsAdminAccess = (user: User) => user.isActive !== false && (user.role === 'doctor' || user.role === 'admin' || user.permissions?.controlPanel === true);
-    if (editingUser && grantsAdminAccess(editingUser) && !(userIsActive && (userRole === 'doctor' || userRole === 'admin' || userPermissions.controlPanel)) && !users.some(user => user.id !== editingUser.id && grantsAdminAccess(user))) {
-      showToast('احتفظ بحساب مدير نشط واحد على الأقل قبل تغيير هذه الصلاحيات.', 'warning');
-      return;
-    }
-
-    if (userScheduleEnabled && (!userScheduleDays.length || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(userScheduleEnd) || userScheduleStart === userScheduleEnd)) {
-      showToast('اختر يوم عمل واحدًا على الأقل ووقت بداية ونهاية صحيحين ومختلفين.', 'warning');
-      return;
-    }
-
-    const newUser: User = {
-      id: editingUser ? editingUser.id : `u_${Date.now()}`,
-      name: userName.trim(),
-      username: userUsername.trim().toLowerCase(),
-      password: nextPassword,
-      email: userEmail.trim(),
-      phone: userPhone.trim(),
-      role: userRole,
-      permissions: userPermissions,
-      isActive: userIsActive,
-      accessSchedule: {
-        enabled: userScheduleEnabled,
-        days: userScheduleDays,
-        startTime: userScheduleStart,
-        endTime: userScheduleEnd,
-        timezone: 'Africa/Cairo'
-      },
-      credentialVersion: editingUser
-        ? (editingUser.credentialVersion ?? 1) + (editingUser.password !== nextPassword ? 1 : 0)
-        : 1
-    };
-
-    let updatedUsers = [...users];
-    if (editingUser) {
-      updatedUsers = updatedUsers.map(u => u.id === editingUser.id ? newUser : u);
-    } else {
-      updatedUsers.push(newUser);
-    }
-
-    onSaveUsers(updatedUsers);
-    setIsUserModalOpen(false);
-    showToast('تم حفظ حساب المستخدم وصلاحياته بنجاح', 'success');
-  };
-
-  const handleDeleteUser = (uId: string) => {
-    if (users.length <= 1) {
-      showToast('لا يمكن حذف المستخدم الوحيد بالنظام', 'error');
-      return;
-    }
-    const updated = users.filter(u => u.id !== uId);
-    if (!updated.some(user => user.isActive !== false && (user.role === 'doctor' || user.role === 'admin' || user.permissions?.controlPanel === true))) {
-      showToast('لا يمكن حذف آخر حساب مدير نشط.', 'warning');
-      return;
-    }
-    askConfirm({ title: 'حذف حساب المستخدم', message: 'سيُلغى دخول هذا الحساب. هل تريد المتابعة؟', tone: 'danger', confirmLabel: 'حذف الحساب', onConfirm: () => {
-      onSaveUsers(updated);
-      showToast('تم حذف حساب المستخدم', 'warning');
-    } });
-  };
-
-  const handleSaveWhatsappForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!hasWhatsappChanges) return;
-    try {
-      onSaveWhatsappSettings(waState);
-      showToast('تم حفظ الرسائل الجاهزة', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'تعذّر حفظ الرسائل. احتفظ بتعديلاتك وحاول مرة أخرى.', 'error');
-    }
-  };
-
-  const handleOpenAddDrug = () => {
-    setEditingDrug(null);
-    setDrugName('');
-    setDrugCategory('مضاد حيوي');
-    setDrugDosage('');
-    setDrugDuration('');
-    setIsDrugModalOpen(true);
-  };
-
-  const handleSaveDrugForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!drugName.trim()) {
-      showToast('يرجى كتابة اسم الدواء', 'warning');
-      return;
-    }
-
-    const newItem: DrugCatalogItem = {
-      id: editingDrug ? editingDrug.id : `d_${Date.now()}`,
-      name: drugName.trim(),
-      category: drugCategory.trim() || 'دواء أسنان',
-      defaultDosage: drugDosage.trim() || 'حسب إرشادات الطبيب',
-      defaultDuration: drugDuration.trim()
-    };
-
-    let updated = [...catalogList];
-    if (editingDrug) {
-      updated = updated.map(d => d.id === editingDrug.id ? newItem : d);
-    } else {
-      updated.push(newItem);
-    }
-
-    setCatalogList(updated);
-    onSaveDrugCatalog(updated);
-    setIsDrugModalOpen(false);
-    showToast('تم حفظ الدواء في الفهرس بنجاح', 'success');
-  };
-
-  const handleDeleteDrug = (id: string) => {
-    const updated = catalogList.filter(d => d.id !== id);
-    setCatalogList(updated);
-    onSaveDrugCatalog(updated);
-    showToast('تم حذف الدواء من الفهرس', 'info');
-  };
-
   // Firebase Cloud Backup State & Handlers
   const [cloudBackups, setCloudBackups] = useState<FirebaseBackupMeta[]>([]);
   const [isUploadingCloud, setIsUploadingCloud] = useState(false);
@@ -743,6 +450,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         materialUsages,
         users,
         serviceTypes,
+        crownPrices,
         whatsappSettings,
         drugCatalog,
         clinicName,
@@ -806,13 +514,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto py-2">
+    <div className="settings-view space-y-6 max-w-7xl mx-auto py-2 min-w-0">
       {/* View Header */}
       <div className="flex items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
           <button
+            type="button" aria-label="العودة للشاشة الرئيسية"
             onClick={onBackToHome}
-            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+            className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
             title="رجوع للشاشة الرئيسية"
           >
             <ArrowRight className="w-5 h-5" />
@@ -822,9 +531,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               لوحة التحكم والإعدادات
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              تخصيص الهوية، الألوان، الواتساب، الفهرس والنسخ الاحتياطي السحابي (Firebase)
+              إعدادات العيادة، الخدمات، التواصل وصلاحيات الفريق
             </p>
           </div>
+        </div>
+      </div>
+
+      <div ref={mobileSettingsAnchor} className="settings-mobile-nav-anchor" style={settingsToolbarLayout.pinned ? { height: settingsToolbarLayout.height } : undefined}>
+        <div ref={mobileSettingsToolbar} className={`settings-mobile-nav${settingsToolbarLayout.pinned ? ' is-pinned' : ''}`}
+          style={settingsToolbarLayout.pinned ? { left: settingsToolbarLayout.left, width: settingsToolbarLayout.width } : undefined}>
+          <span aria-hidden="true" className="settings-mobile-nav-icon">{activeSettingsSection.icon}</span>
+          <div className="settings-mobile-nav-title"><small>القسم الحالي</small><strong aria-live="polite">{activeSettingsSection.label}</strong></div>
+          <button type="button" className="settings-mobile-nav-change" aria-haspopup="dialog" aria-expanded={isSettingsPickerOpen}
+            aria-controls="settings-section-picker" onClick={() => setIsSettingsPickerOpen(true)}>
+            تغيير القسم <ChevronDown aria-hidden="true" />
+          </button>
         </div>
       </div>
 
@@ -832,7 +553,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
         {/* Internal Settings Sidebar Column */}
-        <div className="lg:col-span-3 space-y-3">
+        <div className="settings-desktop-nav hidden lg:block lg:col-span-3 space-y-3">
           <div className="bg-white rounded-3xl p-3 border border-slate-200/90 shadow-xs space-y-2 lg:sticky lg:top-20">
             <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-700 font-tajawal flex items-center gap-1.5">
@@ -845,24 +566,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="space-y-1">
-              {[
-                { key: 'identity', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
-                { key: 'layout', label: 'المحتوى والترتيب', description: 'ترتيب واجهة الشاشة والتسميات', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
-                { key: 'services', label: 'الخدمات والأسعار', description: 'أنواع العلاجات وتصنيفات الحشو', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
-                { key: 'whatsapp', label: 'إدارة واتساب', description: 'الرسائل الجاهزة والحملات والربط', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
-                { key: 'drugs', label: 'فهرس الأدوية', description: 'دليل الوصفات والجرعات للروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
-                { key: 'firebase', label: 'النسخ السحابي', description: 'مزامنة Firebase والنسخ الاحتياطي', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
-                { key: 'users', label: 'المستخدمين والصلاحيات', description: 'إدارة أطقم العمل وحسابات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },
-                { key: 'audit', label: 'سجل النشاطات', description: 'تتبع عمليات الدخول وتغيير البيانات', icon: <ShieldAlert className="w-4 h-4 text-rose-500" /> },
-                { key: 'excel', label: 'تصدير واستيراد Excel', description: 'تصدير واسترجاع بيانات المرضى', icon: <FileSpreadsheet className="w-4 h-4 text-teal-500" /> },
-                { key: 'system', label: 'عرض النظام والتأمين', description: 'إعادة الضبط الافتراضي واستقرار النظام', icon: <Server className="w-4 h-4 text-purple-600" /> },
-              ].map(st => {
+              {settingsSections.map(st => {
                 const isActive = activeSubTab === st.key;
                 return (
                   <button
                     key={st.key}
                     type="button"
-                    onClick={() => handleSelectSubTab(st.key as any)}
+                    onClick={() => handleSelectSubTab(st.key)}
+                    aria-current={isActive ? 'page' : undefined}
                     className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-2xl text-right transition-all cursor-pointer font-tajawal group ${
                       isActive
                         ? 'bg-indigo-600 text-white shadow-md ring-1 ring-indigo-500/30 font-bold'
@@ -896,574 +607,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {/* Selected Settings Content Panel Column */}
-        <div ref={selectedSettingsContent} className="lg:col-span-9 min-w-0 animate-fadeIn scroll-mt-4">
-        {/* 1. Identity & Theme SubTab */}
-        {activeSubTab === 'identity' && (
-          <form onSubmit={handleSaveIdentity} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <h3 className="text-base font-bold text-slate-900 font-tajawal">
-              شعار واسم العيادة
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  اسم العيادة العربي
-                </label>
-                <input
-                  type="text"
-                  value={tempClinicName}
-                  onChange={e => setTempClinicName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  شعار العيادة وعرض المعاينة العالية الدقة (HD)
-                </label>
-                <div className="flex items-center gap-4 flex-wrap bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                  <ClinicLogo
-                    size="lg"
-                    customLogoUrl={tempLogo}
-                  />
-                  <div className="flex items-center gap-2">
-                    <label className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs">
-                      تغيير صورة الشعار
-                      <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-                    </label>
-                    {tempLogo && (
-                      <button
-                        type="button"
-                        onClick={() => setTempLogo(null)}
-                        className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold cursor-pointer transition-colors"
-                      >
-                        إعادة للشعار الافتراضي
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t border-slate-100 pt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                  <Palette className="w-5 h-5 text-indigo-600" />
-                  ألوان وستايل الواجهة الحية (تثبيت ستايل مخصص بضغطة زر)
-                </h3>
-              </div>
-
-              {/* Theme Presets */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-slate-700 block">اختر ثيم ألوان طبية جاهزة:</span>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
-                  {[
-                    { name: '👑 أزرق ملكي', primary: '#2563eb', secondary: '#1d4ed8', accent: '#f59e0b', background: '#f8fafc' },
-                    { name: '🌿 زمردي طبي', primary: '#059669', secondary: '#047857', accent: '#10b981', background: '#f0fdf4' },
-                    { name: '🔮 بنفسجي فاخر', primary: '#7c3aed', secondary: '#6d28d9', accent: '#f59e0b', background: '#faf5ff' },
-                    { name: '🏛️ رمادي كلاسيكي', primary: '#334155', secondary: '#1e293b', accent: '#0284c7', background: '#f8fafc' },
-                    { name: '🌸 وردي هادئ', primary: '#e11d48', secondary: '#be123c', accent: '#fb7185', background: '#fff1f2' },
-                    { name: '🌊 فيروزي حديث', primary: '#0d9488', secondary: '#0f766e', accent: '#f59e0b', background: '#f0fdfa' }
-                  ].map(preset => (
-                    <button
-                      key={preset.name}
-                      type="button"
-                      onClick={() => handleApplyThemeColors(preset)}
-                      className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl border border-slate-200 text-right cursor-pointer transition-all hover:scale-[1.02] flex flex-col gap-2"
-                    >
-                      <span className="text-xs font-bold text-slate-800 font-tajawal">{preset.name}</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-4 h-4 rounded-full shadow-2xs border border-white" style={{ backgroundColor: preset.primary }} />
-                        <span className="w-4 h-4 rounded-full shadow-2xs border border-white" style={{ backgroundColor: preset.secondary }} />
-                        <span className="w-4 h-4 rounded-full shadow-2xs border border-white" style={{ backgroundColor: preset.accent }} />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">اللون الأساسي (Primary):</label>
-                  <input
-                    type="color"
-                    value={tempTheme.primary}
-                    onChange={e => handleApplyThemeColors({ ...tempTheme, primary: e.target.value })}
-                    className="w-full h-10 rounded-xl cursor-pointer border border-slate-200 p-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">اللون الثانوي (Secondary):</label>
-                  <input
-                    type="color"
-                    value={tempTheme.secondary}
-                    onChange={e => handleApplyThemeColors({ ...tempTheme, secondary: e.target.value })}
-                    className="w-full h-10 rounded-xl cursor-pointer border border-slate-200 p-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">لون التمييز (Accent):</label>
-                  <input
-                    type="color"
-                    value={tempTheme.accent}
-                    onChange={e => handleApplyThemeColors({ ...tempTheme, accent: e.target.value })}
-                    className="w-full h-10 rounded-xl cursor-pointer border border-slate-200 p-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">خلفية الصفحة (Background):</label>
-                  <input
-                    type="color"
-                    value={tempTheme.background}
-                    onChange={e => handleApplyThemeColors({ ...tempTheme, background: e.target.value })}
-                    className="w-full h-10 rounded-xl cursor-pointer border border-slate-200 p-1"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Arabic Font Selection Section */}
-            <div className="border-t border-slate-100 pt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                  <Type className="w-5 h-5 text-indigo-600" />
-                  خطوط التطبيق والنصوص العربية (تغيير واختيار الخط العربي)
-                </h3>
-              </div>
-
-              <div className="space-y-3">
-                <span className="text-xs font-bold text-slate-700 block">اختر خطاً عربياً راقياً ومريحاً للعين:</span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {[
-                    { name: 'القاهرة (Cairo)', font: "'Cairo', sans-serif", desc: 'عصري وشديد الوضوح' },
-                    { name: 'تجوال (Tajawal)', font: "'Tajawal', sans-serif", desc: 'ناعم ومتناسق للواجهات' },
-                    { name: 'الإسكندرية (Alexandria)', font: "'Alexandria', sans-serif", desc: 'دقيق وشديد الوضوح' },
-                    { name: 'آي بي إم (IBM Plex)', font: "'IBM Plex Sans Arabic', sans-serif", desc: 'رسمي واحترافي' },
-                    { name: 'ريديكس برو (Readex)', font: "'Readex Pro', sans-serif", desc: 'أنيق وخفيف للموبايل' },
-                    { name: 'الأميري (Amiri)', font: "'Amiri', serif", desc: 'نسخي وفخم كلاسيكي' },
-                    { name: 'تشانغا (Changa)', font: "'Changa', sans-serif", desc: 'عريض وجريء' },
-                    { name: 'ريم الكوفي (Reem Kufi)', font: "'Reem Kufi', sans-serif", desc: 'كوفي أصيل وجذاب' },
-                  ].map(f => {
-                    const isSelected = tempTheme.fontFamily === f.font || (!tempTheme.fontFamily && f.font.includes('Cairo'));
-                    return (
-                      <button
-                        key={f.name}
-                        type="button"
-                        onClick={() => {
-                          const updated = { ...tempTheme, fontFamily: f.font };
-                          setTempTheme(updated);
-                          handleApplyThemeColors(updated);
-                        }}
-                        style={{ fontFamily: f.font }}
-                        className={`p-3.5 rounded-2xl border text-right cursor-pointer transition-all flex flex-col justify-between h-24 ${
-                          isSelected
-                            ? 'bg-indigo-50/90 border-indigo-600 text-indigo-950 ring-2 ring-indigo-300 shadow-2xs'
-                            : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-black">{f.name}</span>
-                          {isSelected && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
-                        </div>
-                        <span className="text-[11px] opacity-80 font-normal line-clamp-1">{f.desc}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Custom Google Font Option */}
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <span className="text-xs font-bold text-slate-800">إضافة خط عربي مخصص أونلاين من Google Fonts:</span>
-                  <span className="text-[11px] text-indigo-600 font-bold">يمكنك تجربة أي خط عربي عبر اسم الخط</span>
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="اكتب اسم الخط بالإنجليزية (مثال: Almarai, El Messiri, Kufam)"
-                    value={customFontInput}
-                    onChange={e => setCustomFontInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-indigo-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleApplyCustomGoogleFont}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer transition-colors shadow-2xs"
-                  >
-                    تطبيق الخط المخصص
-                  </button>
-                </div>
-
-                {/* Quick helper buttons for extra popular Arabic fonts */}
-                <div className="flex items-center gap-2 flex-wrap text-xs pt-1">
-                  <span className="text-[11px] text-slate-500 font-semibold">خطوط عربية مقترحة:</span>
-                  {[
-                    { label: 'المراعي (Almarai)', name: 'Almarai' },
-                    { label: 'المسيري (El Messiri)', name: 'El Messiri' },
-                    { label: 'عارف رقعة (Aref Ruqaa)', name: 'Aref Ruqaa' },
-                    { label: 'حرمل (Harmattan)', name: 'Harmattan' },
-                    { label: 'لاليزار (Lalezar)', name: 'Lalezar' },
-                  ].map(gFont => (
-                    <button
-                      key={gFont.name}
-                      type="button"
-                      onClick={() => {
-                        setCustomFontInput(gFont.name);
-                        applyNamedGoogleFont(gFont.name);
-                      }}
-                      className="px-2.5 py-1 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-lg text-[11px] font-bold text-slate-700 hover:text-indigo-700 transition-colors cursor-pointer"
-                    >
-                      + {gFont.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Live Font Preview Box */}
-              <div 
-                className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-1 transition-all"
-                style={{ fontFamily: tempTheme.fontFamily || "'Cairo', sans-serif" }}
-              >
-                <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">معاينة حية للنص العربي بالخط الحالي:</span>
-                <p className="text-base font-black text-slate-900">
-                  د. مريم علي — عيادة طب وجراحة الأسنان والتجميل
-                </p>
-                <p className="text-xs text-slate-700 font-medium leading-relaxed">
-                  نظام إدارة العيادة: السجل الطبي للمرضى، كشوفات المواعيد الحية، حسابات التركيبات، والتقارير المالية 🦷
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-              <button
-                type="submit"
-                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-colors"
-              >
-                حفظ الهوية والألوان
-              </button>
-            </div>
-          </form>
-        )}
-
-        {/* 2. Layout & Order SubTab */}
-        {activeSubTab === 'layout' && (
-          <form onSubmit={handleSaveLayout} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 font-tajawal">
-                  تخصيص ترتيب ومسميات وأوصاف أقسام العيادة الرئيسية (▲▼)
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  يمكنك تغيير اسم ونصوص أي قسم بالكامل، بالإضافة إلى إعادة ترتيب ظهور الأقسام في الصفحة الرئيسية والنافبار.
-                </p>
-              </div>
-
-              <button
-                type="submit"
-                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-colors shrink-0"
-              >
-                حفظ المسميات والترتيب
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <label className="space-y-2 text-right">
-                <span className="text-xs font-bold text-slate-700">عنوان الترحيب في لوحة التحكم</span>
-                <input
-                  type="text"
-                  value={tempLabels.welcomeText}
-                  onChange={(event) => setTempLabels({ ...tempLabels, welcomeText: event.target.value })}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  placeholder="مرحباً بك في عيادتك"
-                />
-              </label>
-              <label className="space-y-2 text-right">
-                <span className="text-xs font-bold text-slate-700">الوصف المختصر للصفحة الرئيسية</span>
-                <input
-                  type="text"
-                  value={tempLabels.homeSubtitle}
-                  onChange={(event) => setTempLabels({ ...tempLabels, homeSubtitle: event.target.value })}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  placeholder="إدارة يوم العمل من مكان واحد"
-                />
-              </label>
-            </div>
-
-            <div className="space-y-4">
-              {tempTileOrder.map((tileKey, idx) => (
-                <div key={tileKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-                  <div className="flex items-center justify-between text-xs border-b border-slate-200/60 pb-2">
-                    <span className="font-extrabold text-indigo-900 font-mono text-sm">
-                      الترتيب #{idx + 1} — (رمز القسم: {tileKey})
-                    </span>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => handleMoveTile(idx, 'up')}
-                        disabled={idx === 0}
-                        className="px-3 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 cursor-pointer text-slate-700 font-bold text-xs"
-                      >
-                        ▲ للأعلى
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleMoveTile(idx, 'down')}
-                        disabled={idx === tempTileOrder.length - 1}
-                        className="px-3 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 cursor-pointer text-slate-700 font-bold text-xs"
-                      >
-                        ▼ للأسفل
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        عنوان القسم (الاسم الظاهر بالواجهة)
-                      </label>
-                      <input
-                        type="text"
-                        value={tempLabels.tiles[tileKey]?.title || ''}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setTempLabels(prev => ({
-                            ...prev,
-                            tiles: {
-                              ...prev.tiles,
-                              [tileKey]: {
-                                title: val,
-                                desc: prev.tiles[tileKey]?.desc || ''
-                              }
-                            }
-                          }));
-                        }}
-                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-600"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        الوصف التوضيحي للقسم
-                      </label>
-                      <input
-                        type="text"
-                        value={tempLabels.tiles[tileKey]?.desc || ''}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setTempLabels(prev => ({
-                            ...prev,
-                            tiles: {
-                              ...prev.tiles,
-                              [tileKey]: {
-                                title: prev.tiles[tileKey]?.title || '',
-                                desc: val
-                              }
-                            }
-                          }));
-                        }}
-                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-700 focus:outline-none focus:border-indigo-600"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-end">
-              <button
-                type="submit"
-                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-colors"
-              >
-                حفظ الترتيب والمسميات
-              </button>
-            </div>
-          </form>
-        )}
-
-        {/* 3. Service Types SubTab */}
-        {activeSubTab === 'services' && (
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <h3 className="text-base font-bold text-slate-900 font-tajawal">
-              إدارة قائمة أنواع الخدمات الطبية
-            </h3>
-
-            <div className="flex items-center gap-3">
-              <input
-                type="text"
-                value={newServiceInput}
-                onChange={e => setNewServiceInput(e.target.value)}
-                placeholder="أكتب اسم الخدمة الطبية الجديدة..."
-                className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:border-indigo-500 focus:outline-none grow"
-              />
-              <button
-                type="button"
-                onClick={handleAddServiceType}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shrink-0"
-              >
-                + إضافة خدمة
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {tempServiceTypes.map(st => (
-                <div key={st} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
-                  <span className="font-bold text-slate-800">{st}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteServiceType(st)}
-                    className="text-rose-600 hover:text-rose-800 p-1 cursor-pointer"
-                  >
-                    🗑
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <div ref={selectedSettingsContent} role="region" aria-label={`إعدادات ${activeSettingsSection.label}`} tabIndex={-1} className="settings-content-panel lg:col-span-9 min-w-0">
+        {/* Keep the editor mounted while switching sections so drafts are not lost. */}
+        <div hidden={activeSubTab !== 'identity'}>
+          <IdentityAppearance
+            clinicName={clinicName}
+            clinicLogo={clinicLogo}
+            theme={theme}
+            onSaveIdentity={onSaveIdentity}
+          />
+        </div>
+        <div hidden={activeSubTab !== 'layout'}>
+          <ContentLayout labels={labels} tileOrder={tileOrder} clinicName={clinicName} onSaveContent={onSaveContent} />
+        </div>
+        <div hidden={activeSubTab !== 'services'}>
+          <ServiceCatalogManagement serviceTypes={serviceTypes} crownPrices={crownPrices} canManagePrices={canManagePrices} onSaveServiceCatalog={onSaveServiceCatalog}
+            labs={labs} canViewLabCosts={canViewLabCosts} canManageLabPrices={canManageLabPrices} onSaveLabPricing={onSaveLabPricing} initialPricingLabId={initialPricingLabId} />
+        </div>
+        <div hidden={activeSubTab !== 'drugs'}>
+          <DrugCatalogManagement drugCatalog={drugCatalog} onSaveDrugCatalog={onSaveDrugCatalog} />
+        </div>
+        <div hidden={activeSubTab !== 'users'}>
+          <UserAccountsManagement users={users} currentUser={currentUser} onSaveUsers={onSaveUsers} />
+        </div>
+        <div key={activeSubTab} className="settings-section-enter">
 
         {/* WhatsApp Integration SubTab */}
-        {activeSubTab === 'whatsapp' && (
-            <section ref={waManagementRef} className="wa-management scroll-mt-4" dir="rtl" aria-labelledby="wa-management-title">
-            <header className="wa-management-header">
-              <div className="wa-section-identity">
-                <span className="wa-section-symbol"><MessageCircle size={23} /></span>
-                <div>
-                  <h2 id="wa-management-title">إدارة واتساب</h2>
-                  <p>رسائل العيادة في مكان واحد، من تجهيز النص إلى مراجعته مع المريض.</p>
-                </div>
-              </div>
-              <span className="wa-mode-badge"><span /> الإرسال الحالي يدوي</span>
-            </header>
-            <nav className="wa-section-navigation" aria-label="أقسام إدارة واتساب">
-              {[
-                { key: 'templates' as const, title: 'الرسائل الجاهزة', icon: FileText },
-                { key: 'campaigns' as const, title: 'الحملات', icon: Megaphone },
-                { key: 'connection' as const, title: 'الربط المستقبلي', icon: Plug },
-              ].map(section => <button key={section.key} type="button" aria-pressed={waSection === section.key} onClick={() => handleSelectWaSection(section.key)} className={waSection === section.key ? 'is-active' : ''}>
-                <section.icon size={18} /><span>{section.title}</span>
-              </button>)}
-            </nav>
-
-            <div hidden={waSection !== 'templates'}>
-              <form onSubmit={handleSaveWhatsappForm} className="wa-panel">
-                <div className="wa-panel-heading">
-                  <div><h3>الرسائل الجاهزة</h3><p>اختر الرسالة، عدّلها، ثم راجع شكلها قبل الحفظ.</p></div>
-                  <button type="submit" className="wa-button wa-button-primary" disabled={!hasWhatsappChanges}><Save size={17} /> حفظ الرسائل</button>
-                </div>
-                <div className="wa-template-select">
-                  <label htmlFor="wa-template-select">الرسالة التي تريد تعديلها</label>
-                  <select id="wa-template-select" value={waTemplateKey} onChange={event => setWaTemplateKey(event.target.value as WhatsAppTemplateKey)}>
-                    {['المواعيد والحساب', 'تعليمات المريض', 'رسائل الحملات'].map(group => <optgroup key={group} label={group}>
-                      {whatsappTemplateCatalog.filter(template => template.group === group).map(template => <option key={template.key} value={template.key}>{template.title}</option>)}
-                    </optgroup>)}
-                  </select>
-                </div>
-                <div className="wa-template-layout">
-                  <aside className="wa-template-list" aria-label="اختيار الرسالة الجاهزة">
-                    {['المواعيد والحساب', 'تعليمات المريض', 'رسائل الحملات'].map(group => <div key={group}>
-                      <h4>{group}</h4>
-                      {whatsappTemplateCatalog.filter(template => template.group === group).map(template => <button key={template.key} type="button" aria-pressed={waTemplateKey === template.key} onClick={() => setWaTemplateKey(template.key)} className={waTemplateKey === template.key ? 'is-active' : ''}>{template.title}<ChevronLeft size={15} /></button>)}
-                    </div>)}
-                  </aside>
-                  <div className="wa-editor-layout">
-                    <div className="wa-template-editor">
-                      <div className="wa-editor-heading"><div><h4>{activeWhatsAppTemplate.title}</h4><p>{activeWhatsAppTemplate.description}</p></div></div>
-                      <label htmlFor="wa-template-text" className="wa-field-label">نص الرسالة</label>
-                      <textarea id="wa-template-text" ref={waEditorRef} rows={9} value={activeWhatsAppText} onChange={event => updateWhatsAppTemplate(event.target.value)} placeholder="اكتب نص الرسالة هنا…" />
-                      <div className="wa-editor-meta"><span>{activeWhatsAppText.length.toLocaleString('ar-EG')} حرف</span><span>{hasWhatsappChanges ? 'تعديلات لم تُحفظ بعد' : 'لا توجد تعديلات غير محفوظة'}</span></div>
-                      <div className="wa-variable-section">
-                        <h5>أضف بيانات المريض تلقائيًا</h5>
-                        <p>اضغط على البيان لإضافته في موضع الكتابة. تُستبدل قيمته عند تجهيز رسالة المريض.</p>
-                        <div className="wa-variable-buttons">{whatsappVariables.map(variable => <button key={variable.key} type="button" onClick={() => insertWhatsAppVariable(variable.key)} title={`إضافة {${variable.key}}`}><span>{variable.title}</span><code dir="ltr">{`{${variable.key}}`}</code></button>)}</div>
-                      </div>
-                      {unknownWhatsappVariables.length > 0 && <p className="wa-inline-notice" role="status">هذه البيانات غير مدعومة وتحتاج تعديلًا: {unknownWhatsappVariables.join('، ')}.</p>}
-                      {activeWhatsAppTemplate.group === 'تعليمات المريض' && <p className="wa-context-note"><Info size={16} /> يراجع الطبيب التعليمات ويكمل تفاصيل الحالة قبل إرسالها للمريض.</p>}
-                    </div>
-                    <aside className="wa-message-preview" aria-label="معاينة الرسالة الجاهزة">
-                      <div className="wa-preview-caption"><span>معاينة الرسالة</span><small>بيانات تجريبية، بدون إرسال</small></div>
-                      <div className="wa-chat-header"><span className="wa-chat-avatar"><MessageCircle size={18} /></span><div><strong>{clinicName}</strong><small>رسالة من العيادة</small></div></div>
-                      <div className="wa-chat-body"><div className="wa-chat-bubble"><p>{whatsappPreview.trim() || 'ستظهر معاينة رسالتك هنا.'}</p><span className="wa-chat-time">٥:٠٠ م</span></div></div>
-                      <p className="wa-preview-footnote">تُراجع الرسالة النهائية من ملف المريض، وتُرسل من داخل واتساب.</p>
-                    </aside>
-                  </div>
-                </div>
-              </form>
-            </div>
-
-            <div hidden={waSection !== 'campaigns'}>
-              <WhatsAppCampaigns patients={patients} settings={waState} clinicName={clinicName} onSave={next => {
-                onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent });
-                setWaState(current => ({ ...current, campaignConsent: next.campaignConsent }));
-              }} />
-            </div>
-
-            <div hidden={waSection !== 'connection'} className="wa-panel wa-connection-panel">
-              <div className="wa-panel-heading"><div><h3>الربط المستقبلي</h3><p>مساحة مستقلة لتفعيل الاتصال الرسمي عندما يصبح جاهزًا.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div>
-              <div className="wa-connection-comparison">
-                <article className="wa-connection-current"><MessageCircle size={25} /><h4>الاستخدام المتاح الآن</h4><p>جهّز النص، اختر المريض، وافتح واتساب لمراجعة الرسالة وإرسالها يدويًا. يمكن إضافة رابط وصورة حسب دعم جهازك للمشاركة.</p><button type="button" className="wa-button wa-button-secondary" onClick={() => handleSelectWaSection('templates')}>إدارة الرسائل الجاهزة <ChevronLeft size={16} /></button></article>
-                <article><Plug size={25} /><h4>بعد إتمام الربط</h4><p>يمكن إتاحة التذكيرات التلقائية وحالة الرسائل والحملات الرسمية بعد ربط الخدمة والتحقق من الاتصال.</p><span className="wa-future-label"><Clock size={15} /> غير متاح في النسخة الحالية</span></article>
-              </div>
-              <p className="wa-context-note"><Info size={17} /> حفظ الرسائل لا يفعّل الإرسال التلقائي. تبقى خيارات الأتمتة غير متاحة حتى يكتمل الربط الآمن والتحقق من الاتصال.</p>
-            </div>
-          </section>
-        )}
-
-        {/* Drug Catalog SubTab */}
-        {activeSubTab === 'drugs' && (
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                  <Pill className="w-5 h-5 text-indigo-600" />
-                  إدارة فهرس أدوية العيادة (Drug Catalog)
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  الأدوية المتاحة للإضافة السريعة في الروشتات الطبية الإلكترونية
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleOpenAddDrug}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer flex items-center gap-1.5"
-              >
-                <Plus className="w-4 h-4" />
-                + إضافة دواء جديد
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {catalogList.map(drug => (
-                <div key={drug.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex items-start justify-between gap-3 text-xs">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-slate-900 text-sm font-mono">{drug.name}</span>
-                      <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-md font-bold">
-                        {drug.category}
-                      </span>
-                    </div>
-                    <p className="text-slate-600 mt-1 font-medium">الجرعة: {drug.defaultDosage}</p>
-                    {drug.defaultDuration && <p className="text-slate-400 text-[11px]">المدة: {drug.defaultDuration}</p>}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteDrug(drug.id)}
-                    className="p-1.5 text-rose-600 hover:bg-rose-100 rounded-lg cursor-pointer"
-                    title="حذف الدواء"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
+        {activeSubTab === "whatsapp" && (
+          <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
+            patients={patients} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
+            onSaveWhatsappSettings={onSaveWhatsappSettings} />
         )}
 
         {/* Firebase Cloud Backup SubTab */}
@@ -1608,117 +781,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ))}
                 </div>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* 4. Users & Permissions SubTab */}
-        {activeSubTab === 'users' && (
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 font-tajawal">
-                  إدارة مستخدمي النظام وصلاحيات الوصول (Roles & Permissions)
-                </h3>
-                <p className="text-xs text-slate-500">
-                  تحديد اسم المستخدم، كلمة السر، والرتبة (طبيب / سكرتارية) مع التحكم الدقيق في صلاحيات كل شاشة
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleOpenAddUser}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer flex items-center gap-1.5 shadow-xs shrink-0"
-              >
-                + إضافة مستخدم جديد
-              </button>
-            </div>
-
-            {/* User Credentials & Permissions List */}
-            <div className="space-y-4">
-              {users.map(u => (
-                <div key={u.id} className="p-5 bg-slate-50 hover:bg-slate-100/70 rounded-2xl border border-slate-200 transition-colors space-y-3 text-xs">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 pb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-800 font-extrabold text-sm flex items-center justify-center font-tajawal">
-                        {u.role === 'doctor' ? '👨‍⚕️' : u.role === 'admin' ? '🛡️' : '👩‍💼'}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-slate-900 text-sm font-tajawal">{u.name}</span>
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-900">
-                            {u.role === 'doctor' ? 'طبيب معالج' : u.role === 'admin' ? 'مدير النظام' : 'استقبال / سكرتارية'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3 text-[11px] text-slate-500 font-mono mt-0.5">
-                          <span>اسم الدخول: <strong className="text-slate-800">@{u.username || 'غير محدد'}</strong></span>
-                          <span>•</span>
-                          <span>كلمة السر: <strong className="text-slate-800">{u.password ? '••••••' : '123'}</strong></span>
-                          {u.email && (
-                            <>
-                              <span>•</span>
-                              <span>البريد: {u.email}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditUser(u)}
-                        className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold cursor-pointer transition-colors shadow-2xs"
-                      >
-                        تعديل الحساب والصلاحيات
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteUser(u.id)}
-                        className="p-1.5 text-rose-600 hover:bg-rose-100 rounded-xl cursor-pointer transition-colors"
-                        title="حذف هذا الحساب"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Permissions Summary Badges */}
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-500 block mb-1.5">الصلاحيات الممنوحة لهذا الحساب:</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.patientView ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        👁️ رؤية الملفات
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.patientEdit ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        ✏️ إضافة/تعديل جلسات
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.patientFinance ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        💵 المالية والتحصيل
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.appointments ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        📅 الحجوزات والمواعيد
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.lab ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        🧪 حالات التركيبات
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.labProfit ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        📈 أرباح التركيبات
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.summary ? 'bg-amber-100 text-amber-900' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        📊 التقارير والملخص
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.controlPanel ? 'bg-sky-100 text-sky-900' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        ⚙️ لوحة التحكم
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${u.permissions?.deletePatients ? 'bg-rose-100 text-rose-800' : 'bg-slate-200/80 text-slate-400 line-through'}`}>
-                        🗑️ حذف المرضى
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         )}
@@ -1869,618 +931,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
         </div>
+        </div>
       </div>
 
-      {/* User Modal */}
-      {isUserModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="userModal" className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-slate-900 font-tajawal">
-                {editingUser ? `تعديل حساب والصلاحيات: ${editingUser.name}` : 'إضافة حساب مستخدم جديد'}
-              </h2>
-              <button onClick={() => setIsUserModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                ✕
-              </button>
-            </div>
+      {isSettingsPickerOpen && <SettingsSectionPicker activeSection={activeSubTab} onSelect={handleSelectSubTab} onClose={() => setIsSettingsPickerOpen(false)} />}
 
-            <form onSubmit={handleSaveUserForm} className="space-y-4 text-xs font-tajawal">
-              {/* Preset quick roles */}
-              <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
-                <span className="text-[11px] font-bold text-slate-600 block w-full sm:w-auto">تطبيق نموذج صلاحيات جاهز (Quick Preset):</span>
-                
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserRole('admin');
-                    setUserPermissions({
-                      patientView: true,
-                      patientEdit: true,
-                      deletePatients: true,
-                      patientFinance: true,
-                      appointments: true,
-                      lab: true,
-                      labProfit: true,
-                      summary: true,
-                      controlPanel: true,
-                      registerPayment: true,
-                      viewRemainingBalance: true,
-                      viewTodayCollections: true,
-                      editPayment: true,
-                      deletePayment: true,
-                      viewExpenses: true,
-                      viewProfits: true,
-                      managePrices: true,
-                      financialReports: true
-                    });
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-purple-100 text-purple-900 hover:bg-purple-200 text-[11px] font-extrabold cursor-pointer transition-colors flex items-center gap-1"
-                >
-                  👑 صاحب العيادة / مدير النظام
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserRole('doctor');
-                    setUserPermissions({
-                      patientView: true,
-                      patientEdit: true,
-                      deletePatients: true,
-                      patientFinance: true,
-                      appointments: true,
-                      lab: true,
-                      labProfit: true,
-                      summary: true,
-                      controlPanel: true,
-                      registerPayment: true,
-                      viewRemainingBalance: true,
-                      viewTodayCollections: true,
-                      editPayment: true,
-                      deletePayment: true,
-                      viewExpenses: true,
-                      viewProfits: true,
-                      managePrices: true,
-                      financialReports: true
-                    });
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-indigo-100 text-indigo-900 hover:bg-indigo-200 text-[11px] font-extrabold cursor-pointer transition-colors flex items-center gap-1"
-                >
-                  👨‍⚕️ طبيب معالج (كامل)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserRole('secretary');
-                    setUserPermissions({
-                      patientView: true,
-                      patientEdit: true,
-                      deletePatients: false,
-                      patientFinance: true,
-                      appointments: true,
-                      lab: true,
-                      labProfit: false,
-                      summary: false,
-                      controlPanel: false,
-                      registerPayment: true,
-                      viewRemainingBalance: true,
-                      viewTodayCollections: true,
-                      editPayment: false,
-                      deletePayment: false,
-                      viewExpenses: false,
-                      viewProfits: false,
-                      managePrices: false,
-                      financialReports: false
-                    });
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-900 hover:bg-emerald-200 text-[11px] font-extrabold cursor-pointer transition-colors flex items-center gap-1"
-                >
-                  👩‍💼 سكرتارية (التحصيل فقط)
-                </button>
-              </div>
-
-              {/* Form Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الاسم الكامل <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="input-user-name"
-                    type="text"
-                    required
-                    value={userName}
-                    onChange={e => setUserName(e.target.value)}
-                    placeholder="مثال: د. مريم علي أو سارة أحمد"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    اسم المستخدم للدخول <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="input-user-username"
-                    type="text"
-                    required
-                    value={userUsername}
-                    onChange={e => setUserUsername(e.target.value)}
-                    placeholder="مثال: dr_maryam أو sara_rec"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    كلمة السر <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={userPassword}
-                    onChange={e => setUserPassword(e.target.value)}
-                    placeholder="أدخل كلمة السر..."
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الرتبة الوظيفية
-                  </label>
-                  <select
-                    value={userRole}
-                    onChange={e => {
-                      const r = e.target.value as any;
-                      setUserRole(r);
-                      if (r === 'secretary') {
-                        setUserPermissions(prev => ({
-                          ...prev,
-                          summary: false,
-                          controlPanel: false,
-                          viewExpenses: false,
-                          viewProfits: false,
-                          managePrices: false,
-                          financialReports: false,
-                          editPayment: false,
-                          deletePayment: false,
-                          deletePatients: false
-                        }));
-                      }
-                    }}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="secretary">👩‍💼 سكرتارية / مسؤول استقبال وتحصيل</option>
-                    <option value="doctor">👨‍⚕️ طبيب معالج</option>
-                    <option value="admin">👑 صاحب العيادة / مدير النظام</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Account availability and working hours */}
-              <div className="rounded-2xl border border-sky-200 bg-sky-50/60 p-4 space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <strong className="block text-sm text-slate-900">حالة الحساب وأوقات العمل</strong>
-                    <span className="text-[11px] text-slate-600">التحكم في موعد السماح بتسجيل الدخول لهذا الحساب</span>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <span className="font-bold text-xs">{userIsActive ? 'الحساب مفعل' : 'الحساب موقوف'}</span>
-                    <input
-                      type="checkbox"
-                      checked={userIsActive}
-                      onChange={e => setUserIsActive(e.target.checked)}
-                      className="h-4 w-4 rounded text-emerald-600"
-                    />
-                  </label>
-                </div>
-
-                <label className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white p-3 cursor-pointer">
-                  <span>
-                    <strong className="block text-xs text-slate-900">تقييد الدخول بأيام وساعات العمل</strong>
-                    <small className="text-[11px] text-slate-500">عند إيقافه يمكن للحساب الدخول في أي وقت</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={userScheduleEnabled}
-                    onChange={e => setUserScheduleEnabled(e.target.checked)}
-                    className="h-4 w-4 rounded text-sky-600"
-                  />
-                </label>
-
-                {userScheduleEnabled && (
-                  <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">من الساعة</label>
-                        <input type="time" value={userScheduleStart} onChange={e => setUserScheduleStart(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono" />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">إلى الساعة</label>
-                        <input type="time" value={userScheduleEnd} onChange={e => setUserScheduleEnd(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono" />
-                      </div>
-                    </div>
-                    <div>
-                      <span className="block text-[11px] font-bold text-slate-600 mb-2">أيام بداية الشيفت — بتوقيت القاهرة</span>
-                      <p className="text-xs text-slate-500 mb-2">لو الشيفت من ٨ مساءً إلى ٢ صباحًا، اختر يوم بدايته؛ السماح يمتد لصباح اليوم التالي وينتهي عند موعد النهاية.</p>
-                      <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
-                        {[
-                          [6, 'السبت'], [0, 'الأحد'], [1, 'الاثنين'], [2, 'الثلاثاء'],
-                          [3, 'الأربعاء'], [4, 'الخميس'], [5, 'الجمعة']
-                        ].map(([day, label]) => {
-                          const dayNumber = day as number;
-                          const selected = userScheduleDays.includes(dayNumber);
-                          return (
-                            <button
-                              key={dayNumber}
-                              type="button"
-                              onClick={() => setUserScheduleDays(current => selected ? current.filter(item => item !== dayNumber) : [...current, dayNumber])}
-                              className={`min-h-[42px] rounded-lg border text-[10px] font-black ${selected ? 'border-sky-700 bg-sky-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
-                            >
-                              {label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <p className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-900">
-                  قفل الشبكة بالـIP سيظهر هنا لاحقاً عند تفعيل تسجيل الدخول الآمن عبر الخادم وامتلاك Public Static IP؛ لن يتم تشغيل قفل شكلي يمكن تجاوزه من الهاتف.
-                </p>
-              </div>
-
-              {/* Categorized Granular Permissions Switches */}
-              <div className="pt-3 border-t border-slate-100 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-slate-900 font-tajawal block">
-                    مصفوفة التحكم الصارم في الصلاحيات (RBAC Granular Permissions)
-                  </span>
-                  <span className="text-[10px] text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full font-bold">
-                    مستقل لكل شاشة وخاصية
-                  </span>
-                </div>
-
-                {/* 1. Patients Group */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-950 border-b border-slate-200/60 pb-1.5">
-                    <span>👥</span>
-                    <span>1. قسم ملفات وسجلات المرضى (Patients)</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية المرضى (View Patients)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.patientView}
-                        onChange={e => setUserPermissions({ ...userPermissions, patientView: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">تعديل المرضى والزيارات (Edit)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.patientEdit}
-                        onChange={e => setUserPermissions({ ...userPermissions, patientEdit: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-rose-50/60 rounded-xl border border-rose-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-rose-900 text-[11px]">حذف الملفات (Delete)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.deletePatients}
-                        onChange={e => setUserPermissions({ ...userPermissions, deletePatients: e.target.checked })}
-                        className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* 2. Appointments Group */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950 border-b border-slate-200/60 pb-1.5">
-                    <span>📅</span>
-                    <span>2. قسم المواعيد والحجوزات (Appointments)</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer col-span-2">
-                      <span className="font-bold text-slate-800 text-[11px]">إدارة جدول الحجوزات اليومي وتغيير المواعيد (Manage Appointments)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.appointments}
-                        onChange={e => setUserPermissions({ ...userPermissions, appointments: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* 3. Collections Group (التحصيل) */}
-                <div className="p-3 bg-emerald-50/50 rounded-2xl border border-emerald-200/80 space-y-2">
-                  <div className="flex items-center justify-between border-b border-emerald-200/60 pb-1.5">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-950">
-                      <span>💳</span>
-                      <span>3. قسم التحصيل اليومي والسندات (Collections Desk)</span>
-                    </div>
-                    <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-md">خاص بالاستقبال</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">تسجيل المقبوضات والسندات (Register Payment)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.registerPayment ?? userPermissions.patientFinance}
-                        onChange={e => setUserPermissions({ ...userPermissions, registerPayment: e.target.checked, patientFinance: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية رصيد المريض والديون (View Balance)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.viewRemainingBalance ?? true}
-                        onChange={e => setUserPermissions({ ...userPermissions, viewRemainingBalance: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية إجمالي تحصيل اليوم (Today Collections)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.viewTodayCollections ?? true}
-                        onChange={e => setUserPermissions({ ...userPermissions, viewTodayCollections: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-amber-50/60 rounded-xl border border-amber-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-amber-950 text-[11px]">تعديل الدفعات والأقساط القديمة (Edit Payment)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.editPayment ?? false}
-                        onChange={e => setUserPermissions({ ...userPermissions, editPayment: e.target.checked })}
-                        className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-rose-50/60 rounded-xl border border-rose-200 flex items-center justify-between cursor-pointer col-span-1 sm:col-span-2">
-                      <span className="font-bold text-rose-950 text-[11px]">حذف المعاملات المالية والسندات (Delete Payment)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.deletePayment ?? false}
-                        onChange={e => setUserPermissions({ ...userPermissions, deletePayment: e.target.checked })}
-                        className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* 4. Laboratory Group */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-teal-950 border-b border-slate-200/60 pb-1.5">
-                    <span>🧪</span>
-                    <span>4. قسم التركيبات (Prosthetics)</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">إدارة طلبات المعمل والتركيبات (Manage Lab)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.lab}
-                        onChange={e => setUserPermissions({ ...userPermissions, lab: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية أسعار وتكاليف المعمل (View Lab Costs)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.labProfit}
-                        onChange={e => setUserPermissions({ ...userPermissions, labProfit: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* 5. Full Finance & Reports Group (Restricted from Secretary!) */}
-                <div className="p-3 bg-indigo-50/50 rounded-2xl border border-indigo-200/80 space-y-2">
-                  <div className="flex items-center justify-between border-b border-indigo-200/60 pb-1.5">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-950">
-                      <span>📊</span>
-                      <span>5. لوحة المالية والأرباح الشاملة (Finance & Analytics)</span>
-                    </div>
-                    <span className="text-[10px] text-rose-800 font-bold bg-rose-100 px-2 py-0.5 rounded-md">محظور عن السكرتارية</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية الشاشة المالية بالكامل (View Finance Dashboard)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.summary}
-                        onChange={e => setUserPermissions({ ...userPermissions, summary: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية وإضافة المصروفات (View Expenses)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.viewExpenses ?? userPermissions.summary}
-                        onChange={e => setUserPermissions({ ...userPermissions, viewExpenses: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">رؤية صافي الأرباح والتحليلات (View Net Profit)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.viewProfits ?? userPermissions.summary}
-                        onChange={e => setUserPermissions({ ...userPermissions, viewProfits: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">إدارة قائمة أسعار الخدمات (Manage Prices)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.managePrices ?? userPermissions.controlPanel}
-                        onChange={e => setUserPermissions({ ...userPermissions, managePrices: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* 6. Settings & Reports Group */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 border-b border-slate-200/60 pb-1.5">
-                    <span>⚙️</span>
-                    <span>6. التقارير وإعدادات النظام (Settings & Reports)</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">تصدير التقارير المالية والإكسيل (Export Reports)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.financialReports ?? userPermissions.summary}
-                        onChange={e => setUserPermissions({ ...userPermissions, financialReports: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-
-                    <label className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer">
-                      <span className="font-bold text-slate-800 text-[11px]">دخول لوحة التحكم وإدارة المستخدمين (Control Panel)</span>
-                      <input
-                        type="checkbox"
-                        checked={userPermissions.controlPanel}
-                        onChange={e => setUserPermissions({ ...userPermissions, controlPanel: e.target.checked })}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsUserModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer"
-                >
-                  حفظ الحساب والصلاحيات
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Drug Modal */}
-      {isDrugModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-slate-900 font-tajawal">
-                {editingDrug ? 'تعديل الدواء' : 'إضافة دواء جديد للفهرس'}
-              </h2>
-              <button onClick={() => setIsDrugModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveDrugForm} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  اسم الدواء والتركيز <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={drugName}
-                  onChange={e => setDrugName(e.target.value)}
-                  placeholder="مثال: Augmentin 1g"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  التصنيف الطبي
-                </label>
-                <input
-                  type="text"
-                  value={drugCategory}
-                  onChange={e => setDrugCategory(e.target.value)}
-                  placeholder="مثال: مضاد حيوي / مسكن آلام"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  الجرعة الافتراضية (Dosage)
-                </label>
-                <input
-                  type="text"
-                  value={drugDosage}
-                  onChange={e => setDrugDosage(e.target.value)}
-                  placeholder="مثال: قرص كل 12 ساعة بعد الأكل"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  مدة العلاج الافتراضية (Duration)
-                </label>
-                <input
-                  type="text"
-                  value={drugDuration}
-                  onChange={e => setDrugDuration(e.target.value)}
-                  placeholder="مثال: لمدة 5-7 أيام"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsDrugModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer"
-                >
-                  حفظ الدواء
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

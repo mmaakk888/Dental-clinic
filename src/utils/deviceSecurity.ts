@@ -136,3 +136,4 @@ export const DeviceSecurity = {
     return newDevice;
   },
 };
+
