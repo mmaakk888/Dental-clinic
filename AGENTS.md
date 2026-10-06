@@ -1,13 +1,16 @@
 # Dental Clinic Management System (نظام إدارة العيادة والأسنان)
 
 ## Project Overview & Features
-This application is a full-featured Dental Clinic Management System built with React, Vite, and Tailwind CSS.
+This application is a local Dental Clinic Management System built with React, Vite, and Tailwind CSS. Read `SECURITY-FIXES.md` and `IMPLEMENTATION-STATUS.md` before security, deployment, or data work. Do not use real patient/account records as test fixtures.
 
 ### Key Capabilities & Recent Updates:
 1. **Mandatory Auth Gatekeeper & Security**:
-   - The login screen (`LoginModal`) acts as an immediate guard on load. Anyone opening the app URL without a session cannot view clinic data or patient details.
+   - The login screen (`LoginModal`) is a local UI gate, **not authoritative authentication**. A person controlling the browser/profile can read or modify local data and unsigned sessions. The application refuses non-loopback hostnames until real authentication and a protected data layer are implemented.
    - Includes a **Remember Me ("تذكرني")** feature to automatically log in valid users on trusted devices.
    - **Auto Session Invalidation**: If a user's password, username, or account is modified or deleted by an admin, any active auto-login session for that account is automatically invalidated and logged out.
+   - Passwords use PBKDF2-SHA256 with randomized salts. Legacy local credentials are migrated only through explicit account saves or successful login; do not change the owner's browser data for QA. Local work-hours checks are not server enforcement or IP restriction.
+   - Domain mutations use a same-origin Web Lock, fresh persisted reads, and confirmed writes with rollback attempts. This is not an atomic database transaction or multi-device synchronization. Forms must await saves before showing success or clearing drafts.
+   - AI endpoints are disabled by default and require verified Firebase Auth tokens plus explicit server allowlists. Build server code into `build/`, never the public `dist/`. Do not deploy, configure cloud rules, or enable paid providers without the user's scoped request.
 
 2. **Adaptive Responsive Layout & TV Mode (60-inch Screens)**:
    - Built to adapt dynamically across Mobile, Tablet, Desktop, and Ultra-wide displays.
@@ -25,4 +28,3 @@ This application is a full-featured Dental Clinic Management System built with R
 
 6. **Touch-First Modal Controls (زر إلغاء وإغلاق لمس لجميع النوافذ)**:
    - All modals, search overlays, popups, and lightboxes feature clear, dedicated "إلغاء وإغلاق" touch buttons, enabling effortless operation on mobile phones, tablets, and 60-inch touchscreens without requiring a physical keyboard or Esc key.
-

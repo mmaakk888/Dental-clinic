@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { ArrowRight, Banknote, TrendingUp, Plus, Trash2, Receipt, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2, Users, Zap, Droplets, Package } from 'lucide-react';
 import { Patient, LabCase, Expense, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
 import { BalanceProgressMeter } from '../common/FinancialBadge';
 import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
@@ -29,11 +30,11 @@ interface SummaryViewProps {
   capabilities?: { viewExpenses?: boolean; viewProfits?: boolean; financialReports?: boolean };
   isOpenAddExpenseModal?: boolean;
   onCloseAddExpenseModal?: () => void;
-  onAddExpense: (expense: Omit<Expense, 'id'>) => void;
-  onSaveExpense?: (expense: Omit<Expense, 'id'> & { id?: string }) => void;
-  onDeleteExpense: (id: string) => void;
-  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void;
-  onDeleteMaterialUsage: (id: string) => void;
+  onAddExpense: (expense: Omit<Expense, 'id'>) => void | Promise<void>;
+  onSaveExpense?: (expense: Omit<Expense, 'id'> & { id?: string }) => void | Promise<void>;
+  onDeleteExpense: (id: string) => void | Promise<void>;
+  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void | Promise<void>;
+  onDeleteMaterialUsage: (id: string) => void | Promise<void>;
   onBackToHome: () => void;
 }
 
@@ -59,6 +60,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   onBackToHome
 }) => {
   const { showToast, askConfirm } = useToastAndConfirm();
+  const { saving, run: confirmSave } = useConfirmedAction();
   const canViewExpenses = capabilities?.viewExpenses !== false;
   const canViewProfits = capabilities?.viewProfits !== false;
   const canViewReports = capabilities?.financialReports !== false;
@@ -181,6 +183,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
   // Close Expense Modal Handler
   const handleCloseExpenseModal = () => {
+    if (saving) return;
     setIsExpenseModalOpen(false);
     if (onCloseAddExpenseModal) {
       onCloseAddExpenseModal();
@@ -313,9 +316,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     setIsExpenseModalOpen(true);
   };
 
-  const handleSaveExpenseForm = (e: React.FormEvent) => {
+  const handleSaveExpenseForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canViewExpenses) return;
+    if (!canViewExpenses || saving) return;
     if (!expenseTitle.trim()) {
       showToast('يرجى كتابة بيان / عنوان المصروف', 'warning');
       return;
@@ -355,14 +358,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       ? mergeExpenseUpdate(editingExpense, { ...payload, ...(editingExpense.invoiceDate ? { invoiceDate: expenseDate } : {}) })
       : payload;
 
-    if (onSaveExpense) {
-      onSaveExpense(savedPayload);
-    } else {
-      onAddExpense(savedPayload);
-    }
-
-    handleCloseExpenseModal();
-    showToast(editingExpense ? 'تم تعديل بيانات المصروف بنجاح' : 'تم تسجيل المصروف وإرفاق الفاتورة بنجاح', 'success');
+    await confirmSave(() => onSaveExpense ? onSaveExpense(savedPayload) : onAddExpense(savedPayload), () => {
+      handleCloseExpenseModal();
+      showToast(editingExpense ? 'تم تعديل بيانات المصروف بنجاح' : 'تم تسجيل المصروف وإرفاق الفاتورة بنجاح', 'success');
+    });
   };
 
   const handleDeleteExpenseConfirmed = (exp: Expense) => {
@@ -372,9 +371,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       message: `هل أنت متأكد من حذف المصروف (${exp.title}) بقيمة ${exp.amount} ج.م؟`,
       confirmLabel: 'تأكيد الحذف',
       tone: 'danger',
-      onConfirm: () => {
-        onDeleteExpense(exp.id);
-        showToast('تم حذف المصروف بنجاح', 'info');
+      onConfirm: async () => {
+        await confirmSave(() => onDeleteExpense(exp.id), () => showToast('تم حذف المصروف بنجاح', 'info'));
       }
     });
   };
@@ -779,7 +777,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </button>
             </div>
 
-            <form onSubmit={handleSaveExpenseForm} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveExpenseForm} aria-busy={saving} className="space-y-4 text-xs">
+              <fieldset disabled={saving} className="contents">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   البيان / عنوان المصروف <span className="text-rose-500">*</span>
@@ -954,6 +953,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   {editingExpense ? 'حفظ التعديلات' : 'حفظ المصروف'}
                 </button>
               </div>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -1023,12 +1023,12 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
         isOpen={isOcrModalOpen}
         onClose={() => setIsOcrModalOpen(false)}
         existingExpenses={expenses}
-        onSaveExpense={(newExp) => {
-          if (!canViewExpenses) return;
+        onSaveExpense={async (newExp) => {
+          if (!canViewExpenses) throw new Error('هذا الحساب لا يملك صلاحية تسجيل المصروفات.');
           if (onSaveExpense) {
-            onSaveExpense(newExp);
+            await onSaveExpense(newExp);
           } else {
-            onAddExpense(newExp);
+            await onAddExpense(newExp);
           }
           showToast('تم تسجيل الفاتورة وبنودها بنجاح 🧾', 'success');
         }}

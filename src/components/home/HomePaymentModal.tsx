@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { Banknote, Search, X } from 'lucide-react';
 import { Patient } from '../../types';
 import { getPatientFinancialSummary } from '../../utils/financials';
@@ -11,7 +11,7 @@ interface Props {
   patients: Patient[];
   showRemaining: boolean;
   onClose: () => void;
-  onSave: (patientId: string, sessionId: string, installment: { amount: number; date: string }) => void;
+  onSave: (patientId: string, sessionId: string, installment: { amount: number; date: string }) => void | Promise<void>;
   onOpenPatient: (patientId: string) => void;
 }
 
@@ -19,12 +19,14 @@ const money = (value: number) => new Intl.NumberFormat('ar-EG', { maximumFractio
 
 export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onOpenPatient }: Props) {
   const { showToast } = useToastAndConfirm();
-  const dialogRef = useAppointmentDialog(true, onClose);
   const [query, setQuery] = useState('');
   const [patientId, setPatientId] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const closeDialog = () => { if (!savingRef.current) onClose(); };
+  const dialogRef = useAppointmentDialog(true, closeDialog);
   const patient = patients.find(item => item.id === patientId);
   const sessions = patient?.sessions.filter(item => remainingFor(item) > 0) || [];
   const results = useMemo(() => {
@@ -32,9 +34,9 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
     return patients.filter(item => !text || [item.id, item.name, item.mobile || ''].some(value => normalize(value).includes(text))).slice(0, 20);
   }, [patients, query]);
 
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (saving) return;
+    if (savingRef.current) return;
     const session = patient?.sessions.find(item => item.id === sessionId);
     const value = Number(amount);
     const validation = validateHomePayment(patient, sessionId, value);
@@ -44,15 +46,14 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
       showToast(showRemaining ? `المبلغ أكبر من المستحق (${money(validation.maximum)}).` : 'المبلغ أكبر من المستحق. راجع الطبيب قبل تسجيله.', 'warning');
       return;
     }
-    setSaving(true);
+    savingRef.current = true; setSaving(true);
     try {
-      onSave(patient.id, session.id, { amount: value, date: localDateISO() });
+      await onSave(patient.id, session.id, { amount: value, date: localDateISO() });
       showToast('تم تسجيل الدفعة ضمن تحصيل اليوم.', 'success');
       onClose();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'تعذّر حفظ الدفعة.', 'error');
-      setSaving(false);
-    }
+    } finally { savingRef.current = false; setSaving(false); }
   };
 
   return <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6" dir="rtl">
@@ -61,9 +62,9 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
       <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Banknote aria-hidden="true" /></span>
           <div><h2 id="home-payment-title" className="text-xl font-extrabold text-slate-950">تسجيل دفعة</h2><p className="text-sm text-slate-500">اختَر المريض والخدمة، ثم سجل المبلغ المحصّل.</p></div></div>
-        <button type="button" aria-label="إغلاق تسجيل الدفعة" onClick={onClose} className="grid min-h-[44px] min-w-[44px] place-items-center rounded-xl bg-slate-100 text-slate-600"><X aria-hidden="true" /></button>
+        <button type="button" aria-label="إغلاق تسجيل الدفعة" disabled={saving} onClick={closeDialog} className="grid min-h-[44px] min-w-[44px] place-items-center rounded-xl bg-slate-100 text-slate-600"><X aria-hidden="true" /></button>
       </div>
-      <form onSubmit={submit} className="space-y-5">
+      <form onSubmit={submit} className="space-y-5"><fieldset disabled={saving} className="contents">
         <div className="space-y-2">
           <label htmlFor="home-payment-search" className="block font-bold text-slate-800">١. المريض</label>
           {patient ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex flex-wrap items-center justify-between gap-3">
@@ -98,10 +99,10 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
           <p className="text-sm text-slate-500">تحصيل نقدي بتاريخ {localDateISO()}، ويُضاف مرة واحدة إلى حساب المريض وتحصيل اليوم.</p>
         </div>
         <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 pt-4">
-          <button type="button" onClick={onClose} className="min-h-[48px] rounded-xl bg-slate-100 px-5 font-bold text-slate-600">إلغاء</button>
+          <button type="button" onClick={closeDialog} className="min-h-[48px] rounded-xl bg-slate-100 px-5 font-bold text-slate-600">إلغاء</button>
           <button type="submit" disabled={!patient || !sessionId || saving} className="min-h-[48px] rounded-xl bg-emerald-700 px-5 font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed">{saving ? 'جارٍ التسجيل…' : 'حفظ الدفعة'}</button>
         </div>
-      </form>
+      </fieldset></form>
     </section>
   </div>;
 }

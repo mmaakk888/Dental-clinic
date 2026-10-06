@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { Appointment, Patient, NavigationOrigin, AppointmentStatus } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
 import { EmptyState } from '../common/EmptyState';
 import { logAuditAction } from '../../services/auditLogger';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from './AppointmentStatusModal';
@@ -17,8 +18,8 @@ interface AppointmentsViewProps {
   appointments: Appointment[];
   patients: Patient[];
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
-  onSaveAppointment: (appt: Omit<Appointment, 'id'> & { id?: string }) => void;
-  onUpdateApptStatus: (apptId: string, status: AppointmentStatus) => void;
+  onSaveAppointment: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
+  onUpdateApptStatus: (apptId: string, status: AppointmentStatus) => void | Promise<void>;
   onBackToHome: () => void;
 }
 
@@ -71,6 +72,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   onBackToHome
 }) => {
   const { showToast, validationFail, askConfirm } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
 
   const todayISO = localDateISO();
   const [selectedDate, setSelectedDate] = useState<string>(todayISO);
@@ -82,18 +84,19 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   // Status Modal State
   const [statusModalAppt, setStatusModalAppt] = useState<Appointment | null>(null);
 
-  const handleSelectStatus = (newStatus: AppointmentStatus) => {
+  const handleSelectStatus = async (newStatus: AppointmentStatus) => {
     if (!statusModalAppt) return;
-    onUpdateApptStatus(statusModalAppt.id, newStatus);
+    await run(async () => { await onUpdateApptStatus(statusModalAppt.id, newStatus);
     
     const cfg = APPOINTMENT_STATUS_CONFIGS[newStatus];
     showToast(`تم تحديث حالة الموعد إلى (${cfg ? cfg.label : newStatus}) بنجاح`, 'success');
     setStatusModalAppt(null);
+    });
   };
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const bookingDialogRef = useAppointmentDialog(isModalOpen, () => setIsModalOpen(false));
+  const bookingDialogRef = useAppointmentDialog(isModalOpen, () => { if (!saving) setIsModalOpen(false); });
 
   // Form State
   const [patientSearch, setPatientSearch] = useState('');
@@ -211,8 +214,8 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
         message: `يوجد موعد آخر يتداخل مع هذا الوقت (${format12Hour(time24)}). هل ترغب في تأكيد الحجز رغم التعارض؟`,
         confirmLabel: 'تأكيد الموعد المزدوج',
         tone: 'warning',
-        onConfirm: () => {
-          saveApptFinal(info, time24);
+        onConfirm: async () => {
+          await saveApptFinal(info, time24);
         }
       });
       return;
@@ -221,11 +224,11 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
     saveApptFinal(info, time24);
   };
 
-  const saveApptFinal = (
+  const saveApptFinal = async (
     info: { patientId: string; fileNo: string; patientName: string; mobile: string },
     time24: string
   ) => {
-    onSaveAppointment({
+    await run(async () => { await onSaveAppointment({
       patientId: info.patientId,
       fileNo: info.fileNo,
       patientName: info.patientName,
@@ -250,6 +253,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
 
     showToast('تم حجز الموعد بنجاح في جدول المواعيد');
     setIsModalOpen(false);
+    });
   };
 
   const filteredPatientsDropdown = useMemo(() => {
@@ -747,14 +751,14 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
               </h3>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer min-h-[44px] touch-manipulation"
               >
                 إلغاء وإغلاق
               </button>
             </div>
 
-            <form onSubmit={handleSaveAppointment} className="space-y-4">
+            <form onSubmit={handleSaveAppointment} className="space-y-4"><fieldset disabled={saving} className="contents">
               {/* Select Patient Dropdown / Search */}
               <div className="space-y-1.5">
                 <label htmlFor="input-patient-search" className="text-xs font-bold text-slate-700 block">المريض المسجل</label>
@@ -871,13 +875,13 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
                   className="px-5 py-3.5 min-h-[48px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-700 font-bold text-sm cursor-pointer transition-all touch-manipulation"
                 >
                   إلغاء وإغلاق
                 </button>
               </div>
-            </form>
+            </fieldset></form>
           </div>
         </div>
       )}

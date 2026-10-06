@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { Patient, NavigationOrigin, Appointment, LabCase, User } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
+import { canPerformAction } from '../../utils/rbac';
 import { EmptyState } from '../common/EmptyState';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
@@ -39,9 +41,9 @@ interface PatientsViewProps {
   isPrivacyMode?: boolean;
   currentUser?: User | null;
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
-  onSavePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>) => void;
-  onDeletePatient: (patientId: string) => void;
-  onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }) => void;
+  onSavePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string) => void | Promise<void>;
+  onDeletePatient: (patientId: string) => void | Promise<void>;
+  onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
   onBackToHome: () => void;
 }
 
@@ -82,7 +84,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   onSaveAppointment
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
-  const canViewRemainingBalance = !currentUser || Boolean(currentUser.permissions.viewRemainingBalance ?? currentUser.permissions.patientFinance);
+  const { saving, run } = useConfirmedAction();
+  const canViewRemainingBalance = canPerformAction(currentUser ?? null, 'view_remaining_balance');
   
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -209,7 +212,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
     const todayStr = clinicToday();
 
-    onSavePatient({
+    void run(async () => { await onSavePatient({
       id: savedFileNo,
       name: name.trim(),
       mobile: savedMobile,
@@ -218,11 +221,12 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       firstVisit: editingPatient ? editingPatient.firstVisit : todayStr,
       allergy: allergy.trim(),
       notes: notes.trim()
-    });
+    }, editingPatient?.id);
 
     setIsModalOpen(false);
     showToast(editingPatient ? 'تم تحديث بيانات الحالة بنجاح' : 'تم حفظ الحالة والدخول للملف مباشرة', 'success');
     onSelectPatient(savedFileNo, 'patients');
+    });
   };
 
   const handleDelete = (p: Patient, e?: React.MouseEvent) => {
@@ -233,8 +237,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       message: `هل أنت متأكد من حذف ملف المريض (${p.name}) رقم (${p.id}) بكل جلساته ومدفوعاته؟ لن يتم إعادة ترقيم باقي الملفات.`,
       confirmLabel: 'حذف الملف',
       tone: 'danger',
-      onConfirm: () => {
-        try { onDeletePatient(p.id); } catch (error) {
+      onConfirm: async () => {
+        try { await onDeletePatient(p.id); } catch (error) {
           showToast(error instanceof Error ? error.message : 'تعذر حذف الملف.', 'warning');
           return;
         }
@@ -281,11 +285,12 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
       isWalkIn: false
     };
 
-    const saveAppointment = () => {
+    const saveAppointment = async () => {
       try {
-        onSaveAppointment(appointment);
+        await run(async () => { await onSaveAppointment(appointment);
         showToast(`تم حجز موعد للمريض (${quickApptPatient.name}) بتاريخ ${quickApptDate}`, 'success');
         setQuickApptPatient(null);
+        });
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'تعذّر حفظ الموعد. راجع البيانات وحاول مرة أخرى.', 'error');
       }
@@ -379,9 +384,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   }, [patients, deferredSearchQuery, activeFilter, patientMetrics, canViewRemainingBalance, sortOrder]);
 
   const isDoctor = currentUser?.role === 'doctor' || !currentUser?.role;
-  const canEditPatient = !currentUser || currentUser.permissions.patientEdit === true;
-  const canBookAppointment = Boolean(onSaveAppointment) && (!currentUser || currentUser.permissions.appointments === true);
-  const canDeletePatient = currentUser ? currentUser.permissions?.deletePatients === true : isDoctor;
+  const canEditPatient = canPerformAction(currentUser ?? null, 'edit_patient');
+  const canBookAppointment = Boolean(onSaveAppointment) && canPerformAction(currentUser ?? null, 'manage_appointments');
+  const canDeletePatient = canPerformAction(currentUser ?? null, 'delete_patient');
   const openQuickAppointment = (patient: Patient) => {
     setActiveBottomSheetPatient(null);
     setQuickApptDate(clinicToday());
@@ -675,7 +680,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </div>
               <button
                 type="button"
-                onClick={() => setQuickApptPatient(null)}
+                disabled={saving} onClick={() => { if (!saving) setQuickApptPatient(null); }}
                 aria-label="إغلاق حجز الموعد"
                 className="w-11 h-11 shrink-0 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
               >
@@ -683,7 +688,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </button>
             </div>
 
-            <form onSubmit={handleSaveQuickAppt} className="space-y-3">
+            <form onSubmit={handleSaveQuickAppt} className="space-y-3"><fieldset disabled={saving} className="contents">
               <div>
                 <label htmlFor="patient-quick-appointment-date" className="block text-sm font-bold text-slate-700 mb-1">تاريخ الموعد</label>
                 <input
@@ -724,7 +729,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setQuickApptPatient(null)}
+                  disabled={saving} onClick={() => { if (!saving) setQuickApptPatient(null); }}
                   className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer min-h-[44px]"
                 >
                   إلغاء
@@ -736,7 +741,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   تأكيد الحجز
                 </button>
               </div>
-            </form>
+            </fieldset></form>
           </div>
         </div>
       )}
@@ -754,14 +759,14 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </h2>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer min-h-[44px]"
               >
                 إلغاء وإغلاق
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="space-y-3.5">
+            <form onSubmit={handleSave} className="space-y-3.5"><fieldset disabled={saving} className="contents">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -868,7 +873,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
                   className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer min-h-[44px]"
                 >
                   إلغاء
@@ -880,7 +885,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   {editingPatient ? 'حفظ التعديلات' : 'إنشاء الملف'}
                 </button>
               </div>
-            </form>
+            </fieldset></form>
           </div>
         </div>
       )}

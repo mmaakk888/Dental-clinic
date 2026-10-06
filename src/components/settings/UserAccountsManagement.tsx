@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ChevronLeft, Clock3, Pencil, Plus, Search, ShieldCheck, Trash2, UserRound, X } from 'lucide-react';
 import type { User } from '../../types';
 import { canPerformAction } from '../../utils/rbac';
+import { secureUserAccountsForStorage } from '../../utils/passwords';
 import {
   ACCOUNT_PERMISSION_GROUPS, ACCOUNT_WEEKDAYS, accountDraftHasChanges, accountPermissionEnabled,
   accountScheduleLabel, createUserAccountDraft, guardAccountRemoval, userAccountsSnapshot,
@@ -14,7 +15,7 @@ import './userAccountsManagement.css';
 export interface UserAccountsManagementProps {
   users: User[];
   currentUser: User | null;
-  onSaveUsers: (users: User[]) => void;
+  onSaveUsers: (users: User[]) => void | Promise<void>;
 }
 
 type EditorTab = 'details' | 'permissions' | 'hours';
@@ -41,6 +42,8 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
   const [tab, setTab] = useState<EditorTab>('details');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
   const latest = useRef({ users, currentUser, onSaveUsers });
   latest.current = { users, currentUser, onSaveUsers };
   const editorRef = useRef(editor);
@@ -50,6 +53,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
   const dirty = !!editor && accountDraftHasChanges(editor.draft, editor.baseline);
 
   const closeEditor = () => {
+    if (savingRef.current) return;
     if (editorRef.current && accountDraftHasChanges(editorRef.current.draft, editorRef.current.baseline)) {
       askConfirm({ title: 'إغلاق دون حفظ؟', message: 'توجد تعديلات في هذا الحساب لم تُحفظ. هل تريد تجاهلها؟', confirmLabel: 'تجاهل وإغلاق', tone: 'warning', onConfirm: () => { setEditor(null); setErrors({}); } });
     } else { setEditor(null); setErrors({}); }
@@ -62,6 +66,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
     setTab('details'); setErrors({}); setNotice('');
   };
   const updateDraft = (values: Partial<UserAccountDraft>) => {
+    if (savingRef.current) return;
     setEditor(value => value ? { ...value, draft: { ...value.draft, ...values } } : null);
     setErrors({});
   };
@@ -77,6 +82,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
   };
   const saveEditor = (event: React.FormEvent) => {
     event.preventDefault();
+    if (savingRef.current) return;
     if (!editor || !checkLatest(editor.snapshot)) return;
     const validation = validateUserAccountDraft(editor.draft, latest.current.users, editor.original, editor.newId);
     if (!validation.valid) {
@@ -98,17 +104,25 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
       title: pending.original ? 'حفظ تعديلات الحساب' : 'إنشاء حساب جديد',
       message: notes.length ? notes.join(' ') : 'ستُحفظ بيانات الحساب وصلاحياته وأوقات العمل الموضحة. هل تريد المتابعة؟',
       confirmLabel: 'تأكيد الحفظ', tone: notes.length ? 'warning' : 'info',
-      onConfirm: () => {
+      onConfirm: async () => {
         // Recheck after confirmation: do not save a stale list or a subsequently changed draft.
         if (editorRef.current !== pending || !checkLatest(pending.snapshot)) return;
         const checked = validateUserAccountDraft(pending.draft, latest.current.users, pending.original, pending.newId);
         if (!checked.valid || !checked.user) { setErrors(checked.errors); return; }
-        const nextUsers = pending.original ? latest.current.users.map(user => user.id === pending.original!.id ? checked.user! : user) : [...latest.current.users, checked.user];
+        if (savingRef.current) return;
+        const baselineUsers = latest.current.users;
+        const nextUsers = pending.original ? baselineUsers.map(user => user.id === pending.original!.id ? checked.user! : user) : [...baselineUsers, checked.user];
+        savingRef.current = true; setIsSaving(true);
         try {
-          latest.current.onSaveUsers(nextUsers);
+          const secured = await secureUserAccountsForStorage(nextUsers, baselineUsers);
+          // Hashing is asynchronous: do not apply a changed/closed draft, a stale
+          // user list, or revoked authority after that wait.
+          if (editorRef.current !== pending || !checkLatest(pending.snapshot)) return;
+          await latest.current.onSaveUsers(secured);
           setEditor(null); setErrors({}); setNotice('');
           showToast('تم حفظ بيانات الحساب وصلاحياته.', 'success');
         } catch (error) { setErrors({ account: modalError(error) }); }
+        finally { savingRef.current = false; setIsSaving(false); }
       },
     });
   };
@@ -117,13 +131,13 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
     const warning = guardAccountRemoval(users, user.id, currentUser?.id);
     if (warning) { setNotice(warning); return; }
     const snapshot = userAccountsSnapshot(users);
-    askConfirm({ title: 'حذف حساب المستخدم', message: `سيُلغى دخول حساب «${user.name}» نهائيًا. إيقاف الحساب من نافذة التعديل يحافظ عليه للمراجعة. هل تريد الحذف؟`, confirmLabel: 'حذف الحساب', tone: 'danger', onConfirm: () => {
+    askConfirm({ title: 'حذف حساب المستخدم', message: `سيُلغى دخول حساب «${user.name}» نهائيًا. إيقاف الحساب من نافذة التعديل يحافظ عليه للمراجعة. هل تريد الحذف؟`, confirmLabel: 'حذف الحساب', tone: 'danger', onConfirm: async () => {
       const value = latest.current;
       if (value.currentUser?.isActive === false || !canPerformAction(value.currentUser, 'manage_users')) { setNotice('لم تعد صلاحية إدارة الحسابات متاحة.'); return; }
       if (snapshot !== userAccountsSnapshot(value.users)) { setNotice('تغيّرت قائمة الحسابات. راجع القائمة الحالية قبل الحذف.'); return; }
       const error = guardAccountRemoval(value.users, user.id, value.currentUser?.id);
       if (error) { setNotice(error); return; }
-      try { value.onSaveUsers(value.users.filter(item => item.id !== user.id)); setNotice(''); showToast('تم حذف حساب المستخدم.', 'success'); }
+      try { await value.onSaveUsers(value.users.filter(item => item.id !== user.id)); setNotice(''); showToast('تم حذف حساب المستخدم.', 'success'); }
       catch (error) { setNotice(modalError(error)); }
     } });
   };
@@ -181,7 +195,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
                 <label className="ua-field"><span>حالة الحساب</span><select value={draft.isActive ? 'active' : 'paused'} onChange={event => updateDraft({ isActive: event.target.value === 'active' })}><option value="active">نشط — يمكنه الدخول</option><option value="paused">موقوف — لا يمكنه الدخول</option></select></label>
                 <label className="ua-field"><span>الهاتف <small>اختياري</small></span><input type="tel" value={draft.phone} onChange={event => updateDraft({ phone: event.target.value })} maxLength={40} autoComplete="tel" dir="auto" aria-invalid={!!errors.phone} /></label>
                 <label className="ua-field"><span>البريد الإلكتروني <small>اختياري</small></span><input type="email" value={draft.email} onChange={event => updateDraft({ email: event.target.value })} maxLength={254} autoComplete="email" dir="auto" aria-invalid={!!errors.email} /></label>
-                <label className="ua-field ua-field-wide"><span>{editor.original ? 'كلمة سر جديدة' : 'كلمة السر'} <small>{editor.original ? 'اختياري' : 'مطلوب'}</small></span><input type="password" value={draft.newPassword} onChange={event => updateDraft({ newPassword: event.target.value })} maxLength={128} autoComplete="new-password" aria-invalid={!!errors.newPassword} aria-describedby="ua-password-help" /><small id="ua-password-help">{editor.original ? 'اتركها فارغة للاحتفاظ بكلمة السر الحالية. لن نعرض كلمة السر المحفوظة.' : 'اكتب كلمة سر خاصة بالحساب؛ لا توجد كلمة سر افتراضية.'}</small></label>
+                <label className="ua-field ua-field-wide"><span>{editor.original ? 'كلمة سر جديدة' : 'كلمة السر'} <small>{editor.original?.password ? 'اختياري' : 'مطلوب'}</small></span><input type="password" value={draft.newPassword} onChange={event => updateDraft({ newPassword: event.target.value })} maxLength={128} autoComplete="new-password" aria-invalid={!!errors.newPassword} aria-describedby="ua-password-help" disabled={isSaving} /><small id="ua-password-help">{editor.original?.password ? 'اتركها فارغة للاحتفاظ بكلمة السر الحالية. أي كلمة سر جديدة تكون 12–128 حرفًا. لن نعرض القيمة المحفوظة.' : 'اكتب كلمة سر من 12–128 حرفًا؛ لا يُسمح بالدخول دون كلمة سر.'}</small></label>
               </div>
               <div className="ua-info"><ShieldCheck size={17} aria-hidden="true" /><p>{unrestricted ? 'الطبيب والمدير لهما وصول كامل في النظام الحالي، بغض النظر عن مفاتيح الصلاحيات. تغيير نوع الحساب لا يغيّر الصلاحيات المحفوظة تلقائيًا.' : 'السكرتارية تعمل حسب الصلاحيات في القسم التالي. تغيير نوع الحساب لا ينسخ صلاحيات جاهزة؛ راجعها قبل الحفظ.'}</p></div>
               <button type="button" className="ua-text-button" onClick={() => setTab('permissions')}>مراجعة الصلاحيات<ChevronLeft size={15} aria-hidden="true" /></button>
@@ -203,7 +217,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
               <div className="ua-info"><Clock3 size={17} aria-hidden="true" /><p>«تذكرني» لا يلغي قيود أوقات العمل. هذا الإعداد يحدد الوقت فقط، ولا يقيّد شبكة الإنترنت أو مكان استخدام الهاتف.</p></div>
             </div>}
           </div>
-          <footer className="ua-dialog-footer"><span>{dirty ? 'تعديلات غير محفوظة' : editor.original ? 'لا توجد تعديلات' : 'راجع الحساب قبل الإنشاء'}</span><div><button type="button" className="ua-button ua-button-soft" onClick={closeEditor}>إلغاء وإغلاق</button><button type="submit" className="ua-button ua-button-primary" disabled={!authorized || stale || (!!editor.original && !dirty)}>{editor.original ? 'حفظ التعديلات' : 'إنشاء الحساب'}</button></div></footer>
+          <footer className="ua-dialog-footer"><span>{isSaving ? 'جارٍ تأمين بيانات الدخول وحفظ الحساب…' : dirty ? 'تعديلات غير محفوظة' : editor.original ? 'لا توجد تعديلات' : 'راجع الحساب قبل الإنشاء'}</span><div><button type="button" className="ua-button ua-button-soft" onClick={closeEditor} disabled={isSaving}>إلغاء وإغلاق</button><button type="submit" className="ua-button ua-button-primary" disabled={isSaving || !authorized || stale || (!!editor.original && !dirty)}>{isSaving ? 'جارٍ الحفظ…' : editor.original ? 'حفظ التعديلات' : 'إنشاء الحساب'}</button></div></footer>
         </form>
       </div>
     </div>}

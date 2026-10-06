@@ -84,32 +84,35 @@ test('new password required, length bounds checked and new account version start
   assert.equal(result.user!.username, 'newdesk');
   assert.equal(result.user!.credentialVersion, 1);
   assert.equal(result.user!.accessSchedule, undefined);
-  assert.equal(result.user!.password, 'test-only-credential');
+  assert.equal(result.user!.password, ' test-only-credential ');
 });
 
 test('blank or identical password does not bump version; changed password bumps exactly once', () => {
   const original = { ...secretary(), credentialVersion: 5 };
   const draft = createUserAccountDraft(original);
-  for (const password of ['', '  ', original.password!]) {
+  for (const password of ['', original.password!]) {
     const result = validateUserAccountDraft({ ...draft, newPassword: password }, [manager(), original], original);
     assert.equal(result.valid, true); assert.equal(result.user!.password, original.password);
     assert.equal(result.user!.credentialVersion, 5); assert.equal(result.passwordChanged, false);
   }
+  assert.equal(validateUserAccountDraft({ ...draft, newPassword: '  ' }, [manager(), original], original).valid, false);
   const result = validateUserAccountDraft({ ...draft, newPassword: 'new-test-credential' }, [manager(), original], original);
   assert.equal(result.user!.credentialVersion, 6);
   assert.equal(result.passwordChanged, true);
   assert.equal(validateUserAccountDraft({ ...draft, newPassword: 'new-test-credential' }, [manager(), original], original).user!.credentialVersion, 6);
 });
 
-test('legacy manager without password remains usable under the existing login policy', () => {
+test('passwordless managers cannot count as usable and must be repaired with a new credential', () => {
   const original = manager(); delete original.password;
-  assert.equal(isUsableControlPanelManager(original), true);
-  assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(original), name: 'محدث' }, [original], original).valid, true);
+  assert.equal(isUsableControlPanelManager(original), false);
+  assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(original), name: 'محدث' }, [original], original).valid, false);
+  const repaired = validateUserAccountDraft({ ...createUserAccountDraft(original), newPassword: 'synthetic repaired phrase' }, [original], original);
+  assert.equal(repaired.valid, true); assert.equal(isUsableControlPanelManager(repaired.user!), true);
 });
 
 test('username uniqueness is case-insensitive and trimmed; Arabic and length constraints work', () => {
   const user = secretary(); user.username = '  DESK  ';
-  const draft = { ...createUserAccountDraft(), name: 'حساب عربي', username: ' desk ', newPassword: 'test-only' };
+  const draft = { ...createUserAccountDraft(), name: 'حساب عربي', username: ' desk ', newPassword: 'test-only-passphrase' };
   assert.equal(validateUserAccountDraft(draft, [manager(), user], null, 'new').valid, false);
   assert.equal(validateUserAccountDraft({ ...draft, username: 'دخول_العيادة' }, [manager(), user], null, 'new').valid, true);
   assert.equal(validateUserAccountDraft({ ...draft, username: 'unique', name: 'a'.repeat(101) }, [manager()], null, 'new').valid, false);
@@ -154,7 +157,7 @@ test('work hours allow overnight shifts and preserve old absent timezone rather 
   const result = validateUserAccountDraft(draft, [manager(), user], user);
   assert.equal(result.valid, true); assert.equal(Object.hasOwn(result.user!.accessSchedule!, 'timezone'), false);
   assert.match(accountScheduleLabel(result.user!), /اليوم التالي/);
-  const newDraft = { ...createUserAccountDraft(), name: 'ليلي', username: 'night', newPassword: 'test-only', scheduleEnabled: true, scheduleDays: [0], scheduleStart: '20:00', scheduleEnd: '02:00' };
+  const newDraft = { ...createUserAccountDraft(), name: 'ليلي', username: 'night', newPassword: 'test-only-passphrase', scheduleEnabled: true, scheduleDays: [0], scheduleStart: '20:00', scheduleEnd: '02:00' };
   assert.equal(validateUserAccountDraft(newDraft, [manager()], null, 'new').user!.accessSchedule!.timezone, 'Africa/Cairo');
 });
 

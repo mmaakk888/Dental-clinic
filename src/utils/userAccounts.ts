@@ -1,5 +1,6 @@
 import type { User, UserPermission } from '../types';
 import { canPerformAction, type RBACAction } from './rbac';
+import { hasPasswordCredential, validateNewPassword } from './passwords';
 
 export interface AccountPermission {
   key: keyof UserPermission;
@@ -113,10 +114,8 @@ export function validateAccountSchedule(schedule: User['accessSchedule']): strin
 
 /** A manager is usable in at least one valid work window, not necessarily at this instant. */
 export function isUsableControlPanelManager(user: User): boolean {
-  // Existing login accepts legacy accounts without a password; never lock unrelated saves
-  // by silently applying a stronger credential policy here. New accounts require a password below.
   return user.isActive !== false && !!string(user.username).trim()
-    && canPerformAction(user, 'access_control_panel') && !validateAccountSchedule(user.accessSchedule);
+    && hasPasswordCredential(user) && canPerformAction(user, 'access_control_panel') && !validateAccountSchedule(user.accessSchedule);
 }
 
 export function guardAccountRemoval(users: User[], userId: string, currentUserId?: string): string | null {
@@ -139,13 +138,17 @@ export function validateUserAccountDraft(draft: UserAccountDraft, users: User[],
   const baseline = createUserAccountDraft(original);
   const name = string(draft.name).trim();
   const username = string(draft.username).trim().toLowerCase();
-  const password = string(draft.newPassword).trim();
+  // Passwords are not names: leading/trailing spaces can be meaningful.
+  const password = string(draft.newPassword);
   const singleLine = /[\u0000-\u001f\u007f]/;
   if (!name || Array.from(name).length > 100 || singleLine.test(name)) errors.name = 'اكتب اسمًا من 1 إلى 100 حرف في سطر واحد.';
   if (!username || Array.from(username).length > 60 || singleLine.test(username)) errors.username = 'اكتب اسم دخول من 1 إلى 60 حرف في سطر واحد.';
   else if (users.some(user => user.id !== original?.id && string(user.username).trim().toLowerCase() === username)) errors.username = 'اسم الدخول مستخدم بالفعل؛ اختر اسمًا آخر.';
-  if (!original && !password) errors.newPassword = 'اكتب كلمة سر للحساب الجديد؛ لا توجد كلمة سر افتراضية.';
-  if (password.length > 128 || singleLine.test(password)) errors.newPassword = 'كلمة السر يجب ألا تتجاوز 128 حرفًا وألا تحتوي على سطر جديد.';
+  if ((!original || !hasPasswordCredential(original)) && !password) errors.newPassword = 'اكتب كلمة سر للحساب؛ الدخول دون كلمة سر غير مسموح.';
+  if (password) {
+    const passwordError = validateNewPassword(password);
+    if (passwordError) errors.newPassword = passwordError;
+  }
   if (!['doctor', 'secretary', 'admin'].includes(draft.role)) errors.role = 'اختر نوع حساب صحيحًا.';
   if (string(draft.email).trim().length > 254 || singleLine.test(string(draft.email))) errors.email = 'البريد الإلكتروني طويل جدًا أو يحتوي على سطر جديد.';
   if (string(draft.phone).trim().length > 40 || singleLine.test(string(draft.phone))) errors.phone = 'رقم الهاتف طويل جدًا أو يحتوي على سطر جديد.';

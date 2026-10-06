@@ -14,7 +14,7 @@ export interface ServiceCatalogManagementProps extends ServiceCatalogValues {
   labs: Lab[];
   canViewLabCosts: boolean;
   canManageLabPrices: boolean;
-  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void;
+  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
   initialPricingLabId?: string;
 }
 const snapshot = (values: ServiceCatalogValues) => JSON.stringify(values);

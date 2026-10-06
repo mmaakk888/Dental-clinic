@@ -9,8 +9,8 @@ interface SupplierAnalyticsViewProps {
   expenses: Expense[];
   isPrivacyMode?: boolean;
   materialUsages: MaterialUsage[];
-  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void;
-  onDeleteMaterialUsage: (id: string) => void;
+  onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void | Promise<void>;
+  onDeleteMaterialUsage: (id: string) => void | Promise<void>;
 }
 
 export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
@@ -38,7 +38,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
       purchaseCount: number;
       invoiceIds: Set<string>;
       pricesHistory: { price: number; date: string; supplier: string }[];
-    }> = {};
+    }> = Object.create(null);
 
     expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
       const items = exp.items || [];
@@ -98,7 +98,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
 
   // 2. Compile Supplier Ranking Metrics
   const supplierAnalytics = useMemo(() => {
-    const map: Record<string, { name: string; totalSpent: number; totalPaid: number; totalRemaining: number; count: number; lastInvoiceDate: string; phone?: string }> = {};
+    const map: Record<string, { name: string; totalSpent: number; totalPaid: number; totalRemaining: number; count: number; lastInvoiceDate: string; phone?: string }> = Object.create(null);
 
     expenses.filter(exp => exp.category === 'supplies').forEach(exp => {
       const name = exp.supplierName?.trim() || 'مورد غير محدد';

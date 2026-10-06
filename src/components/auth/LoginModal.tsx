@@ -8,15 +8,16 @@ interface LoginModalProps {
   users: UserType[];
   clinicName: string;
   clinicLogo: string | null;
-  onLogin: (user: UserType, rememberMe: boolean) => void;
-  onUpdateUsers: (users: UserType[]) => void;
+  onLogin: (user: UserType, rememberMe: boolean) => void | Promise<void>;
+  onAuthenticate: (username: string, password: string) => Promise<UserType>;
+  onUpdateUsers?: (users: UserType[]) => void | Promise<void>;
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({
-  users,
   clinicName,
   clinicLogo,
-  onLogin
+  onLogin,
+  onAuthenticate
 }) => {
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -24,20 +25,25 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [rememberMe, setRememberMe] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
 
   // Forgot Password Modal State
   const [isForgotOpen, setIsForgotOpen] = useState(false);
   const recoveryRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    mountedRef.current = true;
     document.body.classList.add('modal-open');
     return () => {
+      mountedRef.current = false;
       document.body.classList.remove('modal-open');
     };
   }, []);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busyRef.current) return;
     setErrorMessage('');
 
     if (!usernameInput.trim()) {
@@ -45,37 +51,28 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
-    setIsLoading(true);
-
-    setTimeout(() => {
-      const found = users.find(
-        u => u.username.toLowerCase() === usernameInput.trim().toLowerCase() ||
-             (u.email && u.email.toLowerCase() === usernameInput.trim().toLowerCase())
-      );
-
-      if (!found) {
-        setIsLoading(false);
-        setErrorMessage('اسم المستخدم غير مسجل بالنظام');
-        return;
-      }
-
+    if (!passwordInput) {
+      setErrorMessage('اكتب كلمة السر؛ الدخول دون كلمة سر غير مسموح.'); return;
+    }
+    busyRef.current = true; setIsLoading(true);
+    try {
+      // Parent verifies against freshly persisted accounts and confirms any
+      // legacy credential migration before a session can be created.
+      const found = await onAuthenticate(usernameInput.trim(), passwordInput);
+      if (!mountedRef.current) return;
       const accessDecision = canUserLoginNow(found);
       if (!accessDecision.allowed) {
-        setIsLoading(false);
         setErrorMessage(accessDecision.message || 'هذا الحساب غير متاح الآن');
         return;
       }
-
-      // Check password if set
-      if (found.password && found.password !== passwordInput) {
-        setIsLoading(false);
-        setErrorMessage('كلمة السر غير صحيحة، يرجى المحاولة مجدداً');
-        return;
-      }
-
-      setIsLoading(false);
-      onLogin(found, rememberMe);
-    }, 250);
+      await onLogin(found, rememberMe);
+      if (mountedRef.current) setPasswordInput('');
+    } catch (error) {
+      if (mountedRef.current) setErrorMessage(error instanceof Error && error.message ? error.message : 'تعذّر تسجيل الدخول. راجع بيانات الحساب وحاول مرة أخرى.');
+    } finally {
+      busyRef.current = false;
+      if (mountedRef.current) setIsLoading(false);
+    }
   };
 
   const closeForgotModal = () => setIsForgotOpen(false);

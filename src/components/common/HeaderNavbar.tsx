@@ -10,6 +10,7 @@ import { NotificationCenterModal } from './NotificationCenterModal';
 import { OfflineSyncEngine, PendingMutation } from '../../utils/offlineSync';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { getNavigationLabel } from '../../utils/clinicContent';
+import { canPerformAction, canAccessView } from '../../utils/rbac';
 
 interface HeaderNavbarProps {
   activeView: ActiveView;
@@ -98,12 +99,12 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
     setLastSyncTime(OfflineSyncEngine.getLastSyncTime());
   };
 
-  const canPatientView = currentUser?.permissions?.patientView !== false;
-  const canPatientFinance = canPatientView && currentUser?.permissions?.patientFinance !== false && (currentUser?.permissions?.viewRemainingBalance ?? currentUser?.permissions?.patientFinance) !== false && !isPrivacyMode;
+  const canPatientView = canPerformAction(currentUser, 'view_patients');
+  const canPatientFinance = canPatientView && canPerformAction(currentUser, 'view_patient_finance') && canPerformAction(currentUser, 'view_remaining_balance') && !isPrivacyMode;
   const visiblePatients = canPatientView ? patients : [];
-  const visibleAppointments = currentUser?.permissions?.appointments !== false ? appointments : [];
-  const visibleLabCases = currentUser?.permissions?.lab !== false ? labCases : [];
-  const visibleExpenses = currentUser?.permissions?.summary !== false && currentUser?.permissions?.viewExpenses !== false && !isPrivacyMode ? expenses : [];
+  const visibleAppointments = canAccessView(currentUser, 'appointments') ? appointments : [];
+  const visibleLabCases = canAccessView(currentUser, 'lab') ? labCases : [];
+  const visibleExpenses = canAccessView(currentUser, 'summary') && canPerformAction(currentUser, 'view_expenses') && !isPrivacyMode ? expenses : [];
 
   // Notifications calculation
   const { todayApptsCount, overduePatientsCount, pendingLabCount, totalNotifCount } = useMemo(() => {
@@ -402,7 +403,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
                 إدارة العيادة والنظام
               </span>
               <div className="space-y-1.5">
-                {currentUser.permissions?.controlPanel && (
+                {canAccessView(currentUser, 'settings') && (
                   <button
                     type="button"
                     onClick={() => {
@@ -633,7 +634,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
         labCases={visibleLabCases}
         expenses={visibleExpenses}
         showFinancials={canPatientFinance}
-        showLabCosts={currentUser?.permissions?.labProfit === true && !isPrivacyMode}
+        showLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
         onSelectPatient={onSelectPatient}
         onNavigate={onNavigate}
       />

@@ -6,6 +6,8 @@ import {
   Trash2, ShieldAlert, Tag, Percent
 } from 'lucide-react';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
+import { canonicalFileNumber } from '../../utils/clinicMutations';
 import { STANDARD_SERVICES_CATALOG } from '../../utils/financials';
 
 interface QuickWalkInModalProps {
@@ -39,7 +41,7 @@ interface QuickWalkInModalProps {
       paymentMethod: 'cash' | 'card' | 'transfer';
       isPaid: boolean;
     };
-  }) => void;
+  }) => void | Promise<void>;
   onSelectPatientFile?: (patientId: string) => void;
 }
 
@@ -64,6 +66,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
   onSelectPatientFile
 }) => {
   const { showToast, validationFail, askConfirm } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
 
   // Mode: 'select' (choose existing vs new) | 'form'
   const [patientMode, setPatientMode] = useState<'existing' | 'new'>('existing');
@@ -222,8 +225,11 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
     };
 
     const procSummary = selectedServices.map(s => s.name).join(' + ') || procedurePerformed.trim() || 'كشف واستشارة طبية';
+    if (patientInfo.isNew && patients.some(patient => canonicalFileNumber(patient.id) === canonicalFileNumber(patientInfo.id))) {
+      showToast('رقم الملف مستخدم بالفعل. اختر «مريض موجود» أو رقم ملف جديد.', 'warning'); return;
+    }
 
-    onSaveWalkInVisit({
+    void run(async () => { await onSaveWalkInVisit({
       patient: patientInfo,
       visit: {
         chiefComplaint: chiefComplaint.trim(),
@@ -255,6 +261,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
     setPrescriptionNotes('');
     setVisitNotes('');
     onClose();
+    });
   };
 
   return (
@@ -282,7 +289,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
+            disabled={saving} onClick={() => { if (!saving) onClose(); }}
             className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer touch-manipulation active:scale-95"
             title="إلغاء وإغلاق"
           >
@@ -291,7 +298,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
         </div>
 
         {/* Modal Scrollable Form Body */}
-        <form onSubmit={handleSubmit} className="min-h-0 p-4 sm:p-6 overflow-y-auto space-y-5 flex-1">
+        <form onSubmit={handleSubmit} className="min-h-0 p-4 sm:p-6 overflow-y-auto space-y-5 flex-1"><fieldset disabled={saving} className="contents">
           
           {/* STEP 1: PATIENT SELECTION MODE TOGGLE */}
           <div className="bg-slate-50 p-1.5 rounded-2xl border border-slate-200 flex items-center gap-2">
@@ -851,14 +858,14 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({
 
             <button
               type="button"
-              onClick={onClose}
+              disabled={saving} onClick={() => { if (!saving) onClose(); }}
               className="px-5 py-3.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm transition-all active:scale-95 cursor-pointer touch-manipulation border border-slate-200 shrink-0"
             >
               إلغاء وإغلاق
             </button>
           </div>
 
-        </form>
+        </fieldset></form>
       </div>
     </div>
   );

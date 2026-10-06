@@ -6,6 +6,7 @@ import {
   Cloud, ShieldAlert, FileSpreadsheet, Server, LogOut, UserCheck, Sparkles, Compass
 } from 'lucide-react';
 import { ClinicLogo } from '../common/ClinicLogo';
+import { canAccessView } from '../../utils/rbac';
 
 interface SidebarNavProps {
   activeView: ActiveView;
@@ -56,14 +57,14 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       label: 'الرئيسية', 
       desc: 'لوحة القيادة الرئيسية',
       icon: <Home className="w-5 h-5" />, 
-      allowed: true 
+      allowed: canAccessView(currentUser, 'home')
     },
     { 
       key: 'patients' as ActiveView, 
       label: 'فهرس المرضى', 
       desc: 'السجلات الطبية والشخصية',
       icon: <Users className="w-5 h-5 text-sky-400" />, 
-      allowed: currentUser ? currentUser.permissions.patientView : true 
+      allowed: canAccessView(currentUser, 'patients')
     },
     { 
       key: 'appointments' as ActiveView, 
@@ -71,7 +72,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       desc: 'جدول العيادة اليومي والشهري',
       icon: <Calendar className="w-5 h-5 text-amber-400" />, 
       badge: todayApptsCount,
-      allowed: currentUser ? currentUser.permissions.appointments : true 
+      allowed: canAccessView(currentUser, 'appointments')
     },
     { 
       key: 'lab' as ActiveView, 
@@ -79,21 +80,21 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       desc: 'تتبع حالات ومستحقات التركيبات',
       icon: <Microscope className="w-5 h-5 text-teal-400" />, 
       badge: pendingLabCount,
-      allowed: currentUser ? currentUser.permissions.lab : true 
+      allowed: canAccessView(currentUser, 'lab')
     },
     { 
       key: 'summary' as ActiveView, 
       label: 'المالية والتقارير', 
       desc: 'سجل المصروفات والإيرادات',
       icon: <Landmark className="w-5 h-5 text-indigo-400" />, 
-      allowed: currentUser ? currentUser.permissions.summary : true 
+      allowed: canAccessView(currentUser, 'summary')
     },
     { 
       key: 'settings' as ActiveView, 
       label: 'لوحة التحكم والإعدادات', 
       desc: 'ضبط الهوية، الأسعار والنسخ',
       icon: <Sliders className="w-5 h-5 text-purple-400" />, 
-      allowed: currentUser ? currentUser.permissions.controlPanel : true 
+      allowed: canAccessView(currentUser, 'settings')
     },
   ].filter(item => item.allowed);
 
@@ -336,4 +337,3 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
 });
 
 SidebarNav.displayName = 'SidebarNav';
-

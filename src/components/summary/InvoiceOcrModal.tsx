@@ -4,11 +4,12 @@ import { AiService, ExtractedInvoice } from '../../services/aiService';
 import { Expense, ExpenseItem, PriceVarianceAlert } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { localDateISO, isValidAppointmentDate } from '../appointments/appointmentScheduling';
+import { useConfirmedAction } from '../common/useConfirmedAction';
 
 interface InvoiceOcrModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaveExpense: (expense: Omit<Expense, 'id'>) => void;
+  onSaveExpense: (expense: Omit<Expense, 'id'>) => void | Promise<void>;
   existingExpenses?: Expense[];
 }
 
@@ -19,6 +20,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   existingExpenses = [],
 }) => {
   const { showToast } = useToastAndConfirm();
+  const { saving, run: confirmSave } = useConfirmedAction();
+  const handleClose = () => { if (!saving) onClose(); };
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractedData, setExtractedData] = useState<ExtractedInvoice | null>(null);
@@ -248,7 +251,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     setPriceVarianceAlerts(alerts);
   }, [lineItems, existingExpenses]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (saving) return;
     if (isExtracting) return showToast('انتظر انتهاء قراءة الصورة أو أدخل الفاتورة بعد توقف القراءة.', 'warning');
     if (!isValidAppointmentDate(invoiceDate)) return showToast('اختر تاريخ فاتورة صحيحًا.', 'warning');
     const finalAmount = typeof totalAmount === 'number' ? totalAmount : itemsSum;
@@ -261,7 +265,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
     const finalSupplier = supplierName.trim() || title.trim() || 'مورد مستلزمات طبية';
 
-    onSaveExpense({
+    await confirmSave(() => onSaveExpense({
       title: finalSupplier,
       supplierName: finalSupplier,
       supplierPhone: supplierPhone.trim() || undefined,
@@ -297,9 +301,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       ],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
-
-    onClose();
+    }), onClose);
   };
 
   const getConfidenceBadge = (score?: number) => {
@@ -320,7 +322,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
   if (!isOpen) return null;
   return (
-    <div onClick={onClose} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
+    <div onClick={handleClose} aria-busy={saving} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
       <div onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
         
         {/* Header */}
@@ -334,13 +336,13 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
               <p className="text-xs text-emerald-200/80">ارفع الصورة، ثم راجع الأصناف والمبالغ قبل الحفظ</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer">
+          <button type="button" disabled={saving} onClick={handleClose} className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Modal Scrollable Content */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"><fieldset disabled={saving} className="contents">
           
           {/* Image Uploader Area if no preview */}
           {!imagePreview ? (
@@ -764,22 +766,22 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
             </div>
           )}
-        </div>
+        </fieldset></div>
 
         {/* Modal Footer */}
         <div className="shrink-0 p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition cursor-pointer">
+          <button type="button" disabled={saving} onClick={handleClose} className="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition cursor-pointer">
             إلغاء وإغلاق
           </button>
           {imagePreview && (
             <button
               type="button"
               onClick={handleSave}
-              disabled={isExtracting}
+              disabled={isExtracting || saving}
               className="px-6 py-2.5 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-2xl shadow-md transition flex items-center gap-2 cursor-pointer active:scale-95"
             >
               <Check className="w-4 h-4" />
-              <span>اعتماد وتأكيد حفظ الفاتورة بالكامل</span>
+              <span>{saving ? 'جارٍ الحفظ…' : 'اعتماد وتأكيد حفظ الفاتورة بالكامل'}</span>
             </button>
           )}
         </div>

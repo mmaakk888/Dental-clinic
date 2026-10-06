@@ -7,7 +7,7 @@ import { WhatsAppComposer } from '../patient/WhatsAppComposer';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import './WhatsAppManagement.css';
 
-interface Props { patients: Patient[]; settings: WhatsappSettings; clinicName: string; onSave: (settings: WhatsappSettings) => void }
+interface Props { patients: Patient[]; settings: WhatsappSettings; clinicName: string; onSave: (settings: WhatsappSettings) => void | Promise<void> }
 type CampaignStep = 'audience' | 'message' | 'review';
 const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
 const steps: Array<{ key: CampaignStep; title: string; description: string }> = [
@@ -18,6 +18,8 @@ const steps: Array<{ key: CampaignStep; title: string; description: string }> = 
 
 export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Props) {
   const { askConfirm } = useToastAndConfirm();
+  const consentBusy = useRef(false);
+  const [savingConsent, setSavingConsent] = useState(false);
   const [step, setStep] = useState<CampaignStep>('audience');
   const [kind, setKind] = useState<'greeting' | 'offer'>('greeting');
   const [message, setMessage] = useState(settings.templates.greeting ?? extraMessageTemplates.greeting.text);
@@ -95,14 +97,17 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
     clearProgress();
     requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
   };
-  const updateConsent = (phone: string, value: string) => {
+  const updateConsent = async (phone: string, value: string) => {
+    if (consentBusy.current) return;
     const next = { ...consent };
     if (value === 'allowed' || value === 'declined') next[phone] = value; else delete next[phone];
+    consentBusy.current = true; setSavingConsent(true);
     try {
-      onSave({ ...settings, campaignConsent: next });
+      await onSave({ ...settings, campaignConsent: next });
       if (value !== 'allowed') setSelected(ids => ids.filter(id => id !== phone));
       setNotice('');
-    } catch { setNotice('تعذّر حفظ الموافقة. حاول مرة أخرى قبل إضافة هذا المريض للحملة.'); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'تعذّر حفظ الموافقة. حاول مرة أخرى قبل إضافة هذا المريض للحملة.'); }
+    finally { consentBusy.current = false; setSavingConsent(false); }
   };
   const goToStep = (nextStep: CampaignStep) => {
     if (nextStep !== 'audience' && !eligible.length) { setNotice('حدد مريضًا واحدًا على الأقل ممن وافقوا على رسائل الحملات.'); return; }
@@ -150,7 +155,7 @@ export function WhatsAppCampaigns({ patients, settings, clinicName, onSave }: Pr
       <div className="wa-selection-tools"><button type="button" onClick={() => setSelected(ids => [...new Set([...ids, ...matchingApproved.map(contact => contact.phone)])])} disabled={!matchingApproved.length}>تحديد الموافقين في النتائج ({matchingApproved.length.toLocaleString('ar-EG')})</button><button type="button" onClick={() => setSelected([])} disabled={!eligible.length}>إلغاء التحديد</button><span>تغيير البحث والفلاتر لا يلغي اختياراتك.</span></div>
       <div className="wa-audience-list">{visibleContacts.map(({ patient, phone }) => <div key={phone} className={`wa-audience-row ${selected.includes(phone) && consent[phone] === 'allowed' ? 'is-selected' : ''}`}>
         <label className="wa-contact-select"><input type="checkbox" disabled={consent[phone] !== 'allowed'} checked={selected.includes(phone) && consent[phone] === 'allowed'} onChange={event => setSelected(ids => event.target.checked ? [...new Set([...ids, phone])] : ids.filter(id => id !== phone))} /><span><strong>{patient.name}</strong><small>ملف #{patient.id} <span dir="ltr">+{phone}</span></small></span></label>
-        <label className="wa-consent-select"><span>موافقة الحملات</span><select aria-label={`موافقة ${patient.name}`} value={consent[phone] ?? 'unknown'} onChange={event => updateConsent(phone, event.target.value)}><option value="unknown">موافقة غير مسجلة</option><option value="allowed">وافق على الحملات</option><option value="declined">رفض / أوقف الرسائل</option></select></label>
+        <label className="wa-consent-select"><span>موافقة الحملات</span><select disabled={savingConsent} aria-label={`موافقة ${patient.name}`} value={consent[phone] ?? 'unknown'} onChange={event => updateConsent(phone, event.target.value)}><option value="unknown">موافقة غير مسجلة</option><option value="allowed">وافق على الحملات</option><option value="declined">رفض / أوقف الرسائل</option></select></label>
       </div>)}</div>
       {!filtered.length && <div className="wa-empty-state"><Users size={27} /><p>{contacts.length ? 'لا توجد أرقام مطابقة للبحث.' : 'لا توجد أرقام هاتف صالحة للحملات. أضف أرقام المرضى من ملفاتهم.'}</p></div>}
       <div className="wa-pagination"><button type="button" aria-label="الصفحة السابقة" disabled={effectivePage === 0} onClick={() => setPage(effectivePage - 1)}><ChevronRight size={16} /><span>السابق</span></button><span>صفحة {effectivePage + 1} من {pages}</span><button type="button" aria-label="الصفحة التالية" disabled={effectivePage + 1 >= pages} onClick={() => setPage(effectivePage + 1)}><span>التالي</span><ChevronLeft size={16} /></button></div>

@@ -59,16 +59,23 @@ test('only exact untouched legacy demo records receive the aggregate marker', ()
   assert.equal(records[1].payments[0].legacyAggregate, undefined);
 });
 
-test('failed persistence emits a visible-failure signal while keeping data in memory', () => {
+test('failed persistence throws and preserves both saved data and the visible cache', () => {
+  const before = [{ id: 'saved', title: 'اختبار', category: 'other' as const, date: '2026-10-05', amount: 5 }];
+  Storage.saveExpenses(before);
+  const persistedBefore = local.get('dental_expenses_v2');
   let failures = 0;
   const listener = () => failures++;
   window.addEventListener(STORAGE_FAILURE_EVENT, listener);
   Object.defineProperty(globalThis, 'localStorage', { value: { ...adapter(local), setItem: () => { throw new Error('quota'); } }, configurable: true });
-  Storage.saveExpenses([{ id: 'failed', title: 'اختبار', category: 'other', date: '2026-10-05', amount: 10 }]);
-  assert.equal(failures, 1);
-  assert.equal(Storage.getExpenses()[0].id, 'failed');
-  window.removeEventListener(STORAGE_FAILURE_EVENT, listener);
-  Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true });
+  try {
+    assert.throws(() => Storage.saveExpenses([{ id: 'failed', title: 'اختبار', category: 'other', date: '2026-10-05', amount: 10 }]));
+    assert.equal(failures, 1);
+    assert.equal(Storage.getExpenses()[0].id, 'saved');
+    assert.equal(local.get('dental_expenses_v2'), persistedBefore);
+  } finally {
+    window.removeEventListener(STORAGE_FAILURE_EVENT, listener);
+    Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true });
+  }
 });
 
 test('identity saves publish name, logo and theme together without changing patient data', () => {
@@ -147,6 +154,90 @@ test('identity save reports a rollback failure instead of falsely claiming previ
     Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true });
     Storage.resetAll();
   }
+});
+
+test('confirmed domain save rolls back patient and appointment keys as one operation', () => {
+  Storage.resetAll();
+  Storage.savePatients([]); Storage.saveAppointments([]); Storage.saveLabCases([]); Storage.saveExpenses([]); Storage.saveMaterialUsages([]);
+  const before = Storage.getDomainData(); const savedBefore = new Map(local);
+  const next = { ...before, patients: [structuredClone(INITIAL_PATIENTS[0])], appointments: [{ id: 'test-visit' } as any] };
+  let failOnce = true;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem(key: string, value: string) {
+    if (key === 'dental_appointments_v2' && failOnce) { failOnce = false; throw new Error('quota'); }
+    local.set(key, value);
+  } } });
+  try {
+    assert.throws(() => Storage.saveDomainDataConfirmed(next, before));
+    assert.deepEqual(local, savedBefore);
+    assert.deepEqual(Storage.getDomainData(), before);
+  } finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); Storage.resetAll(); }
+});
+
+test('fresh domain reads retain another tab receipt instead of cached snapshots', () => {
+  Storage.resetAll(); Storage.savePatients([]);
+  assert.deepEqual(Storage.getPatients(), []);
+  const record = structuredClone(INITIAL_PATIENTS[0]); record.id = 'test-record';
+  local.set('dental_patients_v2', JSON.stringify([record]));
+  assert.equal(Storage.getDomainData().patients[0].id, 'test-record');
+  local.set('dental_patients_v2', '{broken');
+  assert.throws(() => Storage.getDomainData(), /لم يتم استبدالها/);
+  assert.equal(local.get('dental_patients_v2'), '{broken');
+  Storage.resetAll();
+});
+
+test('full restore persists identity/content and rolls back domains if a later key fails', () => {
+  Storage.resetAll(); Storage.savePatients([]);
+  Storage.saveClinicIdentity({ clinicName: 'قبل الاستعادة', clinicLogo: null, theme: DEFAULT_THEME });
+  const before = new Map(local); let failOnce = true;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem(key: string, value: string) {
+    if (key === 'dental_clinic_name_v2' && failOnce) { failOnce = false; throw new Error('quota'); }
+    local.set(key, value);
+  } } });
+  const backup = { patients: [structuredClone(INITIAL_PATIENTS[0])], clinicName: 'بعد الاستعادة', clinicLogo: null,
+    theme: { ...DEFAULT_THEME, primary: '#112233' }, labels: DEFAULT_UI_LABELS, tileOrder: ['patients'] };
+  try { assert.throws(() => Storage.saveBackupConfirmed(backup)); assert.deepEqual(local, before); }
+  finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); }
+  Storage.saveBackupConfirmed(backup);
+  assert.equal(Storage.getClinicName(), backup.clinicName);
+  assert.equal(Storage.getTheme().primary, '#112233');
+  assert.deepEqual(Storage.getUILabels(), DEFAULT_UI_LABELS);
+  assert.equal(Storage.getDomainData().patients.length, 1);
+  Storage.resetAll();
+});
+
+test('corrupt account lists fail closed rather than restoring privileged defaults', () => {
+  Storage.resetAll();
+  for (const raw of ['{broken', '{}', '[null]', '[{"id":"bad","username":"bad"}]']) {
+    local.set('dental_users_v2', raw); assert.deepEqual(Storage.getUsers(), []);
+  }
+  Storage.resetAll();
+});
+
+test('session expiration and remembered lifetime share a single clock instant', () => {
+  Storage.resetAll();
+  const user = { id: 'test-user', username: 'test-user', name: 'اختبار', role: 'doctor', permissions: {} } as User;
+  Storage.saveCurrentUser(user);
+  assert.equal(Storage.getCurrentUser()?.id, user.id);
+  const remembered = Storage.createRememberedSession(user);
+  Storage.saveRememberedSession(remembered);
+  assert.deepEqual(Storage.getRememberedSession(), remembered);
+  const raw = JSON.parse(session.get('dental_current_user_v2')!);
+  raw.issuedAt = new Date(Date.now() - 13 * 3600000).toISOString();
+  raw.expiresAt = new Date(Date.now() - 3600000).toISOString();
+  session.set('dental_current_user_v2', JSON.stringify(raw)); assert.equal(Storage.getCurrentUser(), null);
+  Storage.resetAll();
+});
+
+test('interrupted reset restores saved records and keeps the session', () => {
+  Storage.resetAll(); Storage.savePatients([]); Storage.saveExpenses([]);
+  const user = { id: 'test-user', username: 'test-user', name: 'اختبار', role: 'doctor', permissions: {} } as User;
+  Storage.saveCurrentUser(user); const before = new Map(local); const beforeSession = new Map(session); let failOnce = true;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), removeItem(key: string) {
+    if (key === 'dental_expenses_v2' && failOnce) { failOnce = false; throw new Error('blocked'); }
+    local.delete(key);
+  } } });
+  try { assert.throws(() => Storage.resetAll(), /لم تتم إعادة الضبط/); assert.deepEqual(local, before); assert.deepEqual(session, beforeSession); }
+  finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); Storage.resetAll(); }
 });
 
 const makeContentDraft = () => ({

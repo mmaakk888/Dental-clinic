@@ -81,7 +81,7 @@ export function getDefaultPermissionsForRole(role: 'doctor' | 'secretary' | 'adm
  * Checks whether a given user has permission to access a specific view.
  */
 export function canAccessView(user: User | null, view: ActiveView): boolean {
-  if (!user) return false;
+  if (!user || user.isActive === false || !['doctor', 'admin', 'secretary'].includes(user.role)) return false;
 
   // Doctor or Admin has full unrestricted access to everything
   if (user.role === 'doctor' || user.role === 'admin') {
@@ -89,7 +89,7 @@ export function canAccessView(user: User | null, view: ActiveView): boolean {
   }
 
   const perms = user.permissions;
-  if (!perms) return false;
+  if (!perms || typeof perms !== 'object' || Array.isArray(perms)) return false;
 
   switch (view) {
     case 'secretary-desk':
@@ -98,17 +98,17 @@ export function canAccessView(user: User | null, view: ActiveView): boolean {
       return true;
     case 'patients':
     case 'patient-file':
-      return !!perms.patientView;
+      return perms.patientView === true;
     case 'appointments':
-      return !!perms.appointments;
+      return perms.appointments === true;
     case 'lab':
     case 'lab-detail':
-      return !!perms.lab;
+      return perms.lab === true;
     case 'summary':
       // Only users with summary / viewProfits / financialReports access can view Full Finance
-      return !!perms.summary;
+      return perms.summary === true;
     case 'settings':
-      return !!perms.controlPanel;
+      return perms.controlPanel === true;
     default:
       return false;
   }
@@ -118,7 +118,7 @@ export function canAccessView(user: User | null, view: ActiveView): boolean {
  * Checks whether a given user has permission for a specific action.
  */
 export function canPerformAction(user: User | null, action: RBACAction): boolean {
-  if (!user) return false;
+  if (!user || user.isActive === false || !['doctor', 'admin', 'secretary'].includes(user.role)) return false;
 
   // Doctor or Admin can perform all actions
   if (user.role === 'doctor' || user.role === 'admin') {
@@ -126,53 +126,53 @@ export function canPerformAction(user: User | null, action: RBACAction): boolean
   }
 
   const perms = user.permissions;
-  if (!perms) return false;
+  if (!perms || typeof perms !== 'object' || Array.isArray(perms)) return false;
 
   switch (action) {
     case 'view_patients':
-      return !!perms.patientView;
+      return perms.patientView === true;
     case 'add_patient':
     case 'edit_patient':
     case 'add_session':
-      return !!perms.patientEdit;
+      return perms.patientEdit === true;
     case 'delete_patient':
     case 'delete_session':
-      return !!perms.deletePatients;
+      return perms.deletePatients === true;
     case 'view_patient_finance':
-      return !!perms.patientFinance;
+      return perms.patientFinance === true;
     case 'collect_payment':
     case 'register_payment':
-      return perms.registerPayment !== undefined ? !!perms.registerPayment : !!perms.patientFinance;
+      return perms.registerPayment !== undefined ? perms.registerPayment === true : perms.patientFinance === true;
     case 'view_remaining_balance':
-      return perms.viewRemainingBalance !== undefined ? !!perms.viewRemainingBalance : !!perms.patientFinance;
+      return perms.viewRemainingBalance !== undefined ? perms.viewRemainingBalance === true : perms.patientFinance === true;
     case 'view_today_collections':
-      return perms.viewTodayCollections !== undefined ? !!perms.viewTodayCollections : !!perms.patientFinance;
+      return perms.viewTodayCollections !== undefined ? perms.viewTodayCollections === true : perms.patientFinance === true;
     case 'edit_payment':
-      return perms.editPayment !== undefined ? !!perms.editPayment : false;
+      return perms.editPayment === true;
     case 'delete_payment':
-      return perms.deletePayment !== undefined ? !!perms.deletePayment : false;
+      return perms.deletePayment === true;
     case 'manage_appointments':
-      return !!perms.appointments;
+      return perms.appointments === true;
     case 'manage_lab':
-      return !!perms.lab;
+      return perms.lab === true;
     case 'view_lab_costs':
-      return !!perms.labProfit;
+      return perms.labProfit === true;
     case 'view_summary_reports':
-      return !!perms.summary;
+      return perms.summary === true;
     case 'view_expenses':
-      return perms.viewExpenses !== undefined ? !!perms.viewExpenses : !!perms.summary;
+      return perms.viewExpenses !== undefined ? perms.viewExpenses === true : perms.summary === true;
     case 'view_profits':
-      return perms.viewProfits !== undefined ? !!perms.viewProfits : !!perms.summary;
+      return perms.viewProfits !== undefined ? perms.viewProfits === true : perms.summary === true;
     case 'manage_prices':
-      return perms.managePrices !== undefined ? !!perms.managePrices : !!perms.controlPanel;
+      return perms.managePrices !== undefined ? perms.managePrices === true : perms.controlPanel === true;
     case 'financial_reports':
-      return perms.financialReports !== undefined ? !!perms.financialReports : !!perms.summary;
+      return perms.financialReports !== undefined ? perms.financialReports === true : perms.summary === true;
     case 'access_control_panel':
     case 'manage_users':
     case 'backup_restore':
-      return !!perms.controlPanel;
+      return perms.controlPanel === true;
     case 'print_prescription':
-      return !!perms.patientView;
+      return perms.patientView === true;
     default:
       return false;
   }
@@ -184,4 +184,3 @@ export function canPerformAction(user: User | null, action: RBACAction): boolean
 export function getDefaultViewForUser(user: User, isMobile: boolean): ActiveView {
   return 'home';
 }
-

@@ -15,6 +15,8 @@ import { AuditTrailView } from './AuditTrailView';
 import { WhatsAppManagement } from './WhatsAppManagement';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { serializeClinicCsv } from '../../utils/csvExport';
+import { assertClinicBackup } from '../../utils/backupValidation';
 import './settingsNavigation.css';
 
 const settingsSections = [
@@ -98,17 +100,21 @@ interface SettingsViewProps {
   materialUsages: MaterialUsage[];
   whatsappSettings: WhatsappSettings;
   canViewPatientFinance?: boolean;
+  canExportPatientFinance?: boolean;
+  canExportFinancialReports?: boolean;
+  canManageFullBackup?: boolean;
+  onAuthorizeDataExport: (kind: 'patients' | 'patient_finance' | 'financial_report' | 'full_backup') => void;
   drugCatalog: DrugCatalogItem[];
   onSaveIdentity: (values: ClinicIdentitySettings) => void;
   onSaveContent: (values: ContentDraft) => void;
-  onSaveUsers: (users: User[]) => void;
+  onSaveUsers: (users: User[]) => void | Promise<void>;
   onSaveServiceCatalog: (values: ServiceCatalogValues) => void;
-  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void;
-  onSaveWhatsappSettings: (settings: WhatsappSettings) => void;
+  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
+  onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   onSaveDrugCatalog: (catalog: DrugCatalogItem[]) => void;
-  onImportPatients: (newPatients: Patient[]) => void;
-  onRestoreFullData: (data: any) => void;
-  onResetAllData: () => void;
+  onImportPatients: (newPatients: Patient[]) => Promise<void>;
+  onRestoreFullData: (data: any) => Promise<void>;
+  onResetAllData: () => Promise<void>;
   onBackToHome: () => void;
 }
 
@@ -136,6 +142,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   materialUsages,
   whatsappSettings,
   canViewPatientFinance = false,
+  canExportPatientFinance = false,
+  canExportFinancialReports = false,
+  canManageFullBackup = false,
+  onAuthorizeDataExport,
   drugCatalog,
   onSaveIdentity,
   onSaveContent,
@@ -235,23 +245,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!patients.length) { showToast('لا توجد بيانات مرضى لتصديرها', 'warning'); return; }
     excelBusyRef.current = true;
     try {
+      const columns = { ...exportCols, totalRequired: exportCols.totalRequired && canExportPatientFinance,
+        totalPaid: exportCols.totalPaid && canExportPatientFinance, totalRemain: exportCols.totalRemain && canExportPatientFinance };
+      if (!Object.values(columns).some(Boolean)) throw new Error('اختر عمودًا متاحًا واحدًا على الأقل للتصدير.');
+      const containsFinance = columns.totalRequired || columns.totalPaid || columns.totalRemain;
+      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
       const XLSX = await import('xlsx');
+      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
       const exportData = patients.map(p => {
         const row: Record<string, string | number> = {};
-        const financial = getPatientFinancialSummary(p);
-        if (exportCols.id) row['رقم الملف'] = p.id;
-        if (exportCols.name) row['اسم المريض'] = p.name;
-        if (exportCols.mobile) row['الموبايل'] = p.mobile;
-        if (exportCols.age) row['السن'] = p.age;
-        if (exportCols.firstVisit) row['تاريخ الدخول'] = p.firstVisit;
-        if (exportCols.totalRequired) row['إجمالي المطلوبات بعد الخصم'] = Math.max(0, financial.totalRequired - financial.totalDiscounts);
-        if (exportCols.totalPaid) row['إجمالي المدفوع'] = financial.totalCollected;
-        if (exportCols.totalRemain) row['المتبقي'] = financial.totalRemaining;
+        const financial = containsFinance ? getPatientFinancialSummary(p) : null;
+        if (columns.id) row['رقم الملف'] = p.id;
+        if (columns.name) row['اسم المريض'] = p.name;
+        if (columns.mobile) row['الموبايل'] = p.mobile;
+        if (columns.age) row['السن'] = p.age;
+        if (columns.firstVisit) row['تاريخ الدخول'] = p.firstVisit;
+        if (columns.totalRequired) row['إجمالي المطلوبات بعد الخصم'] = Math.max(0, financial!.totalRequired - financial!.totalDiscounts);
+        if (columns.totalPaid) row['إجمالي المدفوع'] = financial!.totalCollected;
+        if (columns.totalRemain) row['المتبقي'] = financial!.totalRemaining;
         return row;
       });
       const worksheet = XLSX.utils.json_to_sheet(exportData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'مرضى العيادة');
+      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
       XLSX.writeFile(workbook, `مرضى_عيادة_الأسنان_${new Date().toISOString().split('T')[0]}.xlsx`);
       showToast('تم تجهيز ملف الإكسيل للتنزيل', 'success');
     } catch {
@@ -263,18 +280,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Helper for downloading CSV with UTF-8 BOM for Arabic compatibility
   const downloadCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
-    const escapeCell = (val: string | number) => {
-      const str = String(val ?? '');
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`;
-      }
-      return str;
-    };
-
-    const csvContent = '\uFEFF' + [
-      headers.map(escapeCell).join(','),
-      ...rows.map(row => row.map(escapeCell).join(','))
-    ].join('\r\n');
+    const csvContent = serializeClinicCsv(headers, rows);
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -289,9 +295,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // CSV Export Handlers
   const handleExportPatientsCSV = () => {
-    const headers = ['رقم الملف', 'اسم المريض', 'الموبايل', 'السن', 'تاريخ الدخول', 'الحساسية والإنذارات', 'إجمالي المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'المتبقي (ج.م)'];
+    try {
+    onAuthorizeDataExport(canExportPatientFinance ? 'patient_finance' : 'patients');
+    const headers = ['رقم الملف', 'اسم المريض', 'الموبايل', 'السن', 'تاريخ الدخول', 'الحساسية والإنذارات',
+      ...(canExportPatientFinance ? ['إجمالي المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'المتبقي (ج.م)'] : [])];
     const rows = patients.map(p => {
-      const financial = getPatientFinancialSummary(p);
+      const financial = canExportPatientFinance ? getPatientFinancialSummary(p) : null;
       return [
         p.id,
         p.name,
@@ -299,17 +308,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         p.age,
         p.firstVisit,
         p.allergy || 'لا يوجد',
-        Math.max(0, financial.totalRequired - financial.totalDiscounts),
-        financial.totalCollected,
-        financial.totalRemaining
+        ...(financial ? [Math.max(0, financial.totalRequired - financial.totalDiscounts), financial.totalCollected, financial.totalRemaining] : [])
       ];
     });
 
     downloadCSV(`نسخة_احتياطية_المرضى_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
     showToast('تم تصدير ملف بيانات المرضى بصيغة CSV بنجاح', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر تصدير البيانات.', 'error'); }
   };
 
   const handleExportFinancialReportCSV = () => {
+    try {
+    if (!canExportFinancialReports) throw new Error('التقرير المالي غير متاح لهذا الحساب أو في وضع الخصوصية.');
+    onAuthorizeDataExport('financial_report');
     const headers = ['تاريخ الخدمة / الدفعة', 'نوع السجل', 'رقم الملف', 'اسم المريض', 'الخدمة / الملاحظة', 'المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'طريقة الدفع'];
     const rows: (string | number)[][] = calculateDailyCollections(patients, () => true).rows.map(row => {
       const patient = patients.find(p => p.id === row.patientId);
@@ -323,6 +334,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     downloadCSV(`تقرير_المالية_والتحصيلات_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
     showToast('تم تصدير التقرير المالي الشامل بصيغة CSV بنجاح', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر تصدير التقرير المالي.', 'error'); }
   };
 
   // Excel Import Handler
@@ -331,6 +343,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    if (file.size > 10 * 1024 * 1024) { showToast('ملف الإكسيل يجب ألا يتجاوز ١٠ ميجابايت. قسّم الملف الكبير قبل الاستيراد.', 'warning'); return; }
     if (excelBusyRef.current) { showToast('انتظر حتى تنتهي عملية الإكسيل الحالية', 'info'); return; }
     excelBusyRef.current = true;
     try {
@@ -339,6 +352,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       if (!sheet) throw new Error('empty-workbook');
       const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      if (data.length > 50_000) throw new Error('too-many-rows');
       if (!data.length) { showToast('الملف لا يحتوي على صفوف مرضى لاستيرادها', 'warning'); return; }
 
       const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
@@ -374,7 +388,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         const rawAge = readCell(row, ['السن', 'Age']);
         const age = rawAge === '' ? 0 : typeof rawAge === 'number' || typeof rawAge === 'string' ? Number(normalizeDigits(String(rawAge))) : NaN;
         const numericIdInvalid = typeof rawId === 'number' && (!Number.isSafeInteger(rawId) || rawId <= 0);
-        if (!id || !['string', 'number'].includes(typeof rawId) || numericIdInvalid || /[\r\n\t]/.test(id) || !name || !Number.isInteger(age) || age < 0 || age > 120) {
+        if (!id || id.length > 200 || !['string', 'number'].includes(typeof rawId) || numericIdInvalid || /[\r\n\t]/.test(id) || !name || name.length > 200 || !Number.isInteger(age) || age < 0 || age > 120) {
           invalidCount++;
           return;
         }
@@ -424,10 +438,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [activeSubTab]);
 
   const loadCloudBackups = async () => {
+    if (!canManageFullBackup) { setCloudBackups([]); setCloudStatus('error'); return; }
     setIsFetchingCloud(true);
     try {
+      onAuthorizeDataExport('full_backup');
       const { fetchFirebaseBackups } = await import('../../utils/firebaseService');
+      onAuthorizeDataExport('full_backup');
       const list = await fetchFirebaseBackups();
+      onAuthorizeDataExport('full_backup');
       setCloudBackups(list);
       setCloudStatus('verified');
     } catch (err) {
@@ -441,7 +459,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleUploadCloudBackup = async () => {
     setIsUploadingCloud(true);
     try {
-      const fullData = {
+      if (!canManageFullBackup) throw new Error('النسخ الكامل يحتاج صلاحيات الإدارة والبيانات المالية وخروجًا من وضع الخصوصية.');
+      onAuthorizeDataExport('full_backup');
+      const fullData = assertClinicBackup({
         patients,
         appointments,
         labs,
@@ -454,10 +474,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         whatsappSettings,
         drugCatalog,
         clinicName,
-        clinicLogo
-      };
+        clinicLogo,
+        theme,
+        labels,
+        tileOrder
+      });
 
       const { saveBackupToFirebase } = await import('../../utils/firebaseService');
+      onAuthorizeDataExport('full_backup');
       const meta = await saveBackupToFirebase(fullData, clinicName);
       showToast(`تم رفع النسخة الاحتياطية بنجاح إلى Firebase (${meta.timestamp})`, 'success');
       await loadCloudBackups();
@@ -470,6 +494,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleRestoreCloudBackup = async (backupId: string, timestamp: string) => {
+    if (!canManageFullBackup) return showToast('استعادة النسخة الكاملة غير متاحة لهذا الحساب أو في وضع الخصوصية.', 'warning');
     askConfirm({
       title: 'استعادة نسخة احتياطية من السحابة',
       message: `هل أنت متأكد من استعادة النسخة الاحتياطية المؤرخة (${timestamp})؟ سيتم استبدال البيانات الحالية بالبيانات السحابية المحفوظة.`,
@@ -477,10 +502,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       tone: 'warning',
       onConfirm: async () => {
         try {
+          onAuthorizeDataExport('full_backup');
           const { fetchSingleFirebaseBackup } = await import('../../utils/firebaseService');
+          onAuthorizeDataExport('full_backup');
           const fullData = await fetchSingleFirebaseBackup(backupId);
           if (fullData) {
-            onRestoreFullData(fullData);
+            onAuthorizeDataExport('full_backup');
+            await onRestoreFullData(fullData);
             showToast('تم استعادة كافة بيانات العيادة بنجاح من Firebase!', 'success');
           } else {
             showToast('تعذر جلب بيانات النسخة الاحتياطية من السحابة', 'error');
@@ -494,6 +522,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleDeleteCloudBackup = async (backupId: string) => {
+    if (!canManageFullBackup) return showToast('إدارة النسخ الكاملة غير متاحة لهذا الحساب أو في وضع الخصوصية.', 'warning');
     askConfirm({
       title: 'حذف النسخة السحابية',
       message: 'هل أنت متأكد من حذف هذه النسخة الاحتياطية من قاعدة بيانات Firebase؟',
@@ -501,7 +530,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       tone: 'danger',
       onConfirm: async () => {
         try {
+          onAuthorizeDataExport('full_backup');
           const { removeFirebaseBackup } = await import('../../utils/firebaseService');
+          onAuthorizeDataExport('full_backup');
           await removeFirebaseBackup(backupId);
           setCloudBackups(prev => prev.filter(b => b.id !== backupId));
           showToast('تم حذف النسخة الاحتياطية من السحابة', 'info');
@@ -640,7 +671,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {/* Firebase Cloud Backup SubTab */}
-        {activeSubTab === 'firebase' && (
+        {activeSubTab === 'firebase' && !canManageFullBackup && <div role="status" className="bg-slate-50 border rounded-2xl p-5 text-sm text-slate-600">النسخة الكاملة تشمل بيانات العيادة والحسابات المالية والمستخدمين. يلزم الوصول الإداري والمالي المناسب والخروج من وضع الخصوصية.</div>}
+        {activeSubTab === 'firebase' && canManageFullBackup && (
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
             {/* Connection Status Banner */}
             <div className="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 text-white rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-md">
@@ -808,7 +840,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
                   <div className="space-y-1">
                     <h4 className="text-sm font-bold text-slate-900 font-tajawal">1. تصدير بيانات المرضى (CSV)</h4>
-                    <p className="text-xs text-slate-500">يتضمن كافة بيانات الحالات، أرقام الهواتف، التواريخ، والملخص المالي لكل حالة.</p>
+                    <p className="text-xs text-slate-500">{canExportPatientFinance ? 'بيانات الملفات والتواصل والتواريخ، مع الملخص المالي المسموح لهذا الحساب.' : 'بيانات الملفات والتواصل والتواريخ فقط، دون حسابات أو مبالغ مالية.'}</p>
                   </div>
                   <button
                     type="button"
@@ -821,7 +853,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 {/* Export Financial Report CSV */}
-                <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-3">
+                {canExportFinancialReports && <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-3">
                   <div className="space-y-1">
                     <h4 className="text-sm font-bold text-emerald-900 font-tajawal">2. تصدير التقرير المالي والتحصيلات (CSV)</h4>
                     <p className="text-xs text-emerald-700">سجل زمني شامل لكافة الجلسات العلاجية، الدفعات، والتحصيلات المالية بالعيادة.</p>
@@ -834,7 +866,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <Download className="w-4 h-4" />
                     تنزيل التقرير المالي CSV
                   </button>
-                </div>
+                </div>}
               </div>
             </div>
 
@@ -848,7 +880,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-xs text-slate-600">حدد الأعمدة التي ترغب بضمها لملف الإكسيل:</p>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                {Object.keys(exportCols).map(colKey => (
+                {Object.keys(exportCols).filter(colKey => canExportPatientFinance || !['totalRequired', 'totalPaid', 'totalRemain'].includes(colKey)).map(colKey => (
                   <label key={colKey} className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 cursor-pointer">
                     <input
                       type="checkbox"
@@ -899,7 +931,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {/* 6. System & Reset SubTab */}
-        {activeSubTab === 'system' && (
+        {activeSubTab === 'system' && !canManageFullBackup && <p role="status" className="p-5 border rounded-2xl text-sm text-slate-600">إعادة ضبط العيادة غير متاحة لهذا الحساب أو في وضع الخصوصية.</p>}
+        {activeSubTab === 'system' && canManageFullBackup && (
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
             <h3 className="text-base font-bold text-rose-800 font-tajawal flex items-center gap-2">
               <RotateCcw className="w-5 h-5 text-rose-600" />
@@ -918,8 +951,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   message: 'هل أنت متأكد من مسح جميع البيانات المحلية واستعادة الضبط الافتراضي؟',
                   confirmLabel: 'مسح وإعادة الضبط',
                   tone: 'danger',
-                  onConfirm: () => {
-                    onResetAllData();
+                  onConfirm: async () => {
+                    onAuthorizeDataExport('full_backup');
+                    await onResetAllData();
                     showToast('تم إعادة ضبط البيانات للافتراضي', 'warning');
                   }
                 });

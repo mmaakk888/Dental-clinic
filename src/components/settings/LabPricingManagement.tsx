@@ -11,7 +11,7 @@ export interface LabPricingManagementProps {
   canViewLabCosts: boolean;
   canManageLabPrices: boolean;
   initialLabId?: string;
-  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void;
+  onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
 }
 
 type LabDraft = { baseline: Lab; rows: LabPricingDraftRow[]; errors: Record<string, string>; saveError: string };
@@ -148,7 +148,7 @@ function AuthorizedLabPricingManagement(props: LabPricingManagementProps) {
       setExpanded(null);
     } });
   };
-  const save = (event: React.FormEvent) => {
+  const save = async (event: React.FormEvent) => {
     event.preventDefault();
     const labId = selectionRef.current;
     const current = draftsRef.current.get(labId);
@@ -168,7 +168,7 @@ function AuthorizedLabPricingManagement(props: LabPricingManagementProps) {
     }
     busy.current = true; setSaving(true);
     try {
-      latest.current.onSaveLabPricing(labId, checked.services, cloneLab(current.baseline));
+      await latest.current.onSaveLabPricing(labId, checked.services, cloneLab(current.baseline));
       const savedLab = cloneLab(current.baseline); savedLab.services = checked.services;
       setDrafts(previous => new Map(previous).set(labId, newDraft(savedLab)));
       showToast('تم حفظ تكلفة خدمات المعمل المختار.', 'success');

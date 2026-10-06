@@ -12,7 +12,7 @@ export function useAppointmentDialog(isOpen: boolean, onClose: () => void) {
     document.body.style.overflow = 'hidden';
     const getControls = () => (Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
-    ) || []) as HTMLElement[]).filter(element => element.getClientRects().length > 0);
+    ) || []) as HTMLElement[]).filter(element => !element.matches(':disabled') && element.getClientRects().length > 0);
     const frame = requestAnimationFrame(() => {
       const initial = dialogRef.current?.querySelector<HTMLElement>('[data-dialog-autofocus]');
       (initial || getControls()[0] || dialogRef.current)?.focus();

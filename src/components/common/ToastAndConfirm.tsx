@@ -17,12 +17,13 @@ export interface ConfirmOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: 'danger' | 'warning' | 'info';
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
 }
 
 interface ToastAndConfirmContextType {
   showToast: (message: string, type?: ToastType, options?: { undoFn?: () => void; duration?: number }) => void;
   askConfirm: (options: ConfirmOptions) => void;
+  cancelConfirm: () => void;
   validationFail: (modalId: string, fieldId: string, message: string) => void;
 }
 
@@ -39,6 +40,8 @@ export function useToastAndConfirm() {
 export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [confirmState, setConfirmState] = useState<ConfirmOptions | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const confirmingRef = useRef(false);
   const confirmRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!confirmState) return;
@@ -87,6 +90,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
   const askConfirm = useCallback((options: ConfirmOptions) => {
     setConfirmState(options);
   }, []);
+  const cancelConfirm = useCallback(() => setConfirmState(null), []);
 
   const validationFail = useCallback((modalId: string, fieldId: string, message: string) => {
     showToast(message, 'error');
@@ -121,7 +125,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
   };
 
   return (
-    <ToastAndConfirmContext.Provider value={{ showToast, askConfirm, validationFail }}>
+    <ToastAndConfirmContext.Provider value={{ showToast, askConfirm, cancelConfirm, validationFail }}>
       {children}
 
       {/* Toast Stack */}
@@ -214,9 +218,17 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  confirmState.onConfirm();
-                  setConfirmState(null);
+                disabled={confirming}
+                onClick={async () => {
+                  if (confirmingRef.current) return;
+                  const pending = confirmState;
+                  confirmingRef.current = true; setConfirming(true);
+                  try {
+                    await pending.onConfirm();
+                    setConfirmState(current => current === pending ? null : current);
+                  } catch (error) {
+                    showToast(error instanceof Error ? error.message : 'تعذّر تنفيذ العملية. لم يتم تأكيد نجاحها.', 'error');
+                  } finally { confirmingRef.current = false; setConfirming(false); }
                 }}
                 className={`px-5 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all cursor-pointer ${
                   confirmState.tone === 'danger'
@@ -226,7 +238,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                     : 'bg-[#0f3d3e] hover:bg-[#1b5e5a] shadow-teal-900/20'
                 }`}
               >
-                {confirmState.confirmLabel || 'تأكيد'}
+                {confirming ? 'جارٍ التنفيذ…' : confirmState.confirmLabel || 'تأكيد'}
               </button>
             </div>
           </div>

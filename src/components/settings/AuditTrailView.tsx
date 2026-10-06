@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { History, Filter, Search, Download, Trash2, User, ShieldCheck, Calendar, HardDrive, Printer } from 'lucide-react';
 import { getAuditLogs, AuditLogItem } from '../../services/auditLogger';
+import { serializeClinicCsv } from '../../utils/csvExport';
 
 export const AuditTrailView: React.FC = () => {
   const [logs] = useState<AuditLogItem[]>(() => getAuditLogs());
@@ -33,12 +34,12 @@ export const AuditTrailView: React.FC = () => {
       l.userRole,
       l.action,
       l.entity,
-      `"${l.recordName.replace(/"/g, '""')}"`,
-      `"${l.details.replace(/"/g, '""')}"`,
+      l.recordName,
+      l.details,
       l.device || ''
     ]);
 
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = serializeClinicCsv(headers, rows);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -200,4 +201,3 @@ export const AuditTrailView: React.FC = () => {
     </div>
   );
 };
-

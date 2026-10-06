@@ -1,21 +1,42 @@
 import express from 'express';
+import 'dotenv/config';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
+import { createAiSecurity, aiBodyLimit, releaseAiRequest } from './server/security';
+import type { AiSecurityOptions } from './server/security';
 import { GoogleGenAI, Type } from '@google/genai';
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+export interface ServerOptions extends AiSecurityOptions {
+  createAiClient?: () => GoogleGenAI | null;
+}
 
-  app.use(express.json({ limit: '25mb' }));
+export function createApiApp(options: ServerOptions = {}) {
+  const app = express();
+  const env = options.env || process.env;
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (env.NODE_ENV === 'production') res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebaseapp.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    next();
+  });
+  const security = createAiSecurity(options);
+  const imageParser = express.json({ limit: aiBodyLimit('/extract-invoice'), strict: true, inflate: false });
+  const dataParser = express.json({ limit: aiBodyLimit('/smart-search'), strict: true, inflate: false });
+  app.use('/api/ai', security.authorize,
+    (req, res, next) => (aiBodyLimit(req.path) === '3mb' ? imageParser : dataParser)(req, res, next),
+    security.admit);
 
   // Helper to initialize Gemini Client
   const getGeminiClient = () => {
-    const apiKey = process.env.GEMINI_API_KEY;
+    if (options.createAiClient) return options.createAiClient();
+    const apiKey = env.GEMINI_API_KEY;
     if (!apiKey) return null;
     return new GoogleGenAI({
       apiKey,
       httpOptions: {
+        timeout: 25_000,
         headers: {
           'User-Agent': 'aistudio-build',
         },
@@ -39,7 +60,7 @@ async function startServer() {
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: {
           parts: [
             {
@@ -75,6 +96,7 @@ async function startServer() {
           ],
         },
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -129,11 +151,16 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json(parsed);
     } catch (err: any) {
-      console.error('Invoice OCR error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to analyze invoice' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
@@ -163,13 +190,14 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: `أنت مساعد ذكي لعيادة أسنان. قم بتحليل استعلام البحث الطبي التالي وتصفية قائمة المرضى المتاحة.
 استعلام البحث: "${query}"
-قائمة المرضى: ${JSON.stringify(patients.slice(0, 50))}
+قائمة المرضى: ${JSON.stringify(patients)}
 
 حدد معرفات المرضى (id) الأكثر تطابقاً بدقة، واكتب توضيحاً مختصراً باللغة العربية.`,
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -184,11 +212,16 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json(parsed);
     } catch (err: any) {
-      console.error('Smart Search error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to complete smart search' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
@@ -235,13 +268,14 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: `قم بتحليل جدول مواعيد عيادة الأسنان لهذا اليوم المقترح: ${date}
 الإجراء المطلوبة جدولته: "${procedureType}"
 المواعيد المحجوزة حالياً: ${JSON.stringify(existingAppointments || [])}
 
 احسب مدة الإجراء بالدقائق، واقترح أفضل 3 أوقات (HH:mm) لتجنب الازدحام وموازنة جهد الطبيب، وتوقع حالة ضغط العمل (light/balanced/busy).`,
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -259,11 +293,16 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json(parsed);
     } catch (err: any) {
-      console.error('Schedule Assistant error:', err);
-      return res.status(500).json({ error: err.message || 'Scheduler failed' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
@@ -286,7 +325,7 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: `أنت مستشار مالي لعيادة أسنان. حلل البيانات المالية التالية واكتب 3-4 نقاط استباقية باللغة العربية مع نصيحة عملية مخصصة للطبيب.
 إيراد الشهر الحالي: ${currentMonthRevenue} ج.م
 مصروفات الشهر الحالي: ${currentMonthExpenses} ج.م
@@ -294,6 +333,7 @@ async function startServer() {
 إيرادات الشهر السابق: ${previousMonthRevenue || 0} ج.م
 مصروفات الشهر السابق: ${previousMonthExpenses || 0} ج.م`,
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -308,18 +348,23 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json(parsed);
     } catch (err: any) {
-      console.error('Financial insights error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to generate financial insights' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
   // 5. AI Endodontic Working Length Assistant
   app.post('/api/ai/endodontic-helper', async (req, res) => {
     try {
-      const { imageBase64, toothNumber } = req.body;
+      const { imageBase64, toothNumber, mimeType } = req.body;
       const ai = getGeminiClient();
 
       if (!imageBase64) return res.status(400).json({ error: 'أرفق صورة للتحليل.' });
@@ -330,13 +375,13 @@ async function startServer() {
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: {
           parts: [
             {
               inlineData: {
                 data: cleanBase64,
-                mimeType: 'image/jpeg',
+                mimeType,
               },
             },
             {
@@ -346,6 +391,7 @@ async function startServer() {
           ],
         },
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -369,11 +415,16 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json({ ...parsed, autoCleanupFlag: true });
     } catch (err: any) {
-      console.error('Endodontic helper error:', err);
-      return res.status(500).json({ error: err.message || 'Endodontic helper failed' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
@@ -394,7 +445,7 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: env.GEMINI_MODEL || 'gemini-3.6-flash',
         contents: `اكتب موجزاً تنفيذياً ذكياً ومختصراً لطبيب الأسنان عن نشاط العيادة اليوم باللغة العربية:
 عدد المواعيد: ${appointmentsCount}
 المرضى الجدد: ${newPatientsCount}
@@ -402,6 +453,7 @@ async function startServer() {
 حالات المتابعة المعلقة: ${pendingFollowUps}
 المبالغ المتبقية الآجلة: ${totalDebt} ج.م`,
         config: {
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -416,33 +468,52 @@ async function startServer() {
         },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
+      const resultText = response.text || '{}';
+      if (resultText.length > 512 * 1024) throw new Error('AI response exceeds limit');
+      const parsed = JSON.parse(resultText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid AI response');
       return res.json(parsed);
     } catch (err: any) {
-      console.error('Clinical summary error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to generate summary' });
+      console.warn('AI request failed without exposing provider details.');
+      return res.status(502).json({ error: 'تعذّر إكمال التحليل السحابي. يمكنك إدخال البيانات يدويًا أو المحاولة لاحقًا.' });
+    } finally {
+      releaseAiRequest(res);
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Dental Clinic Management System server running on http://0.0.0.0:${PORT}`);
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'المسار غير متاح.' }));
+  app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = error?.type === 'entity.too.large' ? 413 : 400;
+    res.status(status).json({ error: status === 413 ? 'حجم الطلب كبير جدًا. استخدم صورة أقل من ٢ ميجابايت.' : 'بيانات الطلب غير صالحة.' });
   });
+  return app;
 }
 
-startServer();
+export function mountProductionWebsite(app: express.Express, distPath: string): void {
+  // Defense in depth for old/misconfigured builds: source and server artifacts
+  // are never public, even if accidentally copied into the static directory.
+  app.use((req, res, next) => {
+    let pathname: string;
+    try { pathname = decodeURIComponent(req.path); } catch { return void res.sendStatus(400); }
+    if (/\.(?:cjs|map|ts|tsx|json|json5|yaml|yml|pem|key|lock)[ .]*$/i.test(pathname) || /(?:^|\/)(?:\.env(?:\.|$)|server(?:\.|$))/i.test(pathname)) return void res.sendStatus(404);
+    next();
+  });
+  app.use(express.static(distPath, { dotfiles: 'deny', index: 'index.html' }));
+  app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
+}
 
+export async function startServer() {
+  const app = createApiApp();
+  const port = Number(process.env.PORT || 3000);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer } = await import('vite');
+    const vite = await createServer({ server: { middlewareMode: true }, appType: 'spa' });
+    app.use(vite.middlewares);
+  } else {
+    mountProductionWebsite(app, path.resolve(process.cwd(), 'dist'));
+  }
+  // Local development is loopback-only. Deployment must explicitly opt in.
+  const host = process.env.HOST || '127.0.0.1';
+  return app.listen(port, host, () => console.log(`Dental Clinic server: http://${host}:${port} (${process.env.NODE_ENV || 'development'})`));
+}

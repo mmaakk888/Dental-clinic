@@ -7,6 +7,7 @@ import {
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
 import { getHomeSubtitle, getHomeWelcome } from '../../utils/clinicContent';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
+import { canAccessView, canPerformAction } from '../../utils/rbac';
 
 interface HomeViewProps {
   clinicName: string;
@@ -78,18 +79,18 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const today = localDateKey();
-  const permissions = currentUser?.permissions;
-  const canPatients = permissions?.patientView !== false;
-  const canAppointments = permissions?.appointments !== false;
-  const canLab = permissions?.lab !== false;
-  const canFinance = permissions?.summary !== false;
-  const canSettings = permissions?.controlPanel !== false;
-  const canRegisterPayment = canPatients && (permissions?.registerPayment ?? permissions?.patientFinance) !== false;
-  const canWalkIn = canPatients && permissions?.patientEdit !== false && canRegisterPayment;
-  const canViewCollections = (permissions?.viewTodayCollections ?? permissions?.patientFinance) === true;
-  const canViewRemaining = (permissions?.viewRemainingBalance ?? permissions?.patientFinance) === true;
-  const canViewExpenses = canFinance && permissions?.viewExpenses !== false;
-  const canReports = canViewCollections && permissions?.financialReports !== false;
+  const user = currentUser ?? null;
+  const canPatients = canAccessView(user, 'patients');
+  const canAppointments = canAccessView(user, 'appointments');
+  const canLab = canAccessView(user, 'lab');
+  const canFinance = canAccessView(user, 'summary');
+  const canSettings = canAccessView(user, 'settings');
+  const canRegisterPayment = canPatients && canPerformAction(user, 'register_payment');
+  const canWalkIn = canPatients && canPerformAction(user, 'add_patient') && canRegisterPayment;
+  const canViewCollections = canPerformAction(user, 'view_today_collections');
+  const canViewRemaining = canPerformAction(user, 'view_remaining_balance');
+  const canViewExpenses = canFinance && canPerformAction(user, 'view_expenses');
+  const canReports = canViewCollections && canPerformAction(user, 'financial_reports');
   const showActions = !!((canWalkIn && onOpenWalkIn) || (canAppointments && onOpenScheduleModal)
     || canRegisterPayment || (canViewExpenses && onOpenInvoiceModal) || (canReports && onOpenDailyReport));
 

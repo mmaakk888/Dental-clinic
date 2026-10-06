@@ -103,7 +103,8 @@ export const DEFAULT_USERS: User[] = [
     id: 'u1',
     name: 'د. أحمد محمود',
     username: 'dr_ahmed',
-    password: '123',
+    // Local demo fixture only. Production requires authoritative authentication.
+    password: 'pbkdf2-sha256$600000$de5544403a9c9ae58f4ffceb76325870$20a93dfc0fbc579a4d049da7f58b4441def375dfb7cbf7217c428c1078f37fc7',
     email: 'dr.ahmed@clinic.com',
     phone: '01012345678',
     role: 'doctor',
@@ -125,7 +126,8 @@ export const DEFAULT_USERS: User[] = [
     id: 'u2',
     name: 'سارة - الاستقبال',
     username: 'sara_reception',
-    password: '123',
+    // Local demo fixture only. Production requires authoritative authentication.
+    password: 'pbkdf2-sha256$600000$4247a7eaa7a46a03996d20d3b1c861ab$815352fbbab876d12d78ab44a4cd5afd79ac10025d1f1ddf09dd3efa9e73683b',
     email: 'sara@clinic.com',
     phone: '01198765432',
     role: 'secretary',

@@ -6,13 +6,14 @@ import { getPatientFinancialSummary } from '../../utils/financials';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
 import './WhatsAppManagement.css';
 
 interface Props {
   clinicName: string;
   whatsappSettings: WhatsappSettings;
   patients: Patient[];
-  onSaveWhatsappSettings: (settings: WhatsappSettings) => void;
+  onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   appointments?: Appointment[];
   canViewPatientFinance?: boolean;
 }
@@ -44,6 +45,7 @@ const normalizeSearch = (value: string) => value.toLowerCase().replace(/[٠-٩۰
 
 export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
   const { showToast, askConfirm } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
   const [section, setSection] = useState<Section>('templates');
   const [draft, setDraft] = useState<WhatsappSettings>({ ...whatsappSettings });
   const previousSettings = useRef(whatsappSettings);
@@ -91,11 +93,10 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
     updateTemplate(templateText.slice(0, start) + token + templateText.slice(end));
     requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
   };
-  const saveTemplates = (event: React.FormEvent) => {
+  const saveTemplates = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!changed) return;
-    try { onSaveWhatsappSettings({ ...whatsappSettings, templates: draft.templates }); showToast('تم حفظ الرسائل الجاهزة', 'success'); }
-    catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر حفظ الرسائل. حاول مرة أخرى.', 'error'); }
+    await run(async () => { await onSaveWhatsappSettings({ ...whatsappSettings, templates: draft.templates }); showToast('تم حفظ الرسائل الجاهزة', 'success'); });
   };
   const copyText = async (text: string) => {
     try { if (!navigator.clipboard?.writeText) throw new Error(); await navigator.clipboard.writeText(text); showToast('تم نسخ النص؛ لم تُرسل رسالة', 'success'); }
@@ -174,7 +175,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
 
     <div hidden={section !== 'templates'}>
       <form onSubmit={saveTemplates} className={`wa-panel wa-section-content wa-library-panel ${templatePickerOpen ? 'wa-picker-expanded' : ''}`}>
-        <div className="wa-panel-heading"><div><h3>مكتبة الرسائل الجاهزة</h3><p>ابحث عن الرسالة، عدّل النص، وجرّب معاينته دون إرسال.</p></div><button type="submit" className="wa-button wa-button-primary" disabled={!changed}><Save size={17} /> حفظ التعديلات</button></div>
+        <fieldset disabled={saving} className="contents"><div className="wa-panel-heading"><div><h3>مكتبة الرسائل الجاهزة</h3><p>ابحث عن الرسالة، عدّل النص، وجرّب معاينته دون إرسال.</p></div><button type="submit" className="wa-button wa-button-primary" disabled={!changed || saving}><Save size={17} /> {saving ? 'جارٍ الحفظ…' : 'حفظ التعديلات'}</button></div>
         <div className="wa-mobile-template-picker"><div><span>الرسالة الحالية</span><strong>{activeTemplate.title}</strong></div><button type="button" className="wa-button wa-button-secondary" aria-expanded={templatePickerOpen} aria-controls="wa-library-search wa-library-categories wa-library-template-results" onClick={() => setTemplatePickerOpen(open => !open)}>{templatePickerOpen ? <><X size={15} /> إغلاق الاختيار</> : 'تغيير الرسالة'}</button></div>
         <div className="wa-library-toolbar" id="wa-library-search"><div className="wa-search-field"><Search size={18} /><input aria-label="بحث الرسائل الجاهزة" value={templateSearch} onChange={event => setTemplateSearch(event.target.value)} placeholder="ابحث عن رسالة أو استخدام…" />{templateSearch && <button type="button" aria-label="مسح بحث الرسائل" onClick={() => setTemplateSearch('')}><X size={16} /></button>}</div><span className="wa-result-count">{filteredTemplates.length.toLocaleString('ar-EG')} رسائل</span></div>
         <div className="wa-category-filters" id="wa-library-categories" aria-label="تصنيف الرسائل">{categories.map(item => <button type="button" key={item.key} aria-pressed={category === item.key} onClick={() => selectCategory(item.key)}>{item.title}</button>)}</div>
@@ -188,7 +189,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
           </div><div className="wa-preview-workbench"><details className="wa-preview-controls" open><summary>بيانات تجربة المعاينة</summary><label>اسم تجريبي<input value={sampleName} onChange={event => setSampleName(event.target.value)} aria-label="اسم تجريبي للمعاينة" /></label><div className="wa-preview-date-fields"><label>التاريخ<input type="date" value={sampleDate} onChange={event => setSampleDate(event.target.value)} /></label><label>الوقت<input type="time" value={sampleTime} onChange={event => setSampleTime(event.target.value)} /></label></div><p>رقم الملف ٤٠١ والرصيد ٥٠٠ بيانات تجريبية وليست حساب مريض.</p></details>{chatPreview(templatePreview, 'بيانات تجريبية، بدون إرسال')}</div></div>
         </div>
         {changed && <div className="wa-draft-footer"><span>يمكن التنقل بين الرسائل دون فقد التعديلات داخل هذه الصفحة.</span><button type="button" className="wa-button wa-button-plain" onClick={() => askConfirm({ title: 'تجاهل تعديلات الرسائل', message: 'ستعود النصوص إلى آخر نسخة محفوظة. لن تتغير موافقات المرضى.', confirmLabel: 'تجاهل التعديلات', tone: 'warning', onConfirm: () => setDraft(current => ({ ...current, templates: whatsappSettings.templates })) })}>تجاهل التعديلات</button></div>}
-      </form>
+        </fieldset></form>
     </div>
 
     <div hidden={section !== 'individual'} className="wa-panel wa-section-content">
@@ -206,7 +207,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
         </div></div>
     </div>
 
-    <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} settings={draft} clinicName={clinicName} onSave={next => { onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
+    <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} settings={draft} clinicName={clinicName} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
     <div hidden={section !== 'connection'} className="wa-panel wa-section-content"><div className="wa-panel-heading"><div><h3>الربط والقدرات المستقبلية</h3><p>الوضع اليدوي يعمل الآن. الخيارات الآلية تحتاج خدمة خلفية موثوقة قبل تفعيلها.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div><div className="wa-capability-grid">{[
       { title: 'تذكيرات المواعيد', detail: 'جدولة التذكير للمرضى بعد ربط خدمة الإرسال والتحقق من الموافقات.' }, { title: 'حملات مجدولة', detail: 'إرسال منظم مع حد للرسائل وإلغاء الحملة؛ غير متاح في الوضع اليدوي.' }, { title: 'تتبع الرسائل', detail: 'حالات الإرسال والتسليم من ردود الخدمة الفعلية، لا من مجرد فتح واتساب.' }, { title: 'وسائط مرفقة', detail: 'إرسال الصور والمرفقات عبر الخدمة بعد إعداد آمن، ومراجعة المستلم.' },
     ].map(item => <article key={item.title}><LockKeyhole size={20} /><h4>{item.title}</h4><p>{item.detail}</p><span>يتطلب الربط · غير مفعّل</span></article>)}</div><p className="wa-context-note"><Info size={17} /> مفاتيح الاتصال لا تُحفظ داخل واجهة المتصفح. لا يفعّل حفظ الرسائل أي إرسال تلقائي أو اشتراك.</p><button type="button" className="wa-button wa-button-secondary wa-back-to-manual" onClick={() => setSection('individual')}><MessageCircle size={17} /> استخدام الفتح اليدوي الآن</button></div>
