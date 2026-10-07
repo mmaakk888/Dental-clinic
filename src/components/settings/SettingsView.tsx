@@ -3,6 +3,7 @@ import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAle
 import { ThemeSettings, UILabels, User, Patient, ClinicContact, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
+import type { ContactImportInput, ContactImportSummary } from '../../utils/contactTransfer';
 import { IdentityAppearance } from './IdentityAppearance';
 import { ContentLayout } from './ContentLayout';
 import { ServiceCatalogManagement } from './ServiceCatalogManagement';
@@ -117,6 +118,8 @@ interface SettingsViewProps {
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   onSaveContact: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
   onDeleteContact: (original: ClinicContact) => void | Promise<void>;
+  onImportContacts: (rows: ContactImportInput[]) => Promise<ContactImportSummary>;
+  onAuthorizeContactExport: () => void;
   onOpenPatient?: (patientId: string) => void;
   onSaveDrugCatalog: (catalog: DrugCatalogItem[]) => void;
   onImportPatients: (newPatients: Patient[]) => Promise<void>;
@@ -166,6 +169,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaveWhatsappSettings,
   onSaveContact,
   onDeleteContact,
+  onImportContacts,
+  onAuthorizeContactExport,
   onOpenPatient,
   onSaveDrugCatalog,
   onImportPatients,
@@ -684,6 +689,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
             patients={patients} contacts={contacts} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
             onSaveContact={onSaveContact} onDeleteContact={onDeleteContact} onOpenPatient={onOpenPatient}
+            onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport}
             canManageContacts={canManageContacts} initialSection={initialWhatsAppSection}
             onSaveWhatsappSettings={onSaveWhatsappSettings} />
         )}

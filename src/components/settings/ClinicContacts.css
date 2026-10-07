@@ -25,6 +25,10 @@
 .cc-search input { flex: 1; min-width: 0; width: 100%; min-height: 46px; border: 0; background: transparent; font-size: 16px; color: #19352c; }
 .cc-search input::-webkit-search-cancel-button { display: none; }
 .cc-filter select { width: 100%; min-width: 0; min-height: 48px; padding: 9px; border: 1px solid #cbdacf; border-radius: 11px; background: #fff; color: #355d49; font-size: 16px; }
+.cc-transfer-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding-top: 9px; border-top: 1px solid #edf1ee; }
+.cc-transfer-actions > span { color: #7d9183; font-size: 12px; }
+.cc-transfer-actions > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.cc-transfer-actions .cc-button { font-size: 12px; padding-inline: 11px; }
 .cc-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 9px; flex: 0 0 auto; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #5b7c68; cursor: pointer; transition: background 150ms ease; }
 .cc-icon-button:hover:not(:disabled) { background: #edf5ef; }
 .cc-icon-button svg { width: 19px; height: 19px; }
@@ -40,6 +44,10 @@
 .cc-avatar svg { width: 20px; height: 20px; }
 .cc-contact-details { flex: 1; min-width: 0; }
 .cc-contact-details h3 { font-size: 16px; font-weight: 750; line-height: 1.7; overflow-wrap: anywhere; }
+.cc-contact-name { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 8px; min-width: 0; }
+.cc-name-file-badges { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
+.cc-name-file-badges > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 2px 6px; border: 1px solid #d5e7da; border-radius: 6px; background: #f0f8f2; color: #3b6c50; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.cc-name-file-badges svg { flex: 0 0 auto; width: 13px; height: 13px; }
 .cc-contact-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 3px; }
 .cc-phone { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; font-size: 14px; color: #5c7566; }
 .cc-phone svg { width: 14px; height: 14px; flex: 0 0 auto; }

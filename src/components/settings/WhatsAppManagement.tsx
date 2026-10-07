@@ -6,6 +6,7 @@ import { getPatientFinancialSummary } from '../../utils/financials';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
 import { ClinicContacts } from './ClinicContacts';
+import type { ContactImportInput, ContactImportSummary } from '../../utils/contactTransfer';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import './WhatsAppManagement.css';
@@ -19,6 +20,8 @@ interface Props {
   initialSection?: 'templates' | 'campaigns';
   onSaveContact: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
   onDeleteContact: (original: ClinicContact) => void | Promise<void>;
+  onImportContacts?: (rows: ContactImportInput[]) => Promise<ContactImportSummary>;
+  onAuthorizeContactExport?: () => void;
   onOpenPatient?: (patientId: string) => void;
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   appointments?: Appointment[];
@@ -50,7 +53,7 @@ const isDateValid = (value: string) => {
 const isTimeValid = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const normalizeSearch = (value: string) => value.toLowerCase().replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
 
-export function WhatsAppManagement({ clinicName, whatsappSettings, patients, contacts, canManageContacts = false, initialSection = 'templates', onSaveContact, onDeleteContact, onOpenPatient, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
+export function WhatsAppManagement({ clinicName, whatsappSettings, patients, contacts, canManageContacts = false, initialSection = 'templates', onSaveContact, onDeleteContact, onOpenPatient, onImportContacts, onAuthorizeContactExport, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const [section, setSection] = useState<Section>(initialSection);
@@ -215,7 +218,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
         </div></div>
     </div>
 
-    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} /></div>
+    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} onImportContacts={onImportContacts} onAuthorizeExport={onAuthorizeContactExport} /></div>
     <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} contacts={contacts} settings={draft} clinicName={clinicName} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
     <div hidden={section !== 'connection'} className="wa-panel wa-section-content"><div className="wa-panel-heading"><div><h3>الربط والقدرات المستقبلية</h3><p>الوضع اليدوي يعمل الآن. الخيارات الآلية تحتاج خدمة خلفية موثوقة قبل تفعيلها.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div><div className="wa-capability-grid">{[
       { title: 'تذكيرات المواعيد', detail: 'جدولة التذكير للمرضى بعد ربط خدمة الإرسال والتحقق من الموافقات.' }, { title: 'حملات مجدولة', detail: 'إرسال منظم مع حد للرسائل وإلغاء الحملة؛ غير متاح في الوضع اليدوي.' }, { title: 'تتبع الرسائل', detail: 'حالات الإرسال والتسليم من ردود الخدمة الفعلية، لا من مجرد فتح واتساب.' }, { title: 'وسائط مرفقة', detail: 'إرسال الصور والمرفقات عبر الخدمة بعد إعداد آمن، ومراجعة المستلم.' },

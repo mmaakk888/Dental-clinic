@@ -5,6 +5,7 @@ import type { ClinicIdentitySettings, ClinicDomainData } from './utils/storage';
 import { withClinicWriteLock } from './utils/clinicWriteLock';
 import { addWalkInRecord, savePatientRecord, addPatientReceipt, importPatientRecords, canonicalFileNumber } from './utils/clinicMutations';
 import { saveClinicContact, deleteClinicContact } from './utils/clinicContacts';
+import { applyContactImport, type ContactImportInput, type ContactImportSummary } from './utils/contactTransfer';
 import { isLocalClinicHost } from './utils/localRuntime';
 import { assertClinicBackup } from './utils/backupValidation';
 import { authenticateLocalAccount, secureUserAccountsForStorage } from './utils/passwords';
@@ -907,6 +908,18 @@ export function AppContent() {
   const handleDeleteContact = (original: ClinicContact) =>
     commitDomain(['view_patients', 'edit_patient'], data => ({ ...data, contacts: deleteClinicContact(data.contacts, original) }));
 
+  const handleImportContacts = async (rows: ContactImportInput[]): Promise<ContactImportSummary> => {
+    let summary: ContactImportSummary = { addedCount: 0, duplicateCount: 0, invalidCount: 0 };
+    await commitDomain(['view_patients', 'edit_patient'], data => {
+      const result = applyContactImport(data.contacts, rows);
+      summary = { addedCount: result.addedCount, duplicateCount: result.duplicateCount, invalidCount: result.invalidCount };
+      return { ...data, contacts: result.contacts };
+    });
+    return summary;
+  };
+
+  const authorizeContactExport = () => { requireFreshSettingsPermission('view_patients'); };
+
   const openContactPatient = (patientId: string) => {
     try {
       requireFreshSettingsPermission('view_patients');
@@ -1085,6 +1098,7 @@ export function AppContent() {
             canAccessView(currentUser, 'contacts') ? <ClinicContacts contacts={contacts} patients={patients}
               canManageContacts={canPerformAction(currentUser, 'edit_patient')}
               onSave={handleSaveContact} onDelete={handleDeleteContact} onOpenPatient={openContactPatient}
+              onImportContacts={handleImportContacts} onAuthorizeExport={authorizeContactExport}
               onOpenCampaigns={canPerformAction(currentUser, 'access_control_panel') ? openContactCampaigns : undefined} />
               : <PermissionDeniedCard title="جهات الاتصال" onBackToHome={() => handleNavigateWithSubTab('home')} />
           )}
@@ -1231,6 +1245,8 @@ export function AppContent() {
                 onSaveWhatsappSettings={handleSaveWhatsappSettings}
                 onSaveContact={handleSaveContact}
                 onDeleteContact={handleDeleteContact}
+                onImportContacts={handleImportContacts}
+                onAuthorizeContactExport={authorizeContactExport}
                 canManageContacts={canPerformAction(currentUser, 'view_patients') && canPerformAction(currentUser, 'edit_patient')}
                 initialWhatsAppSection={initialWhatsAppSection}
                 onOpenPatient={canPerformAction(currentUser, 'view_patients') ? openContactPatient : undefined}
