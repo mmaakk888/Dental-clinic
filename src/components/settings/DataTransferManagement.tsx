@@ -2,7 +2,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ContactRound, Download, FileSpreadsheet, Search, Upload, Users, X } from 'lucide-react';
 import type { ClinicContact, Patient } from '../../types';
 import type { ContactImportInput, ContactImportSummary } from '../../utils/contactTransfer';
-import { contactMatchesSearch, findPatientsByPhone } from '../../utils/clinicContacts';
+import { createContactSearchEntry, createPhoneDirectoryIndex, findRecordsByPhone, indexedContactMatchesSearch, prepareContactSearchQuery } from '../../utils/clinicContacts';
 import { PATIENT_COLUMNS, downloadPatientSpreadsheet, previewPatientImport, readPatientSpreadsheet, type PatientExportColumns, type PatientImportRow } from '../../utils/patientSpreadsheets';
 import { ContactExportDialog, ContactImportDialog } from './ContactTransferDialog';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
@@ -70,8 +70,12 @@ export function DataTransferManagement({ patients, contacts, canViewPatients, ca
   const { saving, run } = useConfirmedAction(); const mounted = useRef(true), version = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; version.current++; }; }, []);
   useEffect(() => { if (!canViewPatients || dialog === 'patients-import' && !canImportPatients || dialog === 'contacts-import' && !canManageContacts) setDialog(null); }, [canViewPatients, canImportPatients, canManageContacts, dialog]);
-  const contactRows = useMemo(() => contacts.map(contact => ({ ...contact, matches: findPatientsByPhone(patients, contact.mobile) })), [contacts, patients]);
-  const filtered = useMemo(() => contactRows.filter(row => contactMatchesSearch(row, query) && (filter === 'all' || (filter === 'with-file' ? row.matches.length > 0 : !row.matches.length))), [contactRows, query, filter]);
+  const patientPhoneIndex = useMemo(() => createPhoneDirectoryIndex<Patient>(patients), [patients]);
+  const contactRows = useMemo(() => contacts.map(contact => ({ ...contact, search: createContactSearchEntry(contact), matches: findRecordsByPhone<Patient>(patientPhoneIndex, contact.mobile) })), [contacts, patientPhoneIndex]);
+  const filtered = useMemo(() => {
+    const preparedQuery = prepareContactSearchQuery(query);
+    return contactRows.filter(row => indexedContactMatchesSearch(row.search, preparedQuery) && (filter === 'all' || (filter === 'with-file' ? row.matches.length > 0 : !row.matches.length)));
+  }, [contactRows, query, filter]);
   const toExport = (rows: typeof contactRows) => rows.map(row => ({ name: row.name, mobile: row.mobile, notes: row.notes || '', patientIds: row.matches.map(patient => patient.id) }));
   const exportPatients = async (format: 'xlsx' | 'csv') => {
     if (saving || !patients.length) return; const token = ++version.current;

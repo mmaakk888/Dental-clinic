@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPatientMatchScore, normalizeDirectoryDigits, sortDirectoryPatients } from './patientDirectory';
+import { createPatientDirectoryIndex, getPatientMatchScore, normalizeDirectoryDigits, searchPatientDirectory, sortDirectoryPatients } from './patientDirectory';
 
 const patient = (id: string, name = 'مريض تجريبي', mobile = '01012345678') => ({ id, name, mobile });
 
@@ -101,4 +101,41 @@ test('does not mutate input array or patient records and remains stable for equa
   assert.equal(sorted[0], first);
   assert.equal(sorted[1], second);
   assert.equal(sorted[2], last);
+});
+
+test('indexed directory search preserves relevance, selected ordering and filter scope', () => {
+  const records = [patient('4019'), patient('9401'), patient('401'), patient('4012'), patient('8')];
+  const index = createPatientDirectoryIndex(records);
+  assert.deepEqual(searchPatientDirectory(index, '#٤٠١', 'fileAsc').map(record => record.id), ['401', '4012', '4019', '9401']);
+  assert.deepEqual(searchPatientDirectory(index, '#۴۰۱', 'fileDesc', record => record.id !== '4012').map(record => record.id), ['401', '4019', '9401']);
+  assert.deepEqual(searchPatientDirectory(index, 'absent', 'name'), []);
+  assert.deepEqual(searchPatientDirectory(index, '', 'fileAsc').map(record => record.id), ['8', '401', '4012', '4019', '9401']);
+  assert.deepEqual(records.map(record => record.id), ['4019', '9401', '401', '4012', '8']);
+});
+
+test('indexed directory retains literal IDs and shared phones without normalizing source records', () => {
+  const records = Object.freeze([Object.freeze(patient('002', 'أَحْمَـد عَلَى', '٠١٠١٢٣٤٥٦٧٨')),
+    Object.freeze(patient('2', 'إبراهيم', '+201012345678')), Object.freeze(patient('A٢', 'شخص آخر', '01012345679'))]);
+  const index = createPatientDirectoryIndex(records);
+  assert.equal(searchPatientDirectory(index, '#۰۰۲', 'fileAsc')[0], records[0]);
+  assert.deepEqual(searchPatientDirectory(index, 'احمد علي', 'name'), [records[0]]);
+  assert.deepEqual(searchPatientDirectory(index, '+20 1012345678', 'fileAsc'), [records[1], records[0]]);
+  assert.deepEqual(searchPatientDirectory(index, 'abc1234', 'fileAsc'), []);
+  assert.equal(records[0].id, '002');
+  assert.equal(records[0].mobile, '٠١٠١٢٣٤٥٦٧٨');
+});
+
+test('directory index reads record search fields once, never per keystroke or sort comparison', () => {
+  let fieldReads = 0;
+  const records = Array.from({ length: 1000 }, (_, index) => ({
+    get id() { fieldReads++; return String(index); },
+    get name() { fieldReads++; return `أحمد تجريبي ${index}`; },
+    get mobile() { fieldReads++; return '01012345678'; },
+  }));
+  const index = createPatientDirectoryIndex(records);
+  assert.equal(fieldReads, records.length * 3);
+  for (const query of ['', 'احمد', '#١٢', '+201012345678', 'غير موجود']) {
+    for (const sort of ['fileAsc', 'fileDesc', 'name'] as const) searchPatientDirectory(index, query, sort);
+  }
+  assert.equal(fieldReads, records.length * 3);
 });

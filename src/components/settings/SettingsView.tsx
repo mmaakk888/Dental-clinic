@@ -1,28 +1,38 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Check, Trash2, MessageCircle, Pill, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
 import { ThemeSettings, UILabels, User, Patient, ClinicContact, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
 import type { ContactImportInput, ContactImportSummary } from '../../utils/contactTransfer';
-import { IdentityAppearance } from './IdentityAppearance';
-import { ContentLayout } from './ContentLayout';
-import { ServiceCatalogManagement } from './ServiceCatalogManagement';
-import { DrugCatalogManagement } from './DrugCatalogManagement';
-import { UserAccountsManagement } from './UserAccountsManagement';
 import type { ServiceCatalogValues } from '../../utils/serviceCatalog';
 import type { ContentDraft } from '../../utils/clinicContent';
 import type { ClinicIdentitySettings } from '../../utils/storage';
-import { AuditTrailView } from './AuditTrailView';
-import { WhatsAppManagement } from './WhatsAppManagement';
 import { calculateDailyCollections } from '../../utils/financials';
-import { DataTransferManagement } from './DataTransferManagement';
 import type { WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { serializeClinicCsv } from '../../utils/csvExport';
-import { downloadTransferBlob } from '../../utils/patientSpreadsheets';
+import { retainVisitedSettingsSection } from './settingsSectionState';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { assertClinicBackup } from '../../utils/backupValidation';
 import './settingsNavigation.css';
+
+// Editors are loaded when first opened, not together with the settings shell.
+const IdentityAppearance = lazy(() => import('./IdentityAppearance').then(module => ({ default: module.IdentityAppearance })));
+const ContentLayout = lazy(() => import('./ContentLayout').then(module => ({ default: module.ContentLayout })));
+const ServiceCatalogManagement = lazy(() => import('./ServiceCatalogManagement').then(module => ({ default: module.ServiceCatalogManagement })));
+const DrugCatalogManagement = lazy(() => import('./DrugCatalogManagement').then(module => ({ default: module.DrugCatalogManagement })));
+const UserAccountsManagement = lazy(() => import('./UserAccountsManagement').then(module => ({ default: module.UserAccountsManagement })));
+const AuditTrailView = lazy(() => import('./AuditTrailView').then(module => ({ default: module.AuditTrailView })));
+const WhatsAppManagement = lazy(() => import('./WhatsAppManagement').then(module => ({ default: module.WhatsAppManagement })));
+const DataTransferManagement = lazy(() => import('./DataTransferManagement').then(module => ({ default: module.DataTransferManagement })));
+
+function SettingsSectionContent({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<div role="status" aria-live="polite" className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600">جارٍ فتح {label}…</div>}>
+      {children}
+    </Suspense>
+  );
+}
 
 const settingsSections = [
   { key: 'identity', group: 'appearance', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
@@ -193,6 +203,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<SettingsSectionKey>(
     isSettingsSection(externalSubTab) ? externalSubTab : 'identity'
   );
+  const [visitedSections, setVisitedSections] = useState<ReadonlySet<SettingsSectionKey>>(() => new Set([
+    isSettingsSection(externalSubTab) ? externalSubTab : 'identity'
+  ]));
   const selectedSettingsContent = useRef<HTMLDivElement>(null);
   const mobileSettingsAnchor = useRef<HTMLDivElement>(null);
   const mobileSettingsToolbar = useRef<HTMLDivElement>(null);
@@ -202,7 +215,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   useEffect(() => {
     if (externalSubTab) {
-      setActiveSubTab(isSettingsSection(externalSubTab) ? externalSubTab : 'identity');
+      const section = isSettingsSection(externalSubTab) ? externalSubTab : 'identity';
+      setActiveSubTab(section);
+      setVisitedSections(previous => retainVisitedSettingsSection(previous, section));
     }
   }, [externalSubTab]);
 
@@ -238,6 +253,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, []);
 
   const handleSelectSubTab = (tab: SettingsSectionKey) => {
+    setVisitedSections(previous => retainVisitedSettingsSection(previous, tab));
     setActiveSubTab(tab);
     setIsSettingsPickerOpen(false);
     if (onSubTabChange) {
@@ -256,23 +272,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
 
   // Helper for downloading CSV with UTF-8 BOM for Arabic compatibility
-  const downloadCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
+  const downloadCSV = async (filename: string, headers: string[], rows: (string | number)[][]) => {
     const csvContent = serializeClinicCsv(headers, rows);
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const { downloadTransferBlob } = await import('../../utils/patientSpreadsheets');
     downloadTransferBlob(blob, filename, () => onAuthorizeDataExport('financial_report'));
   };
 
   // CSV Export Handlers
 
-  const handleExportFinancialReportCSV = () => {
+  const handleExportFinancialReportCSV = async () => {
     try {
     if (!canExportFinancialReports) throw new Error('التقرير المالي غير متاح لهذا الحساب أو في وضع الخصوصية.');
     onAuthorizeDataExport('financial_report');
     const headers = ['تاريخ الخدمة / الدفعة', 'نوع السجل', 'رقم الملف', 'اسم المريض', 'الخدمة / الملاحظة', 'المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'طريقة الدفع'];
+    const sessionsByPatient = new Map(patients.map(patient => [patient.id, new Map(patient.sessions.map(session => [session.id, session]))]));
     const rows: (string | number)[][] = calculateDailyCollections(patients, () => true).rows.map(row => {
-      const patient = patients.find(p => p.id === row.patientId);
-      const session = patient?.sessions.find(s => s.id === row.sessionId);
+      const session = sessionsByPatient.get(row.patientId)?.get(row.sessionId);
       return [row.date, session ? 'تحصيل على خدمة' : 'دفعة عامة', `'${row.fileNo}`, row.patientName, row.proceduresText,
         session ? Math.max(0, row.totalValue - row.discountAmount) : 0, row.paidAmount, 'نقدي'];
     });
@@ -280,7 +297,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     // Chronological order descending
     rows.sort((a, b) => String(b[0]).localeCompare(String(a[0])));
 
-    downloadCSV(`تقرير_المالية_والتحصيلات_${localDateISO()}.csv`, headers, rows);
+    await downloadCSV(`تقرير_المالية_والتحصيلات_${localDateISO()}.csv`, headers, rows);
     showToast('تم تصدير التقرير المالي الشامل بصيغة CSV بنجاح', 'success');
     } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر تصدير التقرير المالي.', 'error'); }
   };
@@ -501,39 +518,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Selected Settings Content Panel Column */}
         <div ref={selectedSettingsContent} role="region" aria-label={`إعدادات ${activeSettingsSection.label}`} tabIndex={-1} className="settings-content-panel lg:col-span-9 min-w-0">
-        {/* Keep the editor mounted while switching sections so drafts are not lost. */}
-        <div hidden={activeSubTab !== 'identity'}>
-          <IdentityAppearance
-            clinicName={clinicName}
-            clinicLogo={clinicLogo}
-            theme={theme}
-            onSaveIdentity={onSaveIdentity}
-          />
-        </div>
-        <div hidden={activeSubTab !== 'layout'}>
-          <ContentLayout labels={labels} tileOrder={tileOrder} clinicName={clinicName} onSaveContent={onSaveContent} />
-        </div>
-        <div hidden={activeSubTab !== 'services'}>
-          <ServiceCatalogManagement serviceTypes={serviceTypes} crownPrices={crownPrices} canManagePrices={canManagePrices} onSaveServiceCatalog={onSaveServiceCatalog}
-            labs={labs} canViewLabCosts={canViewLabCosts} canManageLabPrices={canManageLabPrices} onSaveLabPricing={onSaveLabPricing} initialPricingLabId={initialPricingLabId} />
-        </div>
-        <div hidden={activeSubTab !== 'drugs'}>
-          <DrugCatalogManagement drugCatalog={drugCatalog} onSaveDrugCatalog={onSaveDrugCatalog} />
-        </div>
-        <div hidden={activeSubTab !== 'users'}>
-          <UserAccountsManagement users={users} currentUser={currentUser} onSaveUsers={onSaveUsers} />
-        </div>
+        {/* Mount draft editors on first visit, then retain them across navigation. */}
+        {visitedSections.has('identity') && <div hidden={activeSubTab !== 'identity'}>
+          <SettingsSectionContent label="الهوية والمظهر">
+            <IdentityAppearance
+              clinicName={clinicName}
+              clinicLogo={clinicLogo}
+              theme={theme}
+              onSaveIdentity={onSaveIdentity}
+            />
+          </SettingsSectionContent>
+        </div>}
+        {visitedSections.has('layout') && <div hidden={activeSubTab !== 'layout'}>
+          <SettingsSectionContent label="المحتوى والترتيب">
+            <ContentLayout labels={labels} tileOrder={tileOrder} clinicName={clinicName} onSaveContent={onSaveContent} />
+          </SettingsSectionContent>
+        </div>}
+        {visitedSections.has('services') && <div hidden={activeSubTab !== 'services'}>
+          <SettingsSectionContent label="الخدمات والأسعار">
+            <ServiceCatalogManagement serviceTypes={serviceTypes} crownPrices={crownPrices} canManagePrices={canManagePrices} onSaveServiceCatalog={onSaveServiceCatalog}
+              labs={labs} canViewLabCosts={canViewLabCosts} canManageLabPrices={canManageLabPrices} onSaveLabPricing={onSaveLabPricing} initialPricingLabId={initialPricingLabId} />
+          </SettingsSectionContent>
+        </div>}
+        {visitedSections.has('drugs') && <div hidden={activeSubTab !== 'drugs'}>
+          <SettingsSectionContent label="فهرس الأدوية">
+            <DrugCatalogManagement drugCatalog={drugCatalog} onSaveDrugCatalog={onSaveDrugCatalog} />
+          </SettingsSectionContent>
+        </div>}
+        {visitedSections.has('users') && <div hidden={activeSubTab !== 'users'}>
+          <SettingsSectionContent label="المستخدمون والصلاحيات">
+            <UserAccountsManagement users={users} currentUser={currentUser} onSaveUsers={onSaveUsers} />
+          </SettingsSectionContent>
+        </div>}
         <div key={activeSubTab} className="settings-section-enter">
 
         {/* WhatsApp Integration SubTab */}
         {activeSubTab === 'whatsapp' && !canViewPatients && <p role="status" className="p-5 text-sm text-slate-600">جهات الاتصال والرسائل تشمل أسماء وأرقام المرضى. يلزم تفعيل صلاحية عرض المرضى مع الوصول للوحة التحكم.</p>}
         {activeSubTab === "whatsapp" && canViewPatients && (
-          <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
-            patients={patients} contacts={contacts} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
-            onSaveContact={onSaveContact} onDeleteContact={onDeleteContact} onOpenPatient={onOpenPatient}
-            onAuthorizeSend={onAuthorizeWhatsappSend}
-            canManageContacts={canManageContacts} initialSection={initialWhatsAppSection}
-            onSaveWhatsappSettings={onSaveWhatsappSettings} />
+          <SettingsSectionContent label="إدارة واتساب">
+            <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
+              patients={patients} contacts={contacts} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
+              onSaveContact={onSaveContact} onDeleteContact={onDeleteContact} onOpenPatient={onOpenPatient}
+              onAuthorizeSend={onAuthorizeWhatsappSend}
+              canManageContacts={canManageContacts} initialSection={initialWhatsAppSection}
+              onSaveWhatsappSettings={onSaveWhatsappSettings} />
+          </SettingsSectionContent>
         )}
 
         {/* Firebase Cloud Backup SubTab */}
@@ -685,11 +714,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Audit Log SubTab */}
         {activeSubTab === 'audit' && (
-          <AuditTrailView />
+          <SettingsSectionContent label="سجل النشاطات">
+            <AuditTrailView />
+          </SettingsSectionContent>
         )}
 
         {/* Patient/contact transfers are grouped here, never in the directory. */}
-        {activeSubTab === 'excel' && <DataTransferManagement patients={patients} contacts={contacts} canViewPatients={canViewPatients} canImportPatients={canImportPatients} canManageContacts={canManageContacts} canExportPatientFinance={canExportPatientFinance} canExportFinancialReports={canExportFinancialReports} onImportPatients={onImportPatients} onAuthorizePatientImport={onAuthorizePatientImport} onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport} onAuthorizeDataExport={onAuthorizeDataExport} onExportFinancialReport={handleExportFinancialReportCSV} />}
+        {activeSubTab === 'excel' && (
+          <SettingsSectionContent label="التصدير والاستيراد">
+            <DataTransferManagement
+              patients={patients} contacts={contacts} canViewPatients={canViewPatients}
+              canImportPatients={canImportPatients} canManageContacts={canManageContacts}
+              canExportPatientFinance={canExportPatientFinance} canExportFinancialReports={canExportFinancialReports}
+              onImportPatients={onImportPatients} onAuthorizePatientImport={onAuthorizePatientImport}
+              onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport}
+              onAuthorizeDataExport={onAuthorizeDataExport} onExportFinancialReport={handleExportFinancialReportCSV}
+            />
+          </SettingsSectionContent>
+        )}
 
         {/* 6. System & Reset SubTab */}
         {activeSubTab === 'system' && !canManageFullBackup && <p role="status" className="p-5 border rounded-2xl text-sm text-slate-600">إعادة ضبط العيادة غير متاحة لهذا الحساب أو في وضع الخصوصية.</p>}

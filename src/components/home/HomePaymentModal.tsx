@@ -1,11 +1,13 @@
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useDeferredValue, useMemo, useState, useRef } from 'react';
 import { Banknote, Search, X } from 'lucide-react';
 import { Patient } from '../../types';
 import { getPatientFinancialSummary } from '../../utils/financials';
-import { normalizePaymentSearch as normalize, paymentSessionRemaining as remainingFor, validateHomePayment } from '../../utils/homePayment';
+import { paymentSessionRemaining as remainingFor, validateHomePayment } from '../../utils/homePayment';
+import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import '../common/ActionDialog.css';
 
 interface Props {
   patients: Patient[];
@@ -15,11 +17,13 @@ interface Props {
   onOpenPatient: (patientId: string) => void;
 }
 
-const money = (value: number) => new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(value) + ' ج.م';
+const amountFormat = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
+const money = (value: number) => amountFormat.format(value) + ' ج.م';
 
 export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onOpenPatient }: Props) {
   const { showToast } = useToastAndConfirm();
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [patientId, setPatientId] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [amount, setAmount] = useState('');
@@ -27,12 +31,10 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
   const savingRef = useRef(false);
   const closeDialog = () => { if (!savingRef.current) onClose(); };
   const dialogRef = useAppointmentDialog(true, closeDialog);
-  const patient = patients.find(item => item.id === patientId);
+  const patient = useMemo(() => patients.find(item => item.id === patientId), [patients, patientId]);
   const sessions = patient?.sessions.filter(item => remainingFor(item) > 0) || [];
-  const results = useMemo(() => {
-    const text = normalize(query);
-    return patients.filter(item => !text || [item.id, item.name, item.mobile || ''].some(value => normalize(value).includes(text))).slice(0, 20);
-  }, [patients, query]);
+  const searchIndex = useMemo(() => buildHomePatientSearch(patients), [patients]);
+  const results = useMemo(() => searchHomePatients(searchIndex, deferredQuery, 20, true), [searchIndex, deferredQuery]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -58,13 +60,14 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
 
   return <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6" dir="rtl">
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="home-payment-title" tabIndex={-1}
-      className="clinic-modal-panel w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-xl space-y-5">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-4">
-        <div className="flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Banknote aria-hidden="true" /></span>
-          <div><h2 id="home-payment-title" className="text-xl font-extrabold text-slate-950">تسجيل دفعة</h2><p className="text-sm text-slate-500">اختَر المريض والخدمة، ثم سجل المبلغ المحصّل.</p></div></div>
-        <button type="button" aria-label="إغلاق تسجيل الدفعة" disabled={saving} onClick={closeDialog} className="grid min-h-[44px] min-w-[44px] place-items-center rounded-xl bg-slate-100 text-slate-600"><X aria-hidden="true" /></button>
+      data-action-tone="emerald" aria-busy={saving}
+      className="clinic-modal-panel clinic-modal-panel--framed clinic-action-dialog w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl flex flex-col">
+      <div className="clinic-action-header">
+        <div className="clinic-action-heading"><span className="clinic-action-symbol"><Banknote aria-hidden="true" /></span>
+          <div><h2 id="home-payment-title">تسجيل دفعة</h2><p>سداد خدمة سابقة، بدون إنشاء زيارة أو رسوم كشف.</p></div></div>
+        <button type="button" aria-label="إغلاق تسجيل الدفعة" disabled={saving} onClick={closeDialog} className="clinic-action-close"><X aria-hidden="true" /></button>
       </div>
-      <form onSubmit={submit} className="space-y-5"><fieldset disabled={saving} className="contents">
+      <form id="home-payment-form" onSubmit={submit} className="min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5"><fieldset disabled={saving} className="contents">
         <div className="space-y-2">
           <label htmlFor="home-payment-search" className="block font-bold text-slate-800">١. المريض</label>
           {patient ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex flex-wrap items-center justify-between gap-3">
@@ -74,7 +77,7 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
             <div className="relative"><Search aria-hidden="true" className="absolute start-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <input id="home-payment-search" data-dialog-autofocus value={query} onChange={event => setQuery(event.target.value)} autoComplete="off"
                 placeholder="رقم الملف أو اسم المريض أو الهاتف" className="w-full min-h-[52px] rounded-xl border border-slate-300 bg-white ps-11 pe-3 text-base" /></div>
-            <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100" aria-busy={query !== deferredQuery}>
               {results.map(item => <button key={item.id} type="button" className="w-full flex items-center gap-3 p-3 text-start hover:bg-slate-50 min-h-[56px]"
                 onClick={() => { setPatientId(item.id); setSessionId(item.sessions.find(session => remainingFor(session) > 0)?.id || ''); setAmount(''); }}>
                 <span className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-700"><bdi>#{item.id}</bdi></span>
@@ -94,15 +97,15 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
             <button type="button" className="mt-2 min-h-[44px] font-bold text-indigo-700" onClick={() => { onOpenPatient(patient.id); onClose(); }}>فتح ملف المريض</button></div>}
         </div>}
         <div className="space-y-2"><label htmlFor="home-payment-amount" className="block font-bold text-slate-800">٣. المبلغ المحصّل الآن (ج.م)</label>
-          <input id="home-payment-amount" type="number" min="0.01" step="0.01" required value={amount} onChange={event => setAmount(event.target.value)} inputMode="decimal" placeholder="0.00"
+          <input id="home-payment-amount" type="number" min="0.01" step="0.01" required disabled={!patient || !sessionId} value={amount} onChange={event => setAmount(event.target.value)} inputMode="decimal" placeholder="0.00"
             className="w-full min-h-[56px] rounded-xl border border-slate-300 bg-white px-4 text-xl font-bold" />
           <p className="text-sm text-slate-500">تحصيل نقدي بتاريخ {localDateISO()}، ويُضاف مرة واحدة إلى حساب المريض وتحصيل اليوم.</p>
         </div>
-        <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 pt-4">
-          <button type="button" onClick={closeDialog} className="min-h-[48px] rounded-xl bg-slate-100 px-5 font-bold text-slate-600">إلغاء</button>
-          <button type="submit" disabled={!patient || !sessionId || saving} className="min-h-[48px] rounded-xl bg-emerald-700 px-5 font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed">{saving ? 'جارٍ التسجيل…' : 'حفظ الدفعة'}</button>
-        </div>
       </fieldset></form>
+      <div className="clinic-action-footer">
+        <button type="button" onClick={closeDialog} disabled={saving} className="clinic-action-cancel">إلغاء وإغلاق</button>
+        <button type="submit" form="home-payment-form" disabled={!patient || !sessionId || saving} className="clinic-action-primary">{saving ? 'جارٍ التسجيل…' : 'حفظ الدفعة'}</button>
+      </div>
     </section>
   </div>;
 }

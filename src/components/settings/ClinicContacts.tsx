@@ -1,7 +1,8 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, BookUser, ChevronLeft, ChevronRight, FileCheck2, Megaphone, Pencil, Phone, Plus, Save, Search, Trash2, UserRound, X } from 'lucide-react';
 import type { ClinicContact, Patient } from '../../types';
-import { contactMatchesSearch, findPatientsByPhone, normalizeContactPhone } from '../../utils/clinicContacts';
+import { createContactSearchEntry, createPhoneDirectoryIndex, findRecordsByPhone, indexedContactMatchesSearch,
+  normalizeContactPhone, prepareContactSearchQuery, type PhoneDirectoryIndex } from '../../utils/clinicContacts';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
@@ -21,17 +22,17 @@ type ContactFilter = 'all' | 'without-file' | 'with-file';
 const PAGE_SIZE = 25;
 const nameCollator = new Intl.Collator('ar-EG', { sensitivity: 'base', numeric: true });
 
-function MatchingFiles({ matches, onOpenPatient }: { matches: Patient[]; onOpenPatient?: (patientId: string) => void }) {
+function MatchingFiles({ matches, onOpenPatient }: { matches: readonly Patient[]; onOpenPatient?: (patientId: string) => void }) {
   return <div className="cc-matching-files">{matches.map(patient => onOpenPatient
     ? <button type="button" className="cc-file-link" key={patient.id} onClick={() => onOpenPatient(patient.id)}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span><ChevronLeft aria-hidden="true" /></button>
     : <span className="cc-file-label" key={patient.id}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span></span>)}</div>;
 }
 
-function ContactName({ name, matches }: { name: string; matches: Patient[] }) {
+function ContactName({ name, matches }: { name: string; matches: readonly Patient[] }) {
   return <div className="cc-contact-name"><h3 dir="auto">{name}</h3>{matches.length > 0 && <div className="cc-name-file-badges" aria-label="أرقام الملفات المسجلة بنفس الموبايل">{matches.map(patient => <span key={patient.id}><FileCheck2 aria-hidden="true" />ملف #{patient.id}</span>)}</div>}</div>;
 }
 
-function ContactEditor({ original, contacts, patients, onSave, onClose, onOpenPatient }: Omit<ClinicContactsProps, 'onDelete'> & { original?: ClinicContact; onClose: () => void }) {
+function ContactEditor({ original, contacts, patientPhoneIndex, onSave, onClose, onOpenPatient }: Omit<ClinicContactsProps, 'onDelete' | 'patients'> & { original?: ClinicContact; patientPhoneIndex: PhoneDirectoryIndex<Patient>; onClose: () => void }) {
   const id = `contact-editor-${useId().replace(/[^\w-]/g, '')}`;
   const { showToast } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -42,11 +43,13 @@ function ContactEditor({ original, contacts, patients, onSave, onClose, onOpenPa
   const [errors, setErrors] = useState<{ name?: string; mobile?: string }>({});
   const [discardPrompt, setDiscardPrompt] = useState(false);
   const changed = draft.name !== (original?.name || '') || draft.mobile !== (original?.mobile || '') || draft.notes !== (original?.notes || '');
-  const currentOriginal = original ? contacts.find(contact => contact.id === original.id) : undefined;
+  const contactPhoneIndex = useMemo(() => createPhoneDirectoryIndex(contacts), [contacts]);
+  const contactsById = useMemo(() => new Map(contacts.map(contact => [contact.id, contact])), [contacts]);
+  const currentOriginal = original ? contactsById.get(original.id) : undefined;
   const conflict = !!original && JSON.stringify(currentOriginal) !== JSON.stringify(original);
   const phone = normalizeContactPhone(draft.mobile);
-  const duplicate = phone ? contacts.find(contact => contact.id !== original?.id && normalizeContactPhone(contact.mobile) === phone) : undefined;
-  const matches = useMemo(() => findPatientsByPhone(patients, draft.mobile), [patients, draft.mobile]);
+  const duplicate = phone ? contactPhoneIndex.get(phone)?.find(contact => contact.id !== original?.id) : undefined;
+  const matches = findRecordsByPhone(patientPhoneIndex, draft.mobile);
   const requestClose = () => {
     if (busy.current) return;
     if (discardPrompt) { setDiscardPrompt(false); return; }
@@ -107,17 +110,22 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [page, setPage] = useState(0);
   const [editor, setEditor] = useState<{ original?: ClinicContact } | null>(null);
-  const rows = useMemo(() => contacts.map(contact => ({ contact, matches: findPatientsByPhone(patients, contact.mobile) })).sort((left, right) => nameCollator.compare(left.contact.name, right.contact.name)), [contacts, patients]);
-  const filtered = useMemo(() => rows.filter(({ contact, matches }) => contactMatchesSearch(contact, query) && (filter === 'all' || (filter === 'with-file' ? matches.length > 0 : matches.length === 0))), [rows, query, filter]);
+  const patientPhoneIndex: PhoneDirectoryIndex<Patient> = useMemo(() => createPhoneDirectoryIndex(patients), [patients]);
+  const rows = useMemo(() => contacts.map(contact => ({ contact, search: createContactSearchEntry(contact), matches: findRecordsByPhone(patientPhoneIndex, contact.mobile) })).sort((left, right) => nameCollator.compare(left.contact.name, right.contact.name)), [contacts, patientPhoneIndex]);
+  const filtered = useMemo(() => {
+    const preparedQuery = prepareContactSearchQuery(deferredQuery);
+    return rows.filter(({ search, matches }) => indexedContactMatchesSearch(search, preparedQuery) && (filter === 'all' || (filter === 'with-file' ? matches.length > 0 : matches.length === 0)));
+  }, [rows, deferredQuery, filter]);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const queryMatches = useMemo(() => findPatientsByPhone(patients, query), [patients, query]);
-  const withFiles = rows.filter(row => row.matches.length).length;
-  useEffect(() => { setPage(0); }, [query, filter]);
+  const queryMatches = findRecordsByPhone(patientPhoneIndex, query);
+  const withFiles = useMemo(() => rows.reduce((count, row) => count + (row.matches.length ? 1 : 0), 0), [rows]);
+  useEffect(() => { setPage(0); }, [deferredQuery, filter]);
   useEffect(() => { if (!canManageContacts) setEditor(null); }, [canManageContacts]);
   const resetFilters = () => { setQuery(''); setFilter('all'); setPage(0); };
   const remove = (contact: ClinicContact) => {
@@ -128,7 +136,7 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   return <section className="clinic-contacts" dir="rtl" aria-labelledby={`${id}-title`}>
     <header className="cc-header"><div><span className="cc-eyebrow">دليل التواصل</span><h2 id={`${id}-title`}>جهات الاتصال</h2><p>اجمع الأسماء والأرقام اللي من غير ملف، وابحث فيها واستخدمها في الحملات.</p></div>{(canManageContacts || onOpenCampaigns) && <div className="cc-header-actions">{onOpenCampaigns && <button type="button" className="cc-button" onClick={onOpenCampaigns}><Megaphone aria-hidden="true" />تجهيز حملة</button>}{canManageContacts && <button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => setEditor({})}><Plus aria-hidden="true" />إضافة جهة اتصال</button>}</div>}</header>
     <div className="cc-scope-note"><BookUser aria-hidden="true" /><p>القائمة دي منفصلة عن ملفات المرضى. لو الرقم له ملف بالفعل هنوضّحه، من غير دمج أو إنشاء ملف تلقائي.</p></div>
-    <section className="cc-directory" aria-label="دليل جهات الاتصال">
+    <section className="cc-directory" aria-label="دليل جهات الاتصال" aria-busy={query !== deferredQuery}>
       <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => setQuery(event.target.value)} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => setQuery('')}><X aria-hidden="true" /></button></div></div><div className="cc-filter"><label htmlFor={`${id}-filter`}>عرض</label><select id={`${id}-filter`} value={filter} onChange={event => setFilter(event.target.value as ContactFilter)}><option value="all">كل جهات الاتصال ({contacts.length})</option><option value="without-file">بدون ملف مطابق ({contacts.length - withFiles})</option><option value="with-file">رقم له ملف ({withFiles})</option></select></div></div>
       {queryMatches.length > 0 && <div className="cc-search-match" role="status"><div className="cc-inline-heading"><FileCheck2 aria-hidden="true" /><strong>الرقم اللي بتبحث عنه له ملف بالفعل</strong></div><MatchingFiles matches={queryMatches} onOpenPatient={onOpenPatient} /><p>تطابق الرقم لا يثبت هوية الشخص؛ بعض الأسر بتستخدم رقمًا واحدًا.</p></div>}
       <div className="cc-results"><p role="status">{query || filter !== 'all' ? `عرض ${filtered.length} من ${contacts.length} جهة اتصال` : `${contacts.length} جهة اتصال`}<span> · مرتبة بالاسم</span></p>{(query || filter !== 'all') && <button type="button" className="cc-button cc-button-quiet" onClick={resetFilters}>عرض الكل</button>}</div>
@@ -136,6 +144,6 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
       {pages > 1 && <nav className="cc-pagination" aria-label="صفحات جهات الاتصال"><button type="button" className="cc-button" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronRight aria-hidden="true" />السابق</button><span aria-live="polite">{currentPage + 1} / {pages}</span><button type="button" className="cc-button" disabled={currentPage === pages - 1} onClick={() => setPage(value => Math.min(pages - 1, value + 1))}>التالي<ChevronLeft aria-hidden="true" /></button></nav>}
     </section>
     <p className="cc-footer-note">الحملات بتجمع جهات الاتصال والمرضى بدون تكرار نفس الرقم، وبشرط وجود موافقة مسجّلة على رسائل الحملات.</p>
-    {canManageContacts && editor && <ContactEditor original={editor.original} contacts={contacts} patients={patients} onSave={onSave} onClose={() => setEditor(null)} onOpenPatient={onOpenPatient ? patientId => { setEditor(null); onOpenPatient(patientId); } : undefined} />}
+    {canManageContacts && editor && <ContactEditor original={editor.original} contacts={contacts} patientPhoneIndex={patientPhoneIndex} onSave={onSave} onClose={() => setEditor(null)} onOpenPatient={onOpenPatient ? patientId => { setEditor(null); onOpenPatient(patientId); } : undefined} />}
   </section>;
 }

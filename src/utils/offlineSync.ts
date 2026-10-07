@@ -1,5 +1,3 @@
-import { Storage } from './storage';
-
 export interface PendingMutation {
   id: string;
   type: 'SAVE_PATIENT' | 'DELETE_PATIENT' | 'SAVE_APPOINTMENT' | 'SAVE_EXPENSE' | 'SAVE_LAB_CASE';
@@ -13,12 +11,32 @@ export interface PendingMutation {
 const MUTATION_QUEUE_KEY = 'dental_clinic_pending_mutations';
 
 const LAST_SYNC_KEY = 'dental_clinic_last_sync_time';
+const STATUS_CHANGED_EVENT = 'dental-clinic-offline-status-changed';
+
+function notifyStatusChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(STATUS_CHANGED_EVENT));
+}
+
+/** React consumers subscribe to actual changes, not recurring storage polling. */
+export function subscribeOfflineSyncStatus(listener: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.storageArea && event.storageArea !== localStorage) return;
+    if (event.key === null || event.key === MUTATION_QUEUE_KEY || event.key === LAST_SYNC_KEY) listener();
+  };
+  window.addEventListener(STATUS_CHANGED_EVENT, listener);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(STATUS_CHANGED_EVENT, listener);
+    window.removeEventListener('storage', onStorage);
+  };
+}
 
 export const OfflineSyncEngine = {
   getQueue(): PendingMutation[] {
     try {
       const raw = localStorage.getItem(MUTATION_QUEUE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -27,6 +45,7 @@ export const OfflineSyncEngine = {
   saveQueue(queue: PendingMutation[]): void {
     try {
       localStorage.setItem(MUTATION_QUEUE_KEY, JSON.stringify(queue));
+      notifyStatusChanged();
     } catch (e) {
       console.error('Failed to save offline mutation queue:', e);
     }
@@ -44,6 +63,7 @@ export const OfflineSyncEngine = {
   saveLastSyncTime(timestamp: number = Date.now()): void {
     try {
       localStorage.setItem(LAST_SYNC_KEY, timestamp.toString());
+      notifyStatusChanged();
     } catch (e) {
       console.error('Failed to save last sync time:', e);
     }
@@ -71,6 +91,7 @@ export const OfflineSyncEngine = {
 
   clearQueue(): void {
     localStorage.removeItem(MUTATION_QUEUE_KEY);
+    notifyStatusChanged();
   },
 
   // Process offline mutations queue

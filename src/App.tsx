@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, LabService, Patient, ClinicContact, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
 import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS, WHATSAPP_SETTINGS_STORAGE_KEY, PRIVACY_MODE_STORAGE_KEY } from './utils/storage';
 import type { ClinicIdentitySettings, ClinicDomainData } from './utils/storage';
@@ -14,6 +14,7 @@ import type { ContentDraft } from './utils/clinicContent';
 import { cloneServiceCatalog, validateServiceCatalog } from './utils/serviceCatalog';
 import type { ServiceCatalogValues } from './utils/serviceCatalog';
 import { getDefaultViewForUser, canAccessView, canPerformAction } from './utils/rbac';
+import { getHomeActionAccess } from './utils/homeActions';
 import type { RBACAction } from './utils/rbac';
 import { canUserLoginNow, matchesSessionIdentity, matchesRememberedSession } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
@@ -269,6 +270,13 @@ export function AppContent() {
   const [isEndoHelperOpen, setIsEndoHelperOpen] = useState(false);
   const [endoToothNumber, setEndoToothNumber] = useState('21');
   const [endoPatientName, setEndoPatientName] = useState('');
+  const homeActionAccess = getHomeActionAccess(currentUser);
+  useEffect(() => {
+    if (!homeActionAccess.walkIn) setIsWalkInModalOpen(false);
+    if (!homeActionAccess.schedule) setIsSmartScheduleOpen(false);
+    if (!homeActionAccess.report) setIsDailyReportModalOpen(false);
+    if (!homeActionAccess.invoice || isPrivacyMode) setIsInvoiceOcrOpen(false);
+  }, [homeActionAccess.walkIn, homeActionAccess.schedule, homeActionAccess.report, homeActionAccess.invoice, isPrivacyMode]);
 
   const handleSaveWalkInVisit = (payload: {
     patient: {
@@ -778,7 +786,7 @@ export function AppContent() {
     setTileOrder(next.tileOrder);
   };
 
-  const refreshCurrentAccount = (latestUsers: User[]) => {
+  const refreshCurrentAccount = useCallback((latestUsers: User[]) => {
     if (currentUser) {
       const match = latestUsers.find(user => matchesSessionIdentity(user, {
         userId: currentUser.id, username: currentUser.username, credentialVersion: currentUser.credentialVersion ?? 1,
@@ -792,9 +800,9 @@ export function AppContent() {
         Storage.saveCurrentUser(safeUser);
       }
     }
-  };
+  }, [currentUser, handleLogout, showToast]);
 
-  const requireFreshSettingsPermission = (action: RBACAction): User[] => {
+  const requireFreshSettingsPermission = useCallback((action: RBACAction): User[] => {
     if (!canPerformAction(currentUser, action)) throw new Error('هذا الحساب لا يملك صلاحية حفظ هذه الإعدادات.');
     const latestUsers = Storage.getUsers();
     const activeSession = Storage.getCurrentUser();
@@ -814,7 +822,33 @@ export function AppContent() {
       throw new Error('تغيّرت صلاحيات هذا الحساب؛ لم تُحفظ الإعدادات.');
     }
     return latestUsers;
-  };
+  }, [currentUser, handleLogout, refreshCurrentAccount]);
+
+  const openHomeAction = useCallback((kind: 'walkIn' | 'schedule' | 'payment' | 'report' | 'invoice') => {
+    const actions: Record<typeof kind, RBACAction[]> = {
+      walkIn: ['view_patients', 'add_patient', 'add_session', 'register_payment'],
+      schedule: ['view_patients', 'manage_appointments'],
+      payment: ['view_patients', 'register_payment'],
+      report: ['view_patients', 'view_today_collections'],
+      invoice: ['view_summary_reports', 'view_expenses'],
+    };
+    try {
+      actions[kind].forEach(requireFreshSettingsPermission);
+      if (kind === 'invoice' && Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل فتح مصروفات العيادة.');
+      if (kind === 'walkIn') setIsWalkInModalOpen(true);
+      if (kind === 'schedule') setIsSmartScheduleOpen(true);
+      if (kind === 'payment') setIsHomePaymentOpen(true);
+      if (kind === 'report') setIsDailyReportModalOpen(true);
+      if (kind === 'invoice') setIsInvoiceOcrOpen(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذّر فتح الإجراء. راجع صلاحيات الحساب.', 'error');
+    }
+  }, [requireFreshSettingsPermission, showToast]);
+  const openHomeWalkIn = useCallback(() => openHomeAction('walkIn'), [openHomeAction]);
+  const openHomeSchedule = useCallback(() => openHomeAction('schedule'), [openHomeAction]);
+  const openHomePayment = useCallback(() => openHomeAction('payment'), [openHomeAction]);
+  const openHomeReport = useCallback(() => openHomeAction('report'), [openHomeAction]);
+  const openHomeInvoice = useCallback(() => openHomeAction('invoice'), [openHomeAction]);
 
   const handleSaveUsers = (newUsers: User[]) => withClinicWriteLock(async () => {
     const latest = requireFreshSettingsPermission('manage_users');
@@ -958,13 +992,13 @@ export function AppContent() {
     setDrugCatalog(Storage.getDrugCatalogFresh());
   };
 
-  const handleTogglePrivacyMode = () => {
+  const handleTogglePrivacyMode = useCallback(() => {
     setIsPrivacyMode(prev => {
       const next = !prev;
       Storage.savePrivacyMode(next);
       return next;
     });
-  };
+  }, []);
 
   const authorizeDataExport = (kind: 'patients' | 'patient_finance' | 'financial_report' | 'full_backup') => {
     requireFreshSettingsPermission('view_patients');
@@ -1013,10 +1047,11 @@ export function AppContent() {
     window.location.reload();
   });
 
-  const activePatient = patients.find(p => p.id === selectedPatientId);
+  const activePatient = useMemo(() => patients.find(p => p.id === selectedPatientId), [patients, selectedPatientId]);
   const now = new Date();
   const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const todayApptCount = appointments.filter(a => a.date === todayISO).length;
+  const todayApptCount = useMemo(() => appointments.filter(a => a.date === todayISO).length, [appointments, todayISO]);
+  const activeLabCount = useMemo(() => labCases.filter(c => c.status !== 'completed').length, [labCases]);
 
   // Gatekeeper: If no authenticated user, show ONLY full-screen login interface
   if (!currentUser) {
@@ -1071,7 +1106,7 @@ export function AppContent() {
               tileOrder={tileOrder}
               patientCount={patients.length}
               todayApptCount={todayApptCount}
-              activeLabCount={labCases.filter(c => c.status !== 'completed').length}
+              activeLabCount={activeLabCount}
               onNavigate={handleNavigateWithSubTab}
               currentUser={currentUser}
               patients={patients}
@@ -1080,11 +1115,11 @@ export function AppContent() {
               isPrivacyMode={isPrivacyMode}
               onSelectPatient={handleSelectPatient}
               onLogout={handleLogout}
-              onOpenWalkIn={() => setIsWalkInModalOpen(true)}
-              onOpenDailyReport={() => setIsDailyReportModalOpen(true)}
-              onOpenScheduleModal={() => setIsSmartScheduleOpen(true)}
-              onOpenInvoiceModal={() => setIsInvoiceOcrOpen(true)}
-              onOpenPayment={() => setIsHomePaymentOpen(true)}
+              onOpenWalkIn={openHomeWalkIn}
+              onOpenDailyReport={openHomeReport}
+              onOpenScheduleModal={openHomeSchedule}
+              onOpenInvoiceModal={openHomeInvoice}
+              onOpenPayment={openHomePayment}
             />
           )}
 
@@ -1314,7 +1349,7 @@ export function AppContent() {
             onOpenPatient={patientId => handleSelectPatient(patientId, 'home')} />
         )}
         {/* Quick Walk-in Visit Modal */}
-        {isWalkInModalOpen && (
+        {isWalkInModalOpen && homeActionAccess.walkIn && (
           <QuickWalkInModal
             isOpen={isWalkInModalOpen}
             onClose={() => setIsWalkInModalOpen(false)}
@@ -1324,7 +1359,7 @@ export function AppContent() {
         )}
 
         {/* Daily Financial & Visit Report Modal */}
-        {isDailyReportModalOpen && (
+        {isDailyReportModalOpen && homeActionAccess.report && (
           <DailyReportModal
             isOpen={isDailyReportModalOpen}
             onClose={() => setIsDailyReportModalOpen(false)}
@@ -1347,7 +1382,7 @@ export function AppContent() {
         )}
 
         {/* AI Smart Schedule & Workload Balancer Modal */}
-        {isSmartScheduleOpen && (
+        {isSmartScheduleOpen && homeActionAccess.schedule && (
           <SmartScheduleModal
             isOpen={isSmartScheduleOpen}
             onClose={() => setIsSmartScheduleOpen(false)}
@@ -1358,7 +1393,7 @@ export function AppContent() {
         )}
 
         {/* AI Invoice OCR Expense Modal */}
-        {isInvoiceOcrOpen && (
+        {isInvoiceOcrOpen && homeActionAccess.invoice && !isPrivacyMode && (
           <InvoiceOcrModal
             isOpen={isInvoiceOcrOpen}
             onClose={() => setIsInvoiceOcrOpen(false)}

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Patient, Appointment, LabCase, Expense, ActiveView, NavigationOrigin } from '../../types';
 import { getPatientFinancialSummary } from '../../utils/financials';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 
 interface GlobalSearchModalProps {
   isOpen: boolean;
@@ -80,20 +81,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   const [category, setCategory] = useState<'all' | 'patients' | 'appointments' | 'lab' | 'expenses'>('all');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useAppointmentDialog(isOpen, onClose);
 
   useEffect(() => {
-    if (isOpen) {
-      document.body.classList.add('modal-open');
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 100);
-    } else {
-      document.body.classList.remove('modal-open');
+    if (!isOpen) {
       setQuery('');
       setSelectedIndex(0);
     }
-    return () => {
-      document.body.classList.remove('modal-open');
-    };
   }, [isOpen]);
 
   // Reset selected index when query or category changes
@@ -213,7 +207,9 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         id="globalSearchModal"
+        role="dialog" aria-modal="true" aria-label="البحث الشامل" tabIndex={-1}
         className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[92dvh] sm:max-h-[90dvh] dir-rtl"
         onClick={e => e.stopPropagation()}
         onKeyDown={handleKeyDown}
@@ -228,6 +224,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           <Search className="w-5 h-5 text-indigo-600 shrink-0" />
           <input
             ref={inputRef}
+            data-dialog-autofocus
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}

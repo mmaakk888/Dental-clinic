@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createApiApp, mountProductionWebsite, ServerOptions } from '../server';
 import { MAX_IMAGE_BYTES, validateAiPayload } from './security';
 
@@ -170,5 +171,37 @@ test('production static server denies accidental server/source artifacts and unk
     const build = readFileSync('scripts/build-server.mjs', 'utf8'); assert.ok(build.includes("outfile: 'build/server.cjs'")); assert.ok(build.includes('sourcemap: false'));
     assert.ok(readFileSync('scripts/start-server.mjs', 'utf8').includes("process.env.NODE_ENV = 'production'"));
     const serverSource = readFileSync('server.ts', 'utf8'); assert.ok(!serverSource.includes("from 'vite'")); assert.ok(serverSource.includes("await import('vite')"));
+  } finally { await f.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('public hashed assets negotiate precompression and cache safely without caching HTML or APIs', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dental-assets-test-'));
+  const f = await fixture({ env: { NODE_ENV: 'production' } });
+  try {
+    await mkdir(path.join(dir, 'assets'));
+    const source = 'console.log("synthetic public build asset");'.repeat(100);
+    const asset = '/assets/app-abcdefgh.js';
+    await writeFile(path.join(dir, asset), source);
+    await writeFile(path.join(dir, asset + '.br'), brotliCompressSync(source));
+    await writeFile(path.join(dir, asset + '.gz'), gzipSync(source));
+    await writeFile(path.join(dir, 'index.html'), '<main>synthetic test</main>');
+    await writeFile(path.join(dir, 'assets', 'plain.js'), source);
+    mountProductionWebsite(f.app, dir);
+    for (const [accepted, expected] of [['br, gzip', 'br'], ['gzip, br;q=0', 'gzip'], ['br;q=0, gzip;q=0, identity', null]]) {
+      const response = await fetch(f.url + asset, { headers: { 'Accept-Encoding': accepted! } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('content-encoding'), expected);
+      assert.match(response.headers.get('content-type')!, /javascript/);
+      assert.match(response.headers.get('cache-control')!, /max-age=31536000.*immutable/);
+      assert.match(response.headers.get('vary')!, /Accept-Encoding/);
+      assert.equal(await response.text(), source);
+    }
+    const head = await fetch(f.url + asset, { method: 'HEAD', headers: { 'Accept-Encoding': 'br' } });
+    assert.equal(head.status, 200); assert.equal(head.headers.get('content-encoding'), 'br');
+    assert.equal(await head.text(), '');
+    for (const uri of ['/', '/index.html', '/patients', '/assets/plain.js']) {
+      assert.equal((await fetch(f.url + uri)).headers.get('cache-control'), 'no-cache');
+    }
+    assert.equal((await f.post()).headers.get('cache-control'), 'no-store');
   } finally { await f.close(); await rm(dir, { recursive: true, force: true }); }
 });

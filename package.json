@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev-server.ts",
-    "build": "vite build && node scripts/build-server.mjs",
+    "build": "vite build && node scripts/build-server.mjs && node scripts/precompress-assets.mjs",
     "start": "node scripts/start-server.mjs",
     "preview": "vite preview",
     "clean": "node scripts/clean-build.mjs",

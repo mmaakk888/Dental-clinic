@@ -29,11 +29,14 @@ import { EmptyState } from '../common/EmptyState';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
-import { normalizeDirectoryDigits, getPatientMatchScore, sortDirectoryPatients, type PatientDirectorySort } from '../../utils/patientDirectory';
+import { createPatientDirectoryIndex, normalizeDirectoryDigits, searchPatientDirectory, type PatientDirectorySort } from '../../utils/patientDirectory';
 import './patientDirectory.css';
 
-const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const clinicDateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' });
+const clinicToday = () => clinicDateFormatter.format(new Date());
 const normalizeDigits = normalizeDirectoryDigits;
+const emptyAppointments: Appointment[] = [];
+const emptyLabCases: LabCase[] = [];
 
 interface PatientsViewProps {
   patients: Patient[];
@@ -76,8 +79,8 @@ const highlightText = (text: string, query: string) => {
 
 export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   patients,
-  appointments = [],
-  labCases = [],
+  appointments = emptyAppointments,
+  labCases = emptyLabCases,
   isPrivacyMode = true,
   currentUser,
   onSelectPatient,
@@ -85,7 +88,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   onDeletePatient,
   onSaveAppointment,
   onOpenContacts
-}) => {
+}: PatientsViewProps) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const canViewRemainingBalance = canPerformAction(currentUser ?? null, 'view_remaining_balance');
@@ -103,7 +106,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
 
-  // Progressive list rendering / Virtualization state for smooth 60FPS scrolling
+  // Bound mounted cards; reveal more explicitly instead of mounting the full directory.
   const [visibleCount, setVisibleCount] = useState(30);
 
   useEffect(() => {
@@ -142,14 +145,14 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   // Auto suggest next file number
   const getNextFileNo = () => {
-    const numericIds = patients
-      .map(p => {
-        const match = normalizeDigits(p.id).match(/^\d+$/);
-        return match ? parseInt(match[0], 10) : NaN;
-      })
-      .filter(n => !isNaN(n));
-    if (numericIds.length === 0) return '101';
-    return (Math.max(...numericIds) + 1).toString();
+    let maximum: number | undefined;
+    for (const patient of patients) {
+      const id = normalizeDigits(patient.id);
+      if (!/^\d+$/.test(id)) continue;
+      const number = Number.parseInt(id, 10);
+      if (maximum === undefined || number > maximum) maximum = number;
+    }
+    return maximum === undefined ? '101' : (maximum + 1).toString();
   };
 
   const handleOpenAddModal = () => {
@@ -305,34 +308,30 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   const todayStr = clinicToday();
 
-  // Compute summaries once per update instead of repeatedly scanning 400+ files.
+  const directoryIndex = useMemo(() => createPatientDirectoryIndex(patients), [patients]);
+
+  // Financial histories depend on patient records, not appointment or lab changes.
+  const patientSummaries = useMemo(() => new Map(patients.map(p => {
+    const totalRemain = getPatientFinancialSummary(p).totalRemaining;
+    const hasAllergy = Boolean(p.allergy && p.allergy.trim());
+    const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
+    const lastSessionDate = (p.sessions || []).reduce<string | undefined>((latest, session) =>
+      session.date && (!latest || session.date > latest) ? session.date : latest, undefined);
+
+    return [p.id, {
+      totalRemain,
+      hasAllergy,
+      hasIncompleteTreatment,
+      lastSessionDate,
+      sessionCount: p.sessions?.length || 0
+    }] as const;
+  })), [patients]);
   const patientMetrics = useMemo(() => {
     const todayPatients = new Set(appointments.filter(a => a.date === todayStr && !['cancelled', 'no_show', 'apologized'].includes(a.status)).flatMap(a => [a.patientId, a.fileNo].filter(Boolean)));
     const labPatients = new Set(labCases.filter(c => c.status !== 'completed').map(c => c.patientId));
-    return new Map(patients.map(p => {
-      const financial = getPatientFinancialSummary(p);
-      const totalRequired = Math.max(0, financial.totalRequired - financial.totalDiscounts);
-      const totalPaid = financial.totalCollected;
-      const totalRemain = financial.totalRemaining;
-      const hasAllergy = Boolean(p.allergy && p.allergy.trim());
-      const hasTodayAppointment = todayPatients.has(p.id);
-      const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
-      const hasLabCase = labPatients.has(p.id);
-      const lastSessionDate = (p.sessions || []).map(session => session.date).filter(Boolean).sort().at(-1);
-
-      return [p.id, {
-        totalRequired,
-        totalPaid,
-        totalRemain,
-        hasAllergy,
-        hasTodayAppointment,
-        hasIncompleteTreatment,
-        hasLabCase,
-        lastSessionDate,
-        sessionCount: p.sessions?.length || 0
-      }] as const;
-    }));
-  }, [patients, appointments, labCases, todayStr]);
+    return new Map(patients.map(patient => [patient.id, { ...patientSummaries.get(patient.id)!,
+      hasTodayAppointment: todayPatients.has(patient.id), hasLabCase: labPatients.has(patient.id) }]));
+  }, [patients, patientSummaries, appointments, labCases, todayStr]);
   const getPatientMetrics = (p: Patient) => patientMetrics.get(p.id)!;
 
   // Compute dynamic counters for all filter chips
@@ -366,27 +365,21 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     };
   }, [patients, patientMetrics]);
 
-  // Filtered and ranked patients with debounced search & filter chip support
+  // Query fields and matching scores are computed once, using the reusable index.
   const filteredPatients = useMemo(() => {
-    const q = deferredSearchQuery.trim();
+    return searchPatientDirectory<Patient>(directoryIndex, deferredSearchQuery.trim(), sortOrder, p => {
+      const metrics = getPatientMetrics(p);
+      if (activeFilter === 'todayAppt' && !metrics.hasTodayAppointment) return false;
+      if (activeFilter === 'ongoing' && !metrics.hasIncompleteTreatment) return false;
+      if (activeFilter === 'debt' && canViewRemainingBalance && metrics.totalRemain <= 0) return false;
+      if (activeFilter === 'allergy' && !metrics.hasAllergy) return false;
+      if (activeFilter === 'lab' && !metrics.hasLabCase) return false;
+      if (activeFilter === 'noAppt' && metrics.hasTodayAppointment) return false;
 
-    const matchingPatients = patients
-      .filter(p => {
-        const metrics = getPatientMetrics(p);
-        if (activeFilter === 'todayAppt' && !metrics.hasTodayAppointment) return false;
-        if (activeFilter === 'ongoing' && !metrics.hasIncompleteTreatment) return false;
-        if (activeFilter === 'debt' && canViewRemainingBalance && metrics.totalRemain <= 0) return false;
-        if (activeFilter === 'allergy' && !metrics.hasAllergy) return false;
-        if (activeFilter === 'lab' && !metrics.hasLabCase) return false;
-        if (activeFilter === 'noAppt' && metrics.hasTodayAppointment) return false;
+      return true;
+    });
+  }, [directoryIndex, deferredSearchQuery, activeFilter, patientMetrics, canViewRemainingBalance, sortOrder]);
 
-        return true;
-      })
-      .filter(p => getPatientMatchScore(p, q) > 0);
-    return sortDirectoryPatients(matchingPatients, q, sortOrder);
-  }, [patients, deferredSearchQuery, activeFilter, patientMetrics, canViewRemainingBalance, sortOrder]);
-
-  const isDoctor = currentUser?.role === 'doctor' || !currentUser?.role;
   const canEditPatient = canPerformAction(currentUser ?? null, 'edit_patient');
   const canBookAppointment = Boolean(onSaveAppointment) && canPerformAction(currentUser ?? null, 'manage_appointments');
   const canDeletePatient = canPerformAction(currentUser ?? null, 'delete_patient');

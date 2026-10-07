@@ -1,16 +1,30 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense, useCallback } from 'react';
 import { ActiveView, Patient, Appointment, LabCase, Expense, User as UserType, DeviceMode, UILabels } from '../../types';
 import { 
   Home, Users, Calendar, Microscope, Landmark, Sliders, Search, Command, 
   Eye, EyeOff, LogOut, Stethoscope, Bell, ChevronDown, CheckCircle2, ArrowRight, X, Shield,
   Wifi, WifiOff, RefreshCw, AlertTriangle, Database, Cloud
 } from 'lucide-react';
-import { GlobalSearchModal } from './GlobalSearchModal';
-import { NotificationCenterModal } from './NotificationCenterModal';
-import { OfflineSyncEngine, PendingMutation } from '../../utils/offlineSync';
+import { useOfflineSyncStatus } from '../../hooks/useOfflineSyncStatus';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { getNavigationLabel } from '../../utils/clinicContent';
 import { canPerformAction, canAccessView } from '../../utils/rbac';
+
+const GlobalSearchModal = lazy(() => import('./GlobalSearchModal').then(module => ({ default: module.GlobalSearchModal })));
+const NotificationCenterModal = lazy(() => import('./NotificationCenterModal').then(module => ({ default: module.NotificationCenterModal })));
+const EMPTY_RECORDS: never[] = [];
+
+function HeaderDialogLoading({ onClose }: { onClose: () => void }) {
+  const dialogRef = useAppointmentDialog(true, onClose);
+  return <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" dir="rtl">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="فتح النافذة" tabIndex={-1}
+      className="clinic-modal-panel w-full max-w-xs bg-white p-5 text-center shadow-xl">
+      <p role="status" className="font-bold text-slate-700">جارٍ فتح النافذة…</p>
+      <button type="button" onClick={onClose} className="mt-4 min-h-[44px] rounded-xl bg-slate-100 px-5 py-2 font-bold text-slate-600">إلغاء وإغلاق</button>
+    </div>
+  </div>;
+}
 
 interface HeaderNavbarProps {
   activeView: ActiveView;
@@ -57,54 +71,25 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
-  
-  // Offline & Sync states
-  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [queue, setQueue] = useState<PendingMutation[]>(() => OfflineSyncEngine.getQueue());
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncTime, setLastSyncTime] = useState<number>(() => OfflineSyncEngine.getLastSyncTime());
+  const [hasOpenedSearch, setHasOpenedSearch] = useState(false);
+  const [hasOpenedNotifications, setHasOpenedNotifications] = useState(false);
+  const { online: isOnline, pending: pendingCount, failed: failedCount } = useOfflineSyncStatus();
+  // Shared cloud mutation transport is not configured; do not simulate syncing.
+  const isSyncing = false;
   const profileRef = useRef<HTMLDivElement>(null);
-
-  // Monitor network status & queue updates
+  const closeSearch = useCallback(() => setIsSearchOpen(false), []);
+  const closeNotifications = useCallback(() => setIsNotifOpen(false), []);
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      triggerSync();
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    const interval = setInterval(() => {
-      setQueue(OfflineSyncEngine.getQueue());
-      setLastSyncTime(OfflineSyncEngine.getLastSyncTime());
-    }, 2000);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      clearInterval(interval);
-    };
-  }, []);
-
-  const triggerSync = async () => {
-    if (!navigator.onLine) return;
-    setIsSyncing(true);
-    await OfflineSyncEngine.processQueue();
-    setIsSyncing(false);
-    setQueue(OfflineSyncEngine.getQueue());
-    setLastSyncTime(OfflineSyncEngine.getLastSyncTime());
-  };
+    if (isSearchOpen) setHasOpenedSearch(true);
+    if (isNotifOpen) setHasOpenedNotifications(true);
+  }, [isSearchOpen, isNotifOpen]);
 
   const canPatientView = canPerformAction(currentUser, 'view_patients');
   const canPatientFinance = canPatientView && canPerformAction(currentUser, 'view_patient_finance') && canPerformAction(currentUser, 'view_remaining_balance') && !isPrivacyMode;
-  const visiblePatients = canPatientView ? patients : [];
-  const visibleAppointments = canAccessView(currentUser, 'appointments') ? appointments : [];
-  const visibleLabCases = canAccessView(currentUser, 'lab') ? labCases : [];
-  const visibleExpenses = canAccessView(currentUser, 'summary') && canPerformAction(currentUser, 'view_expenses') && !isPrivacyMode ? expenses : [];
+  const visiblePatients = canPatientView ? patients : EMPTY_RECORDS;
+  const visibleAppointments = canAccessView(currentUser, 'appointments') ? appointments : EMPTY_RECORDS;
+  const visibleLabCases = canAccessView(currentUser, 'lab') ? labCases : EMPTY_RECORDS;
+  const visibleExpenses = canAccessView(currentUser, 'summary') && canPerformAction(currentUser, 'view_expenses') && !isPrivacyMode ? expenses : EMPTY_RECORDS;
 
   // Notifications calculation
   const { todayApptsCount, overduePatientsCount, pendingLabCount, totalNotifCount } = useMemo(() => {
@@ -150,17 +135,6 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Format sync relative time
-  const getRelativeSyncTime = (timestamp: number) => {
-    const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-    if (diffSec < 10) return 'الآن';
-    if (diffSec < 60) return `منذ ${diffSec} ثانية`;
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `منذ ${diffMin} دقيقة`;
-    const diffHours = Math.floor(diffMin / 60);
-    return `منذ ${diffHours} ساعة`;
-  };
-
   // Role translation
   const getRoleLabel = (role?: string) => {
     switch (role) {
@@ -177,11 +151,6 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
         return 'مستخدم';
     }
   };
-
-  // Navigation Items
-
-  const failedCount = queue.filter(q => q.status === 'failed').length;
-  const pendingCount = queue.filter(q => q.status === 'pending' || q.status === 'syncing').length;
 
   return (
     <>
@@ -605,7 +574,6 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               <button
                 type="button"
                 disabled={true}
-                onClick={triggerSync}
                 className={`w-full p-3.5 rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all active:scale-98 min-h-[48px] shadow-2xs font-tajawal cursor-pointer ${
                   true
                     ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
@@ -626,9 +594,10 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
       )}
 
       {/* Global Search Modal */}
-      <GlobalSearchModal
+      <Suspense fallback={isSearchOpen ? <HeaderDialogLoading onClose={closeSearch} /> : null}>
+      {(isSearchOpen || hasOpenedSearch) && <GlobalSearchModal
         isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
+        onClose={closeSearch}
         patients={visiblePatients}
         appointments={visibleAppointments}
         labCases={visibleLabCases}
@@ -637,18 +606,21 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
         showLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
         onSelectPatient={onSelectPatient}
         onNavigate={onNavigate}
-      />
+      />}
+      </Suspense>
 
       {/* Notification Center Modal */}
-      <NotificationCenterModal
+      <Suspense fallback={isNotifOpen ? <HeaderDialogLoading onClose={closeNotifications} /> : null}>
+      {(isNotifOpen || hasOpenedNotifications) && <NotificationCenterModal
         isOpen={isNotifOpen}
-        onClose={() => setIsNotifOpen(false)}
-        patients={canPatientFinance ? visiblePatients : []}
+        onClose={closeNotifications}
+        patients={canPatientFinance ? visiblePatients : EMPTY_RECORDS}
         appointments={visibleAppointments}
         labCases={visibleLabCases}
         onSelectPatient={onSelectPatient}
         onNavigate={onNavigate}
-      />
+      />}
+      </Suspense>
     </>
   );
 });

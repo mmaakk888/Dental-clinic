@@ -1,6 +1,7 @@
 import express from 'express';
 import 'dotenv/config';
 import path from 'path';
+import { mountStaticAssets } from './server/staticAssets';
 import { createAiSecurity, aiBodyLimit, releaseAiRequest } from './server/security';
 import type { AiSecurityOptions } from './server/security';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -498,8 +499,7 @@ export function mountProductionWebsite(app: express.Express, distPath: string): 
     if (/\.(?:cjs|map|ts|tsx|json|json5|yaml|yml|pem|key|lock)[ .]*$/i.test(pathname) || /(?:^|\/)(?:\.env(?:\.|$)|server(?:\.|$))/i.test(pathname)) return void res.sendStatus(404);
     next();
   });
-  app.use(express.static(distPath, { dotfiles: 'deny', index: 'index.html' }));
-  app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
+  mountStaticAssets(app, distPath);
 }
 
 export async function startServer() {

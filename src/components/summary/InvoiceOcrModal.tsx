@@ -6,6 +6,8 @@ import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { localDateISO, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { assertUniqueSupplierInvoice } from '../../utils/expenseUtils';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import '../common/ActionDialog.css';
 
 interface InvoiceOcrModalProps {
   isOpen: boolean;
@@ -22,7 +24,9 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 }) => {
   const { showToast } = useToastAndConfirm();
   const { saving, run: confirmSave } = useConfirmedAction();
-  const handleClose = () => { if (!saving) onClose(); };
+  const committingRef = useRef(false);
+  const handleClose = () => { if (!committingRef.current) onClose(); };
+  const dialogRef = useAppointmentDialog(isOpen, handleClose);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractedData, setExtractedData] = useState<ExtractedInvoice | null>(null);
@@ -64,6 +68,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   const extractionRequest = useRef(0);
   useEffect(() => {
     if (!isOpen) { extractionRequest.current += 1; setIsExtracting(false); }
+    return () => { extractionRequest.current += 1; };
   }, [isOpen]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -253,7 +258,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   }, [lineItems, existingExpenses]);
 
   const handleSave = async () => {
-    if (saving) return;
+    if (committingRef.current) return;
     if (isExtracting) return showToast('انتظر انتهاء قراءة الصورة أو أدخل الفاتورة بعد توقف القراءة.', 'warning');
     if (!isValidAppointmentDate(invoiceDate)) return showToast('اختر تاريخ فاتورة صحيحًا.', 'warning');
     const finalAmount = typeof totalAmount === 'number' ? totalAmount : itemsSum;
@@ -266,7 +271,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     try { assertUniqueSupplierInvoice(existingExpenses, { title: finalSupplier, supplierName: finalSupplier, invoiceNumber }); }
     catch (error) { return showToast(error instanceof Error ? error.message : 'راجع رقم الفاتورة والمورّد.', 'warning'); }
 
-    await confirmSave(() => onSaveExpense({
+    committingRef.current = true;
+    try { await confirmSave(() => onSaveExpense({
       title: finalSupplier,
       supplierName: finalSupplier,
       supplierPhone: supplierPhone.trim() || undefined,
@@ -302,7 +308,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       ],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    }), onClose);
+    }), onClose); }
+    finally { committingRef.current = false; }
   };
 
   const getConfidenceBadge = (score?: number) => {
@@ -324,20 +331,20 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   if (!isOpen) return null;
   return (
     <div onClick={handleClose} aria-busy={saving} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
-      <div onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="invoice-action-title" tabIndex={-1} dir="rtl" data-action-tone="rose" onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed clinic-action-dialog bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-5xl flex flex-col overflow-hidden">
         
         {/* Header */}
-        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-emerald-950 via-slate-900 to-indigo-950 text-white flex flex-wrap gap-3 items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shadow-inner">
+        <div className="clinic-action-header">
+          <div className="clinic-action-heading">
+            <div className="clinic-action-symbol">
               <Camera className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-base sm:text-lg font-black">إضافة فاتورة مشتريات</h3>
-              <p className="text-xs text-emerald-200/80">ارفع الصورة، ثم راجع الأصناف والمبالغ قبل الحفظ</p>
+              <h3 id="invoice-action-title">إضافة فاتورة مصروف</h3>
+              <p>صورة الفاتورة والأصناف، ثم مراجعة صريحة قبل الحفظ.</p>
             </div>
           </div>
-          <button type="button" disabled={saving} onClick={handleClose} className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer">
+          <button type="button" disabled={saving} onClick={handleClose} aria-label="إلغاء وإغلاق الفاتورة" className="clinic-action-close">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -350,7 +357,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
             <div className="border-2 border-dashed border-emerald-300 hover:border-emerald-500 bg-emerald-50/40 rounded-3xl p-10 text-center transition cursor-pointer relative shadow-xs group">
               <input
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
+                aria-label="التقاط أو رفع صورة الفاتورة"
                 capture="environment"
                 onChange={handleImageUpload}
                 className="absolute inset-0 opacity-0 cursor-pointer"
@@ -360,7 +368,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
               </div>
               <h4 className="text-base font-black text-slate-800">التقاط صورة الفاتورة بكاميرا الجوال أو رفع ملف مستند</h4>
               <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                سيقوم النظام بتحليل جدول الأصناف بالكامل، استخراج اسم الشركة والمورد، الأرقام الضريبية، والخصومات تلقائياً.
+                أرفق الصورة وأدخل البيانات يدويًا. الاستخراج التلقائي يحتاج إعداد خدمة الذكاء الاصطناعي؛ راجع أي نتيجة قبل الحفظ.
               </p>
             </div>
           ) : (
@@ -770,8 +778,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
         </fieldset></div>
 
         {/* Modal Footer */}
-        <div className="shrink-0 p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between">
-          <button type="button" disabled={saving} onClick={handleClose} className="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition cursor-pointer">
+        <div className="clinic-action-footer">
+          <button type="button" disabled={saving} onClick={handleClose} className="clinic-action-cancel">
             إلغاء وإغلاق
           </button>
           {imagePreview && (
@@ -779,7 +787,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
               type="button"
               onClick={handleSave}
               disabled={isExtracting || saving}
-              className="px-6 py-2.5 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-2xl shadow-md transition flex items-center gap-2 cursor-pointer active:scale-95"
+              className="clinic-action-primary"
             >
               <Check className="w-4 h-4" />
               <span>{saving ? 'جارٍ الحفظ…' : 'اعتماد وتأكيد حفظ الفاتورة بالكامل'}</span>

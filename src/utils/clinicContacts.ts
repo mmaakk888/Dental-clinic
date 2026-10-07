@@ -27,17 +27,55 @@ export function normalizeContactSearch(value: string): string {
     .replace(/[أإآٱ]/g, 'ا').replace(/[ىی]/g, 'ي').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-/** Search may use a phone fragment; linking to files still requires a full match. */
-export function contactMatchesSearch(contact: ClinicContact, query: string): boolean {
-  const text = normalizeContactSearch(query);
-  if (!text || normalizeContactSearch(contact.name).includes(text)) return true;
-  const formatted = normalizeDirectoryDigits(query).trim();
-  if (!/^\+?[\d ().-]+$/.test(formatted)) return false;
+export interface ContactSearchEntry {
+  readonly name: string;
+  readonly phone: string;
+  readonly localPhone: string;
+}
+
+export function createContactSearchEntry(contact: Pick<ClinicContact, 'name' | 'mobile'>): ContactSearchEntry {
   const phone = normalizeContactPhone(contact.mobile);
-  const digits = formatted.replace(/\D/g, '');
-  const normalizedQuery = normalizeContactPhone(formatted);
-  return Boolean(phone && digits && (phone.includes(normalizedQuery || digits)
-    || phone.startsWith('201') && `0${phone.slice(2)}`.includes(digits)));
+  return { name: normalizeContactSearch(contact.name), phone, localPhone: phone.startsWith('201') ? `0${phone.slice(2)}` : '' };
+}
+
+/** Normalize a query once before checking a whole list. */
+export function prepareContactSearchQuery(query: string) {
+  const text = normalizeContactSearch(query);
+  const formatted = normalizeDirectoryDigits(query).trim();
+  const digits = /^\+?[\d ().-]+$/.test(formatted) ? formatted.replace(/\D/g, '') : '';
+  return { text, digits, phone: digits ? normalizeContactPhone(formatted) || digits : '' };
+}
+
+/** Search may use a phone fragment; linking to files still requires a full match. */
+export function indexedContactMatchesSearch(entry: ContactSearchEntry, query: ReturnType<typeof prepareContactSearchQuery>): boolean {
+  if (!query.text || entry.name.includes(query.text)) return true;
+  return Boolean(entry.phone && query.digits && (entry.phone.includes(query.phone) || entry.localPhone.includes(query.digits)));
+}
+
+export function contactMatchesSearch(contact: ClinicContact, query: string): boolean {
+  return indexedContactMatchesSearch(createContactSearchEntry(contact), prepareContactSearchQuery(query));
+}
+
+export type PhoneDirectoryIndex<T extends { mobile: string }> = ReadonlyMap<string, readonly T[]>;
+const noPhoneMatches: readonly never[] = Object.freeze([] as never[]);
+
+/** One O(records) pass; retain every file sharing a full canonical family phone. */
+export function createPhoneDirectoryIndex<T extends { mobile: string }>(records: readonly T[]): PhoneDirectoryIndex<T> {
+  const index = new Map<string, T[]>();
+  for (const record of records) {
+    const phone = normalizeContactPhone(record.mobile);
+    if (!phone) continue;
+    const matches = index.get(phone);
+    if (matches) matches.push(record);
+    else index.set(phone, [record]);
+  }
+  return index;
+}
+
+/** Full-number matching only: never match a fragment or a nearby number. */
+export function findRecordsByPhone<T extends { mobile: string }>(index: PhoneDirectoryIndex<T>, phone: string): readonly T[] {
+  const normalized = normalizeContactPhone(phone);
+  return normalized ? index.get(normalized) || noPhoneMatches : noPhoneMatches;
 }
 
 export function findPatientsByPhone(patients: readonly Patient[], phone: string): Patient[] {

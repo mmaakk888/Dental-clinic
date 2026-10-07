@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useDeferredValue, useMemo, useState, useEffect, useRef } from 'react';
 import { Clock, Sparkles, AlertTriangle, CheckCircle2, X } from 'lucide-react';
 import { AiService, ScheduleRecommendation } from '../../services/aiService';
 import { Appointment, Patient } from '../../types';
@@ -7,6 +7,8 @@ import { appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConfl
 import { useAppointmentDialog } from './useAppointmentDialog';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { createAppointmentDraftGuard } from './appointmentDraftGuard';
+import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
+import '../common/ActionDialog.css';
 
 interface SmartScheduleModalProps {
   isOpen: boolean;
@@ -34,6 +36,11 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   onBookAppointment,
 }) => {
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
+  const [patientQuery, setPatientQuery] = useState('');
+  const deferredPatientQuery = useDeferredValue(patientQuery);
+  const patientIndex = useMemo(() => buildHomePatientSearch(patients), [patients]);
+  const patientResults = useMemo(() => searchHomePatients(patientIndex, deferredPatientQuery, 8, true), [patientIndex, deferredPatientQuery]);
+  const selectedPatient = useMemo(() => patients.find(patient => patient.id === selectedPatientId), [patients, selectedPatientId]);
   const [procedureType, setProcedureType] = useState<string>('علاج عصب');
   const [apptDate, setApptDate] = useState<string>(localDateISO());
   const [selectedTime, setSelectedTime] = useState<string>('17:30');
@@ -48,7 +55,13 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   const pendingConfirmationRef = useRef<(() => boolean) | null>(null);
   const timeWasEditedRef = useRef(false);
   const durationMinutes = recommendation?.estimatedMinutes || PROCEDURES.find(procedure => procedure.label === procedureType)?.duration || 30;
-  const draftContext = JSON.stringify([selectedPatientId, patients.find(patient => patient.id === selectedPatientId), procedureType, apptDate, selectedTime, notes, durationMinutes, existingAppointments]);
+  // Immutable dataset identities invalidate pending confirmations without serializing
+  // every appointment and full clinical patient history on each keystroke.
+  const dataRevision = useRef({ patients, appointments: existingAppointments, version: 0 });
+  if (dataRevision.current.patients !== patients || dataRevision.current.appointments !== existingAppointments) {
+    dataRevision.current = { patients, appointments: existingAppointments, version: dataRevision.current.version + 1 };
+  }
+  const draftContext = JSON.stringify([selectedPatientId, procedureType, apptDate, selectedTime, notes, durationMinutes, dataRevision.current.version]);
   draftGuardRef.current.update(isOpen, draftContext);
   const invalidateConfirmation = () => {
     draftGuardRef.current.invalidate();
@@ -87,6 +100,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     setSelectedPatientId('');
+    setPatientQuery('');
     setApptDate(localDateISO());
     setNotes('');
     timeWasEditedRef.current = false;
@@ -192,19 +206,19 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
 
   return (
     <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div id="smart-schedule-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="smart-schedule-title" tabIndex={-1} dir="rtl" className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[92dvh] overflow-hidden flex flex-col">
+      <div id="smart-schedule-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="smart-schedule-title" tabIndex={-1} dir="rtl" data-action-tone="amber" aria-busy={saving} className="clinic-modal-panel clinic-modal-panel--framed clinic-action-dialog bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+        <div className="clinic-action-header">
+          <div className="clinic-action-heading">
+            <div className="clinic-action-symbol">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 id="smart-schedule-title" className="text-base font-bold">حجز موعد بمساعدة الجدول</h3>
-              <p className="text-xs text-indigo-200/80">مدة تقديرية للإجراء وأوقات خالية من التعارض</p>
+              <h3 id="smart-schedule-title">حجز موعد</h3>
+              <p>اختيار ملف ووقت متاح، بدون إضافة خدمة أو دفعة.</p>
             </div>
           </div>
-          <button type="button" disabled={saving} onClick={handleClose} aria-label="إلغاء وإغلاق" className="min-w-[44px] min-h-[44px] shrink-0 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition disabled:opacity-50">
+          <button type="button" disabled={saving} onClick={handleClose} aria-label="إلغاء وإغلاق" className="clinic-action-close">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -213,21 +227,11 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
         <fieldset disabled={saving} className="p-4 sm:p-5 space-y-4 min-w-0 min-h-0 overflow-y-auto">
           {/* Patient select */}
           <div>
-            <label htmlFor="smart-schedule-patient" className="block text-sm font-bold text-slate-700 mb-1">المريض</label>
-            <select
-              id="smart-schedule-patient"
-              data-dialog-autofocus
-              value={selectedPatientId}
-              onChange={e => setSelectedPatientId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">-- اختر المريض من القائمة --</option>
-              {patients.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name} (#{p.id}) - {p.mobile}
-                </option>
-              ))}
-            </select>
+            {selectedPatient ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-center justify-between gap-3 flex-wrap"><div><strong className="block">{selectedPatient.name}</strong><small className="text-slate-600">ملف <bdi>#{selectedPatient.id}</bdi> · <bdi>{selectedPatient.mobile}</bdi></small></div><button type="button" className="clinic-action-cancel" onClick={() => setSelectedPatientId('')}>تغيير المريض</button></div> : <>
+              <label htmlFor="smart-schedule-patient" className="block text-sm font-bold text-slate-700 mb-1">المريض: الاسم أو رقم الملف أو الهاتف</label>
+              <input id="smart-schedule-patient" data-dialog-autofocus value={patientQuery} onChange={event => setPatientQuery(event.target.value)} autoComplete="off" placeholder="ابحث عن ملف المريض" className="w-full px-3 py-2 rounded-xl border border-slate-300" />
+              <div className="walkin-results" aria-busy={patientQuery !== deferredPatientQuery}>{patientResults.map(patient => <button type="button" key={patient.id} onClick={() => setSelectedPatientId(patient.id)}><strong>{patient.name} <bdi>#{patient.id}</bdi></strong><small><bdi>{patient.mobile}</bdi></small></button>)}{!patientResults.length && <p className="p-3 text-sm text-slate-500">لا يوجد ملف مطابق. أضف ملف المريض أولًا من قسم المرضى.</p>}</div>
+            </>}
           </div>
 
           {/* Procedure & Date */}
@@ -278,7 +282,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
             </div>
 
             {isAnalyzing ? (
-              <p className="text-sm text-indigo-700 animate-pulse">جاري مراجعة الأوقات المتاحة...</p>
+              <p className="text-sm text-indigo-700" role="status">جارٍ مراجعة الأوقات المتاحة…</p>
             ) : (
               recommendation && (
                 <div className="space-y-2 text-xs text-slate-700">
@@ -343,15 +347,15 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
         </fieldset>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2 shrink-0">
-          <button type="button" disabled={saving} onClick={handleClose} className="px-4 py-2 min-h-[44px] text-sm font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition disabled:opacity-50">
+        <div className="clinic-action-footer">
+          <button type="button" disabled={saving} onClick={handleClose} className="clinic-action-cancel">
             إلغاء وإغلاق
           </button>
           <button
             type="button"
             disabled={saving}
             onClick={handleSave}
-            className="px-5 py-2 min-h-[44px] text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-md transition flex items-center gap-1.5"
+            className="clinic-action-primary"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>{saving ? 'جارٍ حفظ الموعد…' : 'تأكيد وجدولة الموعد'}</span>

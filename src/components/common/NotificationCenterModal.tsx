@@ -46,6 +46,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   // Dynamically compute notification items
   const notifications = useMemo(() => {
     const list: NotificationItem[] = [];
+    if (!isOpen) return list;
 
     // 1. Today's appointments
     const todayAppts = appointments.filter(a => a.date === todayStr);
@@ -94,7 +95,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     });
 
     return list;
-  }, [patients, appointments, labCases, todayStr, readIds]);
+  }, [isOpen, patients, appointments, labCases, todayStr, readIds]);
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
