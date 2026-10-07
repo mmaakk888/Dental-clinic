@@ -1,0 +1,32 @@
+.data-transfer { min-width: 0; display: grid; gap: 16px; color: #233b31; }
+.dt-header { display: flex; align-items: center; gap: 12px; }
+.dt-header > span { display: grid; place-items: center; width: 45px; height: 45px; flex-shrink: 0; border-radius: 14px; background: #e8f2ec; color: #357157; }
+.dt-header h2 { font-size: 21px; font-weight: 750; }
+.dt-header p, .dt-section p { color: #65796d; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.dt-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 7px; padding: 7px; border: 1px solid #dfe9e2; border-radius: 16px; background: #f4f8f5; }
+.dt-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 8px; border-radius: 11px; font-size: 14px; font-weight: 700; }
+.dt-tabs button[aria-pressed=true] { background: #fff; color: #246b49; box-shadow: 0 2px 6px #234b3010; }
+.dt-tabs svg { width: 18px; height: 18px; flex-shrink: 0; }
+.dt-section { min-width: 0; display: grid; gap: 18px; padding: 22px; background: #fff; border: 1px solid #dfe9e2; border-radius: 20px; }
+.dt-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.dt-section h3 { font-size: 17px; font-weight: 750; }
+.dt-notice { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; background: #f4f8f5; border-radius: 12px; color: #627668; }
+.dt-notice svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 3px; }
+.dt-notice p { font-size: 13px; line-height: 1.9; }
+.dt-columns { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; }
+.dt-columns legend { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.dt-columns label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 9px 11px; background: #f8faf8; border: 1px solid #e4ebe6; border-radius: 10px; font-size: 14px; }
+.dt-columns input { width: 17px; height: 17px; accent-color: #37724f; }
+.dt-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.dt-contact-filters { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
+.dt-contact-filters label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.dt-contact-filters label > div { position: relative; }
+.dt-contact-filters svg { position: absolute; top: 13px; right: 12px; width: 19px; height: 19px; color: #718576; }
+.dt-contact-filters input, .dt-contact-filters select { width: 100%; min-width: 0; min-height: 46px; padding: 10px 12px; border: 1px solid #dce6de; border-radius: 11px; background: #fff; font-size: 16px; font-weight: 400; }
+.dt-contact-filters input { padding-right: 39px; }
+.dt-result { font-size: 13px; }
+.dt-import-details { margin-top: 8px; font-size: 12px; line-height: 1.8; color: #627668; overflow-wrap: anywhere; }
+.dt-import-details summary { min-height: 35px; cursor: pointer; }
+.dt-import-details p { white-space: pre-wrap; }
+.data-transfer button:focus-visible, .data-transfer input:focus-visible, .data-transfer select:focus-visible { outline: 3px solid #82b89b; outline-offset: 2px; }
+@media (max-width: 640px) { .dt-section { padding: 15px; gap: 15px; border-radius: 16px; } .dt-header h2 { font-size: 19px; } .dt-header p { font-size: 13px; } .dt-contact-filters { grid-template-columns: minmax(0, 1fr); } .dt-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dt-tabs button { font-size: 13px; } .dt-section-heading > .cc-button { width: 100%; } .dt-actions .cc-button { flex: 1 1 auto; } .dt-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dt-columns label { font-size: 13px; } }

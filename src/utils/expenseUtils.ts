@@ -20,6 +20,19 @@ export function mergeExpenseUpdate(existing: Expense, update: Partial<Expense>):
   return { ...existing, ...update, id: existing.id };
 }
 
+const invoiceKey = (value: string | undefined) => (value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+
+/** A supplier may reuse another supplier's invoice number, but not its own. */
+export function assertUniqueSupplierInvoice(expenses: readonly Expense[], candidate: Pick<Expense, 'title' | 'invoiceNumber' | 'supplierName'> & { id?: string }): void {
+  const number = invoiceKey(candidate.invoiceNumber);
+  if (!number) return;
+  const supplier = invoiceKey(candidate.supplierName || candidate.title);
+  if (expenses.some(expense => expense.id !== candidate.id && invoiceKey(expense.invoiceNumber) === number
+    && invoiceKey(expense.supplierName || expense.title) === supplier)) {
+    throw new Error('رقم الفاتورة مسجّل بالفعل لهذا المورّد. راجع الفاتورة الموجودة لتجنب تكرار المصروف والمخزون.');
+  }
+}
+
 export function inferExpenseType(expense: Pick<Expense, 'title' | 'category' | 'expenseType'>): ExpenseType {
   if (expense.expenseType) return expense.expenseType;
   const title = expense.title.toLowerCase();

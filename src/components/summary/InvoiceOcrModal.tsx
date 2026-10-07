@@ -5,6 +5,7 @@ import { Expense, ExpenseItem, PriceVarianceAlert } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { localDateISO, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import { useConfirmedAction } from '../common/useConfirmedAction';
+import { assertUniqueSupplierInvoice } from '../../utils/expenseUtils';
 
 interface InvoiceOcrModalProps {
   isOpen: boolean;
@@ -261,9 +262,9 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     if (!Number.isFinite(finalPaid) || finalPaid < 0 || finalPaid > finalAmount) return showToast('المبلغ المسدّد يجب أن يكون بين صفر وإجمالي الفاتورة.', 'warning');
     if ([subtotal, discount, tax].some(value => value !== '' && (!Number.isFinite(value) || value < 0))) return showToast('راجع الإجمالي والخصم والضريبة؛ لا تقبل مبالغ سالبة أو غير صحيحة.', 'warning');
     if (lineItems.some(item => !item.itemName.trim() || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0 || !Number.isFinite(item.total) || item.total < 0)) return showToast('راجع أسماء الأصناف والكميات والأسعار قبل الحفظ.', 'warning');
-    if (invoiceNumber.trim() && supplierName.trim() && existingExpenses.some(expense => expense.invoiceNumber?.trim() === invoiceNumber.trim() && expense.supplierName?.trim() === supplierName.trim())) return showToast('رقم الفاتورة مسجّل بالفعل لهذا المورّد. راجع الفاتورة الموجودة لتجنب تكرار المصروف.', 'warning');
-
     const finalSupplier = supplierName.trim() || title.trim() || 'مورد مستلزمات طبية';
+    try { assertUniqueSupplierInvoice(existingExpenses, { title: finalSupplier, supplierName: finalSupplier, invoiceNumber }); }
+    catch (error) { return showToast(error instanceof Error ? error.message : 'راجع رقم الفاتورة والمورّد.', 'warning'); }
 
     await confirmSave(() => onSaveExpense({
       title: finalSupplier,

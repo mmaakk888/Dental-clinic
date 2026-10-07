@@ -25,10 +25,6 @@
 .cc-search input { flex: 1; min-width: 0; width: 100%; min-height: 46px; border: 0; background: transparent; font-size: 16px; color: #19352c; }
 .cc-search input::-webkit-search-cancel-button { display: none; }
 .cc-filter select { width: 100%; min-width: 0; min-height: 48px; padding: 9px; border: 1px solid #cbdacf; border-radius: 11px; background: #fff; color: #355d49; font-size: 16px; }
-.cc-transfer-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding-top: 9px; border-top: 1px solid #edf1ee; }
-.cc-transfer-actions > span { color: #7d9183; font-size: 12px; }
-.cc-transfer-actions > div { display: flex; flex-wrap: wrap; gap: 7px; }
-.cc-transfer-actions .cc-button { font-size: 12px; padding-inline: 11px; }
 .cc-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 9px; flex: 0 0 auto; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #5b7c68; cursor: pointer; transition: background 150ms ease; }
 .cc-icon-button:hover:not(:disabled) { background: #edf5ef; }
 .cc-icon-button svg { width: 19px; height: 19px; }

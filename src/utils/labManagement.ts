@@ -1,4 +1,4 @@
-import type { Lab, LabCase, LabService } from '../types';
+import type { Lab, LabCase, LabService, Patient } from '../types';
 import { cloneLab, createLabPricingDraft, snapshotLab, validateLabPricingDraft } from './labPricing';
 import { normalizeServiceName } from './serviceCatalog';
 
@@ -22,6 +22,19 @@ export function mergeLabCaseWorkflowUpdate(current: LabCase, incoming: LabCase):
     throw new Error('معرّف حالة المعمل لا يطابق الحالة المطلوب تحديثها.');
   }
   return { ...cloneWorkflowSnapshot(current), status: incoming.status, linkedSessionId: incoming.linkedSessionId };
+}
+
+/** Run against the locked, freshly read domain, not a card's stale props. */
+export function assertLabCaseSessionLink(cases: readonly LabCase[], patients: readonly Patient[], candidate: Pick<LabCase, 'id' | 'patientId' | 'linkedSessionId'>): void {
+  const patient = patients.find(item => item.id === candidate.patientId);
+  if (!patient) throw new Error('ملف المريض المرتبط بحالة المعمل لم يعد موجودًا.');
+  if (!candidate.linkedSessionId) return;
+  if (!patient.sessions.some(session => session.id === candidate.linkedSessionId)) {
+    throw new Error('الخدمة المحددة لم تعد موجودة في ملف المريض. اختر الخدمة مرة أخرى.');
+  }
+  if (cases.some(item => item.id !== candidate.id && item.patientId === candidate.patientId && item.linkedSessionId === candidate.linkedSessionId)) {
+    throw new Error('الخدمة مرتبطة بالفعل بحالة معمل أخرى. راجع الحالة الموجودة قبل الحفظ.');
+  }
 }
 
 const conflictMessage = 'بيانات هذا المعمل تغيّرت منذ فتح التعديل. أعد تحميل بياناته قبل الحفظ.';

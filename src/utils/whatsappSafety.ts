@@ -1,4 +1,5 @@
-import { cleanEgyptianPhone, fillMessageTemplate } from './whatsappUtils';
+import type { WhatsappSettings } from '../types';
+import { cleanEgyptianPhone, extraMessageTemplates, fillMessageTemplate } from './whatsappUtils';
 
 interface MessageSafetyInput {
   templateName: string;
@@ -31,7 +32,54 @@ export function prepareSafeWhatsAppMessage(input: MessageSafetyInput) {
   const requiresConsent = isCampaign || input.templateName === 'greeting' || input.templateName === 'offer';
   const consentAllowed = !requiresConsent || input.campaignConsent?.[cleanEgyptianPhone(input.phone)] === 'allowed';
   const unfinished = /\[[^\]]+\]/.test(message) || templateTokens(message).length > 0;
-  return { message, financeAllowed, consentAllowed, unsupportedVariables, unfinished };
+  return { message, requestsFinance, financeAllowed, consentAllowed, unsupportedVariables, unfinished };
+}
+
+export interface WhatsAppSendAuthorization {
+  isCampaign: boolean;
+  requiresFinance: boolean;
+}
+
+export function getWhatsAppDraftTemplate(templateName: string, settings: WhatsappSettings, campaignMessage?: string) {
+  const stored = campaignMessage ?? settings.templates[templateName as keyof typeof settings.templates]
+    ?? extraMessageTemplates[templateName as keyof typeof extraMessageTemplates]?.text ?? '';
+  return templateName === 'reminderTomorrow' ? stored.replace('غداً {date}', 'يوم {date}') : stored;
+}
+
+interface WhatsAppActionInput extends MessageSafetyInput {
+  link: string;
+  appointmentReady: boolean;
+}
+
+/** Run synchronously at the open/share click, never from a rendered `ready` snapshot. */
+export function prepareFreshWhatsAppAction(
+  input: WhatsAppActionInput,
+  readSettings: () => WhatsappSettings,
+  authorize?: (request: WhatsAppSendAuthorization) => void,
+) {
+  if (!authorize) throw new Error('تعذّر التحقق من صلاحية فتح واتساب. أعد فتح الرسالة وحاول مرة أخرى.');
+  const latest = readSettings();
+  if (!input.isCampaign && getWhatsAppDraftTemplate(input.templateName, latest) !== input.rawTemplate) {
+    throw new Error('تغيّر قالب الرسالة في تبويب آخر. أعد فتح الرسالة وراجع النص المحدّث قبل المتابعة.');
+  }
+  const safety = prepareSafeWhatsAppMessage({ ...input, campaignConsent: latest.campaignConsent });
+  const phone = cleanEgyptianPhone(input.phone);
+  const link = input.link.trim();
+  const text = safety.message + (link ? `\n${link}` : '');
+  if (!/^[1-9]\d{7,14}$/.test(phone)) throw new Error('راجع رقم هاتف المستلم.');
+  if (!input.appointmentReady) throw new Error('حدد تاريخ الموعد ووقته.');
+  if (!safety.financeAllowed) throw new Error('هذه الرسالة تحتاج صلاحية الاطلاع على حساب المريض، ولا تُستخدم بيانات الحساب في الحملات.');
+  if (!safety.consentAllowed) throw new Error('موافقة صاحب الرقم على رسائل الحملات غير متاحة في أحدث الإعدادات. راجع الموافقة قبل المتابعة.');
+  if (safety.unfinished || safety.unsupportedVariables.length || /\[[^\]]+\]|\{[^{}]+\}/.test(text) || !safety.message.trim()) {
+    throw new Error('راجع نص الرسالة وأكمل المتغيرات والأقواس قبل فتح واتساب.');
+  }
+  if (link) {
+    let valid = false;
+    try { const url = new URL(link); valid = ['https:', 'http:'].includes(url.protocol) && Boolean(url.hostname) && !/\s/.test(link); } catch { /* Invalid links are rejected below. */ }
+    if (!valid) throw new Error('اكتب رابطاً كاملاً يبدأ بـ https://');
+  }
+  authorize({ isCampaign: input.isCampaign === true, requiresFinance: safety.requestsFinance });
+  return { phone, text };
 }
 
 export function whatsAppComposerContextKey(patientId: string, phone: string, canViewPatientFinance = false, campaignTemplate?: string) {

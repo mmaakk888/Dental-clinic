@@ -23,6 +23,7 @@ import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBa
 import { buildAppointmentReminderText, cleanEgyptianPhone, getWhatsAppUrl as formatWhatsAppUrl } from '../../utils/whatsappUtils';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
 import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
+import { getPatientCollectionPresentation, getPatientSessionReceiptLimit } from '../../utils/patientCollection';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import '../patients/patientDirectory.css';
 
@@ -54,11 +55,12 @@ interface PatientFileViewProps {
   drugCatalog?: DrugCatalogItem[];
   onSaveSession: (patientId: string, session: Omit<Session, 'id'>) => void | Promise<void>;
   onAddPaymentInstallment: (patientId: string, sessionId: string, installment: { amount: number; date: string }) => void | Promise<void>;
-  onUpdatePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>) => void | Promise<void>;
+  onUpdatePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, baseline?: Patient) => void | Promise<void>;
   onDeletePatient: (patientId: string) => void | Promise<void>;
-  onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
+  onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }, baseline?: Appointment) => void | Promise<void>;
   onUpdateApptStatus?: (apptId: string, status: AppointmentStatus) => void | Promise<void>;
   onDeleteAppointment?: (apptId: string) => void | Promise<void>;
+  onAuthorizeWhatsappSend?: (request: { isCampaign: boolean; requiresFinance: boolean }) => void;
   onBack: () => void;
 }
 
@@ -95,6 +97,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   onSaveAppointment,
   onUpdateApptStatus,
   onDeleteAppointment,
+  onAuthorizeWhatsappSend,
   onBack
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
@@ -105,6 +108,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const canUseRx = capabilities?.rx === true;
   const canUseWhatsApp = capabilities?.whatsapp === true;
   const canViewRemainingBalance = capabilities?.viewRemainingBalance === true;
+  const canRevealRemainingBalance = canViewRemainingBalance && !isPrivacyMode;
 
   // Primary Active Tab State
   const [activeTab, setActiveTab] = useState<'chart' | 'sessions' | 'appointments' | 'finance' | 'prescription' | 'info'>('chart');
@@ -232,6 +236,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [editAllergy, setEditAllergy] = useState(patient.allergy || '');
   const [showEditMedicalField, setShowEditMedicalField] = useState(false);
   const [editNotes, setEditNotes] = useState(patient.notes || '');
+  const [editPatientBaseline, setEditPatientBaseline] = useState<Patient | undefined>(undefined);
 
   const handleOpenEditPatient = () => {
     if (!canEditPatients) return;
@@ -242,6 +247,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     setEditAllergy(patient.allergy || '');
     setShowEditMedicalField(false);
     setEditNotes(patient.notes || '');
+    setEditPatientBaseline(patient);
     setIsEditPatientModalOpen(true);
   };
 
@@ -271,7 +277,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       firstVisit: patient.firstVisit,
       notes: editNotes.trim(),
       allergy: editAllergy.trim()
-    });
+    }, editPatientBaseline);
     setIsEditPatientModalOpen(false);
     showToast('تم تحديث بيانات ملف المريض بنجاح', 'success');
     });
@@ -333,7 +339,6 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     }
 
     const appointment: Omit<Appointment, 'id'> & { id?: string } = {
-      ...(editingAppt || {}),
       id: editingAppt ? editingAppt.id : undefined,
       patientId: patient.id,
       fileNo: patient.id,
@@ -352,7 +357,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
     const saveAppointment = async () => {
       try {
-        await run(async () => { await onSaveAppointment(appointment);
+        await run(async () => { await onSaveAppointment(appointment, editingAppt ?? undefined);
         setIsApptModalOpen(false);
         showToast(editingAppt ? 'تم تعديل الموعد بنجاح' : 'تم إضافة الموعد بنجاح لملف المريض', 'success');
         });
@@ -384,7 +389,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   // Payment Installment Form State
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
+  const [isPaymentAmountDefault, setIsPaymentAmountDefault] = useState(false);
   const [paymentDate, setPaymentDate] = useState<string>(clinicToday());
+  const paymentSession = patient.sessions.find(session => session.id === selectedSessionForPayment?.id);
+  const paymentPresentation = getPatientCollectionPresentation(patient, paymentSession, canRevealRemainingBalance);
+
+  useEffect(() => {
+    if (!canRevealRemainingBalance && isPaymentAmountDefault) {
+      setPaymentAmount('');
+      setIsPaymentAmountDefault(false);
+    }
+  }, [canRevealRemainingBalance, isPaymentAmountDefault]);
 
   // Open Tooth Quick Service Bottom Sheet when a tooth is tapped on ToothChart
   const handleOpenToothSheet = (compositeToothId: string) => {
@@ -427,15 +442,12 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   const handleOpenPaymentModal = (session?: Session) => {
     if (!canRegisterPayment) return;
-    if (session) {
-      setSelectedSessionForPayment(session);
-      setPaymentAmount(sessionBalance(session));
-    } else {
-      // Find first session with remaining balance, or default to overall remaining
-      const sessWithBal = patient.sessions.find(s => sessionBalance(s) > 0);
-      setSelectedSessionForPayment(sessWithBal || (patient.sessions[0] || null));
-      setPaymentAmount(sessWithBal ? sessionBalance(sessWithBal) : totalRemain);
-    }
+    const selectedSession = session
+      ? patient.sessions.find(item => item.id === session.id)
+      : patient.sessions.find(item => getPatientSessionReceiptLimit(patient, item) > 0) ?? patient.sessions[0];
+    setSelectedSessionForPayment(selectedSession ?? null);
+    setPaymentAmount(getPatientCollectionPresentation(patient, selectedSession, canRevealRemainingBalance).initialAmount);
+    setIsPaymentAmountDefault(canRevealRemainingBalance);
     setPaymentDate(clinicToday());
     setIsPaymentModalOpen(true);
   };
@@ -490,8 +502,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       validationFail(modalId, 'input-paid-now', 'المبلغ المدفوع أكبر من إجمالي الزيارة');
       return;
     }
-    if (!serviceDate) {
-      validationFail(modalId, 'input-service-date', 'حدد تاريخ الخدمة');
+    if (!isValidAppointmentDate(serviceDate)) {
+      validationFail(modalId, 'input-service-date', 'حدد تاريخًا صحيحًا للخدمة');
       return;
     }
 
@@ -534,7 +546,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       return;
     }
 
-    const amt = typeof paymentAmount === 'number' ? paymentAmount : 0;
+    const amt = !canRevealRemainingBalance && isPaymentAmountDefault ? 0 : typeof paymentAmount === 'number' ? paymentAmount : 0;
     if (!Number.isFinite(amt) || amt <= 0) {
       validationFail('paymentModal', 'input-payment-amount', 'يرجى كتابة مبلغ تحصيل صحيح');
       return;
@@ -545,13 +557,13 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       showToast('لم تعد هذه الخدمة موجودة. أغلق النافذة وراجع ملف المريض.', 'warning');
       return;
     }
-    const remaining = sessionBalance(currentSession);
+    const remaining = getPatientSessionReceiptLimit(patient, currentSession);
     if (amt > remaining) {
-      validationFail('paymentModal', 'input-payment-amount', canViewRemainingBalance && !isPrivacyMode ? `المبلغ أكبر من المتبقي (${remaining} ج.م)` : 'المبلغ أكبر من الرصيد المتبقي لهذه الخدمة');
+      validationFail('paymentModal', 'input-payment-amount', canRevealRemainingBalance ? `المبلغ أكبر من المستحق الحالي القابل للتحصيل (${remaining} ج.م)` : 'المبلغ أكبر من المستحق الحالي للمريض أو لهذه الخدمة');
       return;
     }
-    if (!paymentDate) {
-      validationFail('paymentModal', 'input-payment-date', 'حدد تاريخ التحصيل');
+    if (!isValidAppointmentDate(paymentDate)) {
+      validationFail('paymentModal', 'input-payment-date', 'حدد تاريخًا صحيحًا للتحصيل');
       return;
     }
 
@@ -681,7 +693,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   return (
     <div className="space-y-4 pb-28 font-tajawal antialiased text-slate-800">
-      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={!isPrivacyMode && canViewRemainingBalance} onClose={() => setIsWhatsAppOpen(false)} />}
+      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={canRevealRemainingBalance} onAuthorizeSend={onAuthorizeWhatsappSend} onClose={() => setIsWhatsAppOpen(false)} />}
 
       {/* 1. Header & Profile Redesign (Mobile First, Desktop Grid) */}
       <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-sm space-y-4">
@@ -1478,7 +1490,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               </div>
 
               {/* Progress Bar */}
-              <div className="space-y-1">
+              {canRevealRemainingBalance && <div className="space-y-1">
                 <div className="flex justify-between text-xs font-bold text-slate-700">
                   <span>نسبة تحصيل المبالغ: {paidPercentage}%</span>
                   <span>{maskMoney(totalPaid)} من {maskMoney(totalRequired)}</span>
@@ -1489,7 +1501,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                     style={{ width: `${paidPercentage}%` }}
                   />
                 </div>
-              </div>
+              </div>}
 
               {/* View Details Toggle Button */}
               <div className="pt-2">
@@ -1669,7 +1681,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
               <button
                 type="button"
-                onClick={() => setToothSheetId(null)}
+                disabled={saving} onClick={() => { if (!saving) setToothSheetId(null); }}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
                 ✕
@@ -1921,14 +1933,15 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                     const sess = patient.sessions.find(s => s.id === e.target.value);
                     if (sess) {
                       setSelectedSessionForPayment(sess);
-                      setPaymentAmount(sessionBalance(sess));
+                      setPaymentAmount(getPatientCollectionPresentation(patient, sess, canRevealRemainingBalance).initialAmount);
+                      setIsPaymentAmountDefault(canRevealRemainingBalance);
                     }
                   }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0f3d3e]"
                 >
                   {patient.sessions.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.type} ({s.toothLabel || 'عام'}){canViewRemainingBalance ? ` — المتبقي: ${sessionBalance(s)} ج.م` : ''}
+                      {s.type} ({s.toothLabel || 'عام'}){getPatientCollectionPresentation(patient, s, canRevealRemainingBalance).optionSuffix}
                     </option>
                   ))}
                 </select>
@@ -1942,9 +1955,13 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   id="input-payment-amount"
                   type="number"
                   min="0.01"
+                  max={paymentPresentation.maxAmount}
                   step="0.01"
-                  value={paymentAmount}
-                  onChange={e => setPaymentAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                  value={!canRevealRemainingBalance && isPaymentAmountDefault ? '' : paymentAmount}
+                  onChange={e => {
+                    setPaymentAmount(e.target.value === '' ? '' : parseFloat(e.target.value));
+                    setIsPaymentAmountDefault(false);
+                  }}
                   placeholder="أدخل مبلغ التحصيل"
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:outline-none focus:border-[#0f3d3e]"
                 />

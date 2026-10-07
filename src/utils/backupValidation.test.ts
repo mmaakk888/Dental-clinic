@@ -80,6 +80,48 @@ test('partial legacy backups keep omitted sections absent and validate retained-
   assert.equal(validateClinicBackup({ patients: [] }, { appointments: INITIAL_APPOINTMENTS }).valid, false);
 });
 
+test('partial patient restores check retained legacy appointments linked only by fileNo', () => {
+  const patient: any = { id: '401', name: 'مريض اختبار', mobile: '', age: 30, sessions: [], payments: [] };
+  const appointment: any = { id: 'legacy-appointment', fileNo: '401', patientName: 'مريض اختبار', mobile: '', date: '2026-10-07', time: '17:30',
+    note: '', status: 'scheduled', isFollowUp: false, isWalkIn: false };
+  assert.equal(validateClinicBackup({ patients: [] }, { appointments: [appointment] }).valid, false);
+  const retained = assertClinicBackup({ patients: [patient] }, { appointments: [appointment] });
+  assert.equal(retained.patients?.[0].id, '401');
+  assert.equal('appointments' in retained, false);
+  assert.equal('patientId' in appointment, false);
+});
+
+test('backup patient IDs reject canonical Arabic and Persian collisions without rewriting identities', () => {
+  const patient: any = { id: '401', name: 'مريض اختبار', mobile: '', age: 30 };
+  for (const id of ['٤٠١', '۴۰۱', ' 401 ']) {
+    assert.equal(validateClinicBackup({ patients: [patient, { ...patient, id }] }).valid, false);
+  }
+  const single = assertClinicBackup({ patients: [{ ...patient, id: '٤٠١' }] });
+  assert.equal(single.patients?.[0].id, '٤٠١');
+  const leadingZero = assertClinicBackup({ patients: [{ ...patient, id: '001' }, { ...patient, id: '1' }] });
+  assert.deepEqual(leadingZero.patients?.map(row => row.id), ['001', '1']);
+});
+
+test('legacy references resolve exact IDs first, and canonical IDs only when unique', () => {
+  const patient: any = { id: '401', name: 'مريض اختبار', mobile: '', age: 30, sessions: [], payments: [] };
+  const appointment: any = { id: 'legacy-appointment', fileNo: '٤٠١', patientName: 'مريض اختبار', mobile: '', date: '2026-10-07', time: '17:30',
+    note: '', status: 'scheduled', isFollowUp: false, isWalkIn: false };
+  assert.equal(validateClinicBackup({ clinicName: 'عيادة اختبار' }, { patients: [patient], appointments: [appointment] }).valid, true);
+  const legacyPatients = [patient, { ...patient, id: '٤٠١' }];
+  assert.equal(validateClinicBackup({ clinicName: 'عيادة اختبار' }, { patients: legacyPatients, appointments: [appointment] }).valid, true);
+  assert.equal(validateClinicBackup({ clinicName: 'عيادة اختبار' }, { patients: legacyPatients, appointments: [{ ...appointment, fileNo: '۴۰۱' }] }).valid, false);
+  assert.equal(validateClinicBackup({ clinicName: 'عيادة اختبار' }, { patients: [{ ...patient, id: '001' }], appointments: [{ ...appointment, fileNo: '1' }] }).valid, false);
+});
+
+test('canonical lab references cannot associate two cases with the same retained session', () => {
+  const input = fixtures();
+  const linked = { ...input.labCases[0], linkedSessionId: input.patients[0].sessions[0].id };
+  const arabicId = linked.patientId.replace(/\d/g, digit => '٠١٢٣٤٥٦٧٨٩'[Number(digit)]);
+  const alternate = { ...linked, id: 'second-lab-case', patientId: arabicId, fileNo: arabicId };
+  input.labCases = [linked, alternate];
+  assert.equal(validateClinicBackup(input).valid, false);
+});
+
 test('validation safely defaults absent optional legacy fields but refuses explicit invalid types', () => {
   const input: any = { patients: [{ id: '1', name: 'مريض اختبار', age: 25, firstVisit: '' }] };
   const value = assertClinicBackup(input);

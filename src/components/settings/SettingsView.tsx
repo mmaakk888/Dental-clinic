@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, MessageCircle, Pill, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
+import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Check, Trash2, MessageCircle, Pill, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
 import { ThemeSettings, UILabels, User, Patient, ClinicContact, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
@@ -14,9 +14,13 @@ import type { ContentDraft } from '../../utils/clinicContent';
 import type { ClinicIdentitySettings } from '../../utils/storage';
 import { AuditTrailView } from './AuditTrailView';
 import { WhatsAppManagement } from './WhatsAppManagement';
-import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
+import { calculateDailyCollections } from '../../utils/financials';
+import { DataTransferManagement } from './DataTransferManagement';
+import type { WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { serializeClinicCsv } from '../../utils/csvExport';
+import { downloadTransferBlob } from '../../utils/patientSpreadsheets';
+import { localDateISO } from '../appointments/appointmentScheduling';
 import { assertClinicBackup } from '../../utils/backupValidation';
 import './settingsNavigation.css';
 
@@ -29,7 +33,7 @@ const settingsSections = [
   { key: 'firebase', group: 'data', label: 'النسخ السحابي', description: 'إعدادات النسخ الاحتياطي السحابي', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
   { key: 'users', group: 'people', label: 'المستخدمون والصلاحيات', description: 'حسابات العمل وصلاحيات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },
   { key: 'audit', group: 'people', label: 'سجل النشاطات', description: 'الدخول والعمليات المسجلة', icon: <ShieldAlert className="w-4 h-4 text-rose-500" /> },
-  { key: 'excel', group: 'data', label: 'تصدير واستيراد Excel', description: 'تصدير بيانات المرضى واستيرادها', icon: <FileSpreadsheet className="w-4 h-4 text-teal-500" /> },
+  { key: 'excel', group: 'data', label: 'التصدير والاستيراد', description: 'ملفات المرضى وجهات الاتصال والتقارير', icon: <FileSpreadsheet className="w-4 h-4 text-teal-500" /> },
   { key: 'system', group: 'data', label: 'عرض النظام والتأمين', description: 'إعدادات النظام والعمليات الحساسة', icon: <Server className="w-4 h-4 text-purple-600" /> },
 ] as const;
 type SettingsSectionKey = typeof settingsSections[number]['key'];
@@ -97,6 +101,9 @@ interface SettingsViewProps {
   contacts: ClinicContact[];
   canViewPatients?: boolean;
   canManageContacts?: boolean;
+  canImportPatients?: boolean;
+  onAuthorizePatientImport: () => void;
+  onAuthorizeWhatsappSend?: (request: WhatsAppSendAuthorization) => void;
   initialWhatsAppSection?: 'templates' | 'campaigns';
   appointments: Appointment[];
   labs: Lab[];
@@ -148,6 +155,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   contacts,
   canViewPatients = false,
   canManageContacts = false,
+  canImportPatients = false,
+  onAuthorizePatientImport,
+  onAuthorizeWhatsappSend,
   initialWhatsAppSection = 'templates',
   appointments,
   labs,
@@ -244,97 +254,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     });
   };
 
-  // Excel Export Column Checkboxes
-  const excelBusyRef = useRef(false);
-  const [exportCols, setExportCols] = useState({
-    id: true,
-    name: true,
-    mobile: true,
-    age: true,
-    firstVisit: true,
-    totalRequired: true,
-    totalPaid: true,
-    totalRemain: true
-  });
-
-  // Excel Export Handler
-  const handleExportExcel = async () => {
-    if (excelBusyRef.current) { showToast('انتظر حتى تنتهي عملية الإكسيل الحالية', 'info'); return; }
-    if (!Object.values(exportCols).some(Boolean)) { showToast('اختر عمودًا واحدًا على الأقل للتصدير', 'warning'); return; }
-    if (!patients.length) { showToast('لا توجد بيانات مرضى لتصديرها', 'warning'); return; }
-    excelBusyRef.current = true;
-    try {
-      const columns = { ...exportCols, totalRequired: exportCols.totalRequired && canExportPatientFinance,
-        totalPaid: exportCols.totalPaid && canExportPatientFinance, totalRemain: exportCols.totalRemain && canExportPatientFinance };
-      if (!Object.values(columns).some(Boolean)) throw new Error('اختر عمودًا متاحًا واحدًا على الأقل للتصدير.');
-      const containsFinance = columns.totalRequired || columns.totalPaid || columns.totalRemain;
-      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
-      const XLSX = await import('xlsx');
-      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
-      const exportData = patients.map(p => {
-        const row: Record<string, string | number> = {};
-        const financial = containsFinance ? getPatientFinancialSummary(p) : null;
-        if (columns.id) row['رقم الملف'] = p.id;
-        if (columns.name) row['اسم المريض'] = p.name;
-        if (columns.mobile) row['الموبايل'] = p.mobile;
-        if (columns.age) row['السن'] = p.age;
-        if (columns.firstVisit) row['تاريخ الدخول'] = p.firstVisit;
-        if (columns.totalRequired) row['إجمالي المطلوبات بعد الخصم'] = Math.max(0, financial!.totalRequired - financial!.totalDiscounts);
-        if (columns.totalPaid) row['إجمالي المدفوع'] = financial!.totalCollected;
-        if (columns.totalRemain) row['المتبقي'] = financial!.totalRemaining;
-        return row;
-      });
-      const worksheet = XLSX.utils.json_to_sheet(exportData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'مرضى العيادة');
-      onAuthorizeDataExport(containsFinance ? 'patient_finance' : 'patients');
-      XLSX.writeFile(workbook, `مرضى_عيادة_الأسنان_${new Date().toISOString().split('T')[0]}.xlsx`);
-      showToast('تم تجهيز ملف الإكسيل للتنزيل', 'success');
-    } catch {
-      showToast('تعذر تجهيز ملف الإكسيل. أعد المحاولة بعد التأكد من اتصال الموقع.', 'error');
-    } finally {
-      excelBusyRef.current = false;
-    }
-  };
 
   // Helper for downloading CSV with UTF-8 BOM for Arabic compatibility
   const downloadCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
     const csvContent = serializeClinicCsv(headers, rows);
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    downloadTransferBlob(blob, filename, () => onAuthorizeDataExport('financial_report'));
   };
 
   // CSV Export Handlers
-  const handleExportPatientsCSV = () => {
-    try {
-    onAuthorizeDataExport(canExportPatientFinance ? 'patient_finance' : 'patients');
-    const headers = ['رقم الملف', 'اسم المريض', 'الموبايل', 'السن', 'تاريخ الدخول', 'الحساسية والإنذارات',
-      ...(canExportPatientFinance ? ['إجمالي المطلوب بعد الخصم (ج.م)', 'إجمالي المدفوع (ج.م)', 'المتبقي (ج.م)'] : [])];
-    const rows = patients.map(p => {
-      const financial = canExportPatientFinance ? getPatientFinancialSummary(p) : null;
-      return [
-        p.id,
-        p.name,
-        p.mobile,
-        p.age,
-        p.firstVisit,
-        p.allergy || 'لا يوجد',
-        ...(financial ? [Math.max(0, financial.totalRequired - financial.totalDiscounts), financial.totalCollected, financial.totalRemaining] : [])
-      ];
-    });
-
-    downloadCSV(`نسخة_احتياطية_المرضى_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
-    showToast('تم تصدير ملف بيانات المرضى بصيغة CSV بنجاح', 'success');
-    } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر تصدير البيانات.', 'error'); }
-  };
 
   const handleExportFinancialReportCSV = () => {
     try {
@@ -344,105 +273,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const rows: (string | number)[][] = calculateDailyCollections(patients, () => true).rows.map(row => {
       const patient = patients.find(p => p.id === row.patientId);
       const session = patient?.sessions.find(s => s.id === row.sessionId);
-      return [row.date, session ? 'ملخص سداد خدمة' : 'دفعة عامة', row.fileNo, row.patientName, row.proceduresText,
+      return [row.date, session ? 'تحصيل على خدمة' : 'دفعة عامة', `'${row.fileNo}`, row.patientName, row.proceduresText,
         session ? Math.max(0, row.totalValue - row.discountAmount) : 0, row.paidAmount, 'نقدي'];
     });
 
     // Chronological order descending
     rows.sort((a, b) => String(b[0]).localeCompare(String(a[0])));
 
-    downloadCSV(`تقرير_المالية_والتحصيلات_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    downloadCSV(`تقرير_المالية_والتحصيلات_${localDateISO()}.csv`, headers, rows);
     showToast('تم تصدير التقرير المالي الشامل بصيغة CSV بنجاح', 'success');
     } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر تصدير التقرير المالي.', 'error'); }
   };
 
-  // Excel Import Handler
-  const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.currentTarget;
-    const file = input.files?.[0];
-    input.value = '';
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { showToast('ملف الإكسيل يجب ألا يتجاوز ١٠ ميجابايت. قسّم الملف الكبير قبل الاستيراد.', 'warning'); return; }
-    if (excelBusyRef.current) { showToast('انتظر حتى تنتهي عملية الإكسيل الحالية', 'info'); return; }
-    excelBusyRef.current = true;
-    try {
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      if (!sheet) throw new Error('empty-workbook');
-      const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-      if (data.length > 50_000) throw new Error('too-many-rows');
-      if (!data.length) { showToast('الملف لا يحتوي على صفوف مرضى لاستيرادها', 'warning'); return; }
-
-      const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.includes(digit) ? '٠١٢٣٤٥٦٧٨٩'.indexOf(digit) : '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
-      const readCell = (row: Record<string, unknown>, keys: string[]) => {
-        for (const key of keys) { if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key]; }
-        return '';
-      };
-      const parseVisitDate = (value: unknown): string => {
-        if (value instanceof Date && Number.isFinite(value.getTime())) {
-          return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-        }
-        const text = normalizeDigits(String(value ?? '').trim());
-        const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-        const local = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/.exec(text);
-        if (!iso && !local) return '';
-        const year = Number(iso ? iso[1] : local![3]);
-        const month = Number(iso ? iso[2] : local![2]);
-        const day = Number(iso ? iso[3] : local![1]);
-        const date = new Date(Date.UTC(year, month - 1, day));
-        if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return '';
-        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      };
-      const existingIds = new Set(patients.map(p => normalizeDigits(p.id.trim())));
-      const newPatientsList: Patient[] = [];
-      let duplicateCount = 0;
-      let invalidCount = 0;
-
-      data.forEach(row => {
-        const rawId = readCell(row, ['رقم الملف', 'FileNo', 'ID']);
-        const id = normalizeDigits(String(rawId).trim());
-        const rawName = readCell(row, ['اسم المريض', 'Name']);
-        const name = typeof rawName === 'string' ? rawName.trim() : '';
-        const rawAge = readCell(row, ['السن', 'Age']);
-        const age = rawAge === '' ? 0 : typeof rawAge === 'number' || typeof rawAge === 'string' ? Number(normalizeDigits(String(rawAge))) : NaN;
-        const numericIdInvalid = typeof rawId === 'number' && (!Number.isSafeInteger(rawId) || rawId <= 0);
-        if (!id || id.length > 200 || !['string', 'number'].includes(typeof rawId) || numericIdInvalid || /[\r\n\t]/.test(id) || !name || name.length > 200 || !Number.isInteger(age) || age < 0 || age > 120) {
-          invalidCount++;
-          return;
-        }
-        if (existingIds.has(id)) { duplicateCount++; return; }
-        existingIds.add(id);
-        const rawAllergy = String(readCell(row, ['الحساسية والإنذارات', 'الحساسية', 'Allergy'])).trim();
-        const gender = String(readCell(row, ['الجنس', 'Gender'])).trim().toLowerCase();
-        newPatientsList.push({
-          id,
-          name,
-          mobile: normalizeDigits(String(readCell(row, ['الموبايل', 'رقم الموبايل', 'Mobile'])).trim()),
-          age,
-          gender: ['female', 'أنثى'].includes(gender) ? 'female' : ['male', 'ذكر'].includes(gender) ? 'male' : undefined,
-          firstVisit: parseVisitDate(readCell(row, ['تاريخ الدخول', 'FirstVisit'])),
-          notes: String(readCell(row, ['ملاحظات', 'Notes'])).trim(),
-          allergy: rawAllergy === 'لا يوجد' ? '' : rawAllergy,
-          sessions: [],
-          payments: []
-        });
-      });
-
-      const ignored = duplicateCount + invalidCount;
-      const detail = ignored ? `؛ تم تجاهل ${ignored} صف (${duplicateCount} مكرر و${invalidCount} بيانات غير صالحة)` : '';
-      if (newPatientsList.length) {
-        await onImportPatients(newPatientsList);
-        showToast(`تم استيراد ${newPatientsList.length} مريض${detail}`, ignored ? 'warning' : 'success');
-      } else {
-        showToast(`لم تتم إضافة مرضى${detail}. راجع رقم الملف والاسم والسن.`, 'warning');
-      }
-    } catch {
-      showToast('تعذر استيراد الملف. راجع صيغته وعناوين أعمدته ثم أعد المحاولة.', 'error');
-    } finally {
-      excelBusyRef.current = false;
-    }
-  };
 
   // Firebase Cloud Backup State & Handlers
   const [cloudBackups, setCloudBackups] = useState<FirebaseBackupMeta[]>([]);
@@ -689,7 +531,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
             patients={patients} contacts={contacts} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
             onSaveContact={onSaveContact} onDeleteContact={onDeleteContact} onOpenPatient={onOpenPatient}
-            onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport}
+            onAuthorizeSend={onAuthorizeWhatsappSend}
             canManageContacts={canManageContacts} initialSection={initialWhatsAppSection}
             onSaveWhatsappSettings={onSaveWhatsappSettings} />
         )}
@@ -846,113 +688,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <AuditTrailView />
         )}
 
-        {/* 5. CSV & Excel Data Export/Import SubTab */}
-        {activeSubTab === 'excel' && (
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-8">
-            {/* CSV Backup & External Analysis Section */}
-            <div className="space-y-4">
-              <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
-                تصدير النسخ الاحتياطية والتقارير بصيغة (CSV)
-              </h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                ملفات CSV مناسبة للغاية للتحليل الخارجي على برامج مثل Excel، Google Sheets أو للاحتفاظ بنسخ احتياطية سريعة.
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Export Patients CSV */}
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 font-tajawal">1. تصدير بيانات المرضى (CSV)</h4>
-                    <p className="text-xs text-slate-500">{canExportPatientFinance ? 'بيانات الملفات والتواصل والتواريخ، مع الملخص المالي المسموح لهذا الحساب.' : 'بيانات الملفات والتواصل والتواريخ فقط، دون حسابات أو مبالغ مالية.'}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleExportPatientsCSV}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-                  >
-                    <Download className="w-4 h-4" />
-                    تنزيل ملف CSV للمرضى
-                  </button>
-                </div>
-
-                {/* Export Financial Report CSV */}
-                {canExportFinancialReports && <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-3">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-emerald-900 font-tajawal">2. تصدير التقرير المالي والتحصيلات (CSV)</h4>
-                    <p className="text-xs text-emerald-700">سجل زمني شامل لكافة الجلسات العلاجية، الدفعات، والتحصيلات المالية بالعيادة.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleExportFinancialReportCSV}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-                  >
-                    <Download className="w-4 h-4" />
-                    تنزيل التقرير المالي CSV
-                  </button>
-                </div>}
-              </div>
-            </div>
-
-            {/* Excel (.xlsx) Custom Export Section */}
-            <div className="border-t border-slate-100 pt-6 space-y-4">
-              <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                تصدير مخصص لبيانات المرضى والحالات إلى ملف إكسيل (.xlsx)
-              </h3>
-
-              <p className="text-xs text-slate-600">حدد الأعمدة التي ترغب بضمها لملف الإكسيل:</p>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                {Object.keys(exportCols).filter(colKey => canExportPatientFinance || !['totalRequired', 'totalPaid', 'totalRemain'].includes(colKey)).map(colKey => (
-                  <label key={colKey} className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={(exportCols as any)[colKey]}
-                      onChange={e => setExportCols({ ...exportCols, [colKey]: e.target.checked })}
-                      className="w-4 h-4 text-indigo-600 rounded-md"
-                    />
-                    <span className="font-bold text-slate-800">
-                      {colKey === 'id' ? 'رقم الملف' :
-                       colKey === 'name' ? 'اسم المريض' :
-                       colKey === 'mobile' ? 'الموبايل' :
-                       colKey === 'age' ? 'السن' :
-                       colKey === 'firstVisit' ? 'تاريخ الدخول' :
-                       colKey === 'totalRequired' ? 'المطلوبات' :
-                       colKey === 'totalPaid' ? 'المدفوع' : 'المتبقي'}
-                    </span>
-                  </label>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExportExcel}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-colors"
-              >
-                <Download className="w-4 h-4" />
-                تنزيل ملف الإكسيل الآن (.xlsx)
-              </button>
-            </div>
-
-            <div className="border-t border-slate-100 pt-6 space-y-4">
-              <h3 className="text-base font-bold text-slate-900 font-tajawal flex items-center gap-2">
-                <Upload className="w-5 h-5 text-indigo-600" />
-                استيراد حالات جديدة من ملف إكسيل (.xlsx / .csv)
-              </h3>
-
-              <p className="text-xs text-slate-600">
-                رفع ملف يحتوي أعمدة (رقم الملف، اسم المريض، الموبايل، السن، تاريخ الدخول). أي صفوف برقم ملف مكرر سيتم تجاهلها تلقائياً.
-              </p>
-
-              <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold cursor-pointer shadow-xs hover:bg-indigo-700 transition-colors">
-                <Upload className="w-4 h-4 text-white" />
-                اختر ملف الإكسيل للاستيراد
-                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleImportExcelFile} className="hidden" />
-              </label>
-            </div>
-          </div>
-        )}
+        {/* Patient/contact transfers are grouped here, never in the directory. */}
+        {activeSubTab === 'excel' && <DataTransferManagement patients={patients} contacts={contacts} canViewPatients={canViewPatients} canImportPatients={canImportPatients} canManageContacts={canManageContacts} canExportPatientFinance={canExportPatientFinance} canExportFinancialReports={canExportFinancialReports} onImportPatients={onImportPatients} onAuthorizePatientImport={onAuthorizePatientImport} onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport} onAuthorizeDataExport={onAuthorizeDataExport} onExportFinancialReport={handleExportFinancialReportCSV} />}
 
         {/* 6. System & Reset SubTab */}
         {activeSubTab === 'system' && !canManageFullBackup && <p role="status" className="p-5 border rounded-2xl text-sm text-slate-600">إعادة ضبط العيادة غير متاحة لهذا الحساب أو في وضع الخصوصية.</p>}

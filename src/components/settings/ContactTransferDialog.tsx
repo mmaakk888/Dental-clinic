@@ -54,12 +54,14 @@ export function ContactImportDialog({ contacts, patients, onImport, onAuthorizeE
     setOperation('read');
     await run(async () => {
       try {
+        onAuthorizeExport?.();
         if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new Error('اختَر ملف Excel بصيغة XLSX أو XLS، أو ملف CSV.');
         if (file.size > 5 * 1024 * 1024) throw new Error('حجم الملف أكبر من ٥ ميجابايت. قسّمه إلى ملفات أصغر ثم حاول مرة أخرى.');
         const { readContactSpreadsheet } = await import('../../utils/contactSpreadsheets');
         if (!mounted.current || generation.current !== version) return;
         const next = await readContactSpreadsheet(file);
         if (!mounted.current || generation.current !== version) return;
+        onAuthorizeExport?.();
         // Validate shape/expanded payload before state can cause a render.
         previewContactImport(next, contacts, patients);
         setInputs(next);

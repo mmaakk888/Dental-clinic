@@ -32,8 +32,8 @@ function coordinates(address: string): { row: number; column: number } {
   return { column: column - 1, row: Number(match[2]) - 1 };
 }
 function assertDimensions(last: { row: number; column: number }): void {
-  if (last.column >= MAX_CONTACT_SPREADSHEET_COLUMNS) throw new Error('الملف يتجاوز ٣٢ عمودًا. انسخ أعمدة جهات الاتصال فقط إلى ملف جديد.');
-  if (last.row > MAX_CONTACT_IMPORT_ROWS) throw new Error('الملف يتجاوز ٥٠٠٠ جهة اتصال. قسّمه إلى ملفات أصغر؛ لم يتم اقتطاع أي صفوف.');
+  if (last.column >= MAX_CONTACT_SPREADSHEET_COLUMNS) throw new Error('الملف يتجاوز ٣٢ عمودًا. انسخ أعمدة البيانات المطلوبة فقط إلى ملف جديد.');
+  if (last.row > MAX_CONTACT_IMPORT_ROWS) throw new Error('الملف يتجاوز ٥٠٠٠ صف بيانات. قسّمه إلى ملفات أصغر؛ لم يتم اقتطاع أي صفوف.');
 }
 function getCell(sheet: WorkSheet, column: number, row: number): CellObject | undefined { return sheet[cellAddress(column, row)]; }
 function rawText(cell: CellObject | undefined): string {
@@ -135,18 +135,19 @@ function checkZipSize(bytes: Uint8Array): void {
   if (end < 0) throw new Error('بنية ملف Excel المضغوط غير صالحة. احفظ نسخة جديدة منه.');
   const entries = view.getUint16(end + 10, true), directorySize = view.getUint32(end + 12, true);
   let position = view.getUint32(end + 16, true), expanded = 0;
-  if (entries > 512 || position + directorySize > end || view.getUint16(end + 4, true) || view.getUint16(end + 6, true)) throw new Error('ملف Excel معقد أو كبير جدًا. انسخ جهات الاتصال فقط إلى ملف جديد.');
+  if (entries > 512 || position + directorySize > end || view.getUint16(end + 4, true) || view.getUint16(end + 6, true)) throw new Error('ملف Excel معقد أو كبير جدًا. انسخ البيانات المطلوبة فقط إلى ملف جديد.');
   for (let index = 0; index < entries; index++) {
     if (position + 46 > end || view.getUint32(position, true) !== 0x02014b50) throw new Error('بنية ملف Excel المضغوط غير صالحة.');
     const size = view.getUint32(position + 24, true);
     expanded += size;
-    if (size > 15 * 1024 * 1024 || expanded > 25 * 1024 * 1024 || view.getUint16(position + 8, true) & 1) throw new Error('ملف Excel كبير جدًا بعد فك الضغط أو مشفّر. استخدم ملف جهات اتصال أصغر وغير مشفّر.');
+    if (size > 15 * 1024 * 1024 || expanded > 25 * 1024 * 1024 || view.getUint16(position + 8, true) & 1) throw new Error('ملف Excel كبير جدًا بعد فك الضغط أو مشفّر. استخدم ملفًا أصغر وغير مشفّر.');
     position += 46 + view.getUint16(position + 28, true) + view.getUint16(position + 30, true) + view.getUint16(position + 32, true);
   }
   if (position > end) throw new Error('بنية ملف Excel المضغوط غير صالحة.');
 }
 
-export async function readContactSpreadsheet(file: File): Promise<ContactImportInput[]> {
+/** Shared bounded workbook reader; callers still validate their own allowed columns and cells. */
+export async function readBoundedSpreadsheet(file: File): Promise<{ workbook: WorkBook; csv: boolean }> {
   if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new Error('اختر ملف Excel بصيغة XLSX أو XLS أو ملف CSV.');
   if (!file.size || file.size > MAX_CONTACT_SPREADSHEET_BYTES) throw new Error('اختر ملفًا غير فارغ بحجم لا يتجاوز ٥ ميجابايت.');
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -164,6 +165,10 @@ export async function readContactSpreadsheet(file: File): Promise<ContactImportI
     workbook = XLSX.read(csv ? csvText : bytes, { type: csv ? 'string' : 'array', raw: true, cellFormula: true,
       cellDates: true, cellHTML: false, cellText: false, bookVBA: false, sheets: 0, sheetRows: MAX_CONTACT_IMPORT_ROWS + 2, ...(csv ? { FS: delimiter } : {}) });
   } catch { throw new Error('تعذّرت قراءة الملف. تأكد أنه ملف Excel أو CSV صالح وغير مشفّر، ثم احفظ نسخة جديدة.'); }
+  return { workbook, csv };
+}
+export async function readContactSpreadsheet(file: File): Promise<ContactImportInput[]> {
+  const { workbook, csv } = await readBoundedSpreadsheet(file);
   return parseContactWorkbook(workbook, { csv });
 }
 

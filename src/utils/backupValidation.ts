@@ -6,6 +6,7 @@ import { normalizeServiceName } from './serviceCatalog';
 import { canPerformAction } from './rbac';
 import { validateAccountSchedule } from './userAccounts';
 import { clinicContactValidationError, normalizeContactPhone } from './clinicContacts';
+import { canonicalFileNumber } from './clinicMutations';
 
 export interface ValidatedClinicBackup {
   patients?: Patient[]; appointments?: Appointment[]; labs?: Lab[]; labCases?: LabCase[];
@@ -133,7 +134,13 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     ['createdAt', 'voidedAt'].forEach(key => timestamp(row, key, path)); bool(row, 'legacyAggregate', path);
   };
   const globalSessionIds = new Set<string>();
+  const canonicalPatientIds = new Set<string>();
   const patientRow = (row: RecordValue, path: string) => {
+    if (typeof row.id === 'string') {
+      const canonicalId = canonicalFileNumber(row.id);
+      if (canonicalPatientIds.has(canonicalId)) fail(`${path}.id`, 'رقم ملف مكرر بصيغة أرقام مختلفة');
+      canonicalPatientIds.add(canonicalId);
+    }
     text(row, 'name', path, { required: true, max: 200 }); text(row, 'mobile', path, { defaultValue: '', max: 60, line: true });
     number(row, 'age', path, { required: true, integer: true, max: 120 });
     if (row.firstVisit === undefined) row.firstVisit = '';
@@ -337,19 +344,34 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
   const effectiveAppointments: Appointment[] = data.appointments ?? context.appointments ?? [];
   const effectiveCases: LabCase[] = data.labCases ?? context.labCases ?? [];
   const patientsById = new Map((Array.isArray(effectivePatients) ? effectivePatients : []).filter(isRecord).map(patient => [patient.id, patient]));
+  const patientsByCanonicalId = new Map<string, Patient[]>();
+  (Array.isArray(effectivePatients) ? effectivePatients : []).filter(isRecord).forEach(patient => {
+    if (typeof patient.id !== 'string') return;
+    const key = canonicalFileNumber(patient.id);
+    patientsByCanonicalId.set(key, [...(patientsByCanonicalId.get(key) ?? []), patient]);
+  });
+  const resolvePatient = (id: unknown) => {
+    if (typeof id !== 'string' || !id) return undefined;
+    const exact = patientsById.get(id);
+    if (exact) return exact;
+    const matches = patientsByCanonicalId.get(canonicalFileNumber(id));
+    return matches?.length === 1 ? matches[0] : undefined;
+  };
   const labsById = new Set((Array.isArray(effectiveLabs) ? effectiveLabs : []).filter(isRecord).map(lab => lab.id));
   if (effectivePatients !== undefined) effectiveAppointments.filter(isRecord).forEach((appointment, index) => {
-    if (appointment.patientId && !patientsById.has(appointment.patientId)) fail(`backup.appointments[${index}].patientId`, 'الموعد مرتبط بملف غير موجود');
+    const reference = appointment.patientId || appointment.fileNo;
+    if (reference && !resolvePatient(reference)) fail(`backup.appointments[${index}].${appointment.patientId ? 'patientId' : 'fileNo'}`, 'الموعد مرتبط بملف غير موجود أو رقم ملتبس');
   });
   const linkedSessions = new Set<string>();
   effectiveCases.filter(isRecord).forEach((labCase, index) => {
     const path = `backup.labCases[${index}]`;
-    const patient = patientsById.get(labCase.patientId);
+    const patient = resolvePatient(labCase.patientId || labCase.fileNo);
     if (effectivePatients !== undefined && !patient) fail(`${path}.patientId`, 'حالة المعمل مرتبطة بملف غير موجود');
     if (effectiveLabs !== undefined && !labsById.has(labCase.labId)) fail(`${path}.labId`, 'حالة المعمل مرتبطة بمعمل غير موجود');
     if (labCase.linkedSessionId) {
       if (patient && !patient.sessions?.some(session => session.id === labCase.linkedSessionId)) fail(`${path}.linkedSessionId`, 'حالة المعمل مرتبطة بجلسة غير موجودة في ملف المريض');
-      const key = `${labCase.patientId}|${labCase.linkedSessionId}`;
+      const reference = labCase.patientId || labCase.fileNo;
+      const key = `${patient?.id ?? (typeof reference === 'string' ? canonicalFileNumber(reference) : reference)}|${labCase.linkedSessionId}`;
       if (linkedSessions.has(key)) fail(`${path}.linkedSessionId`, 'جلسة مرتبطة بأكثر من حالة معمل'); linkedSessions.add(key);
     }
   });

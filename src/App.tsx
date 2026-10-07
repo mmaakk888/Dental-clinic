@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, LabService, Patient, ClinicContact, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
-import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS } from './utils/storage';
+import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS, WHATSAPP_SETTINGS_STORAGE_KEY, PRIVACY_MODE_STORAGE_KEY } from './utils/storage';
 import type { ClinicIdentitySettings, ClinicDomainData } from './utils/storage';
 import { withClinicWriteLock } from './utils/clinicWriteLock';
-import { addWalkInRecord, savePatientRecord, addPatientReceipt, importPatientRecords, canonicalFileNumber } from './utils/clinicMutations';
+import { addWalkInRecord, savePatientRecord, savePatientAppointment, deletePatientRecord, addPatientReceipt, importPatientRecords, canonicalFileNumber } from './utils/clinicMutations';
 import { saveClinicContact, deleteClinicContact } from './utils/clinicContacts';
 import { applyContactImport, type ContactImportInput, type ContactImportSummary } from './utils/contactTransfer';
 import { isLocalClinicHost } from './utils/localRuntime';
@@ -17,11 +17,11 @@ import { getDefaultViewForUser, canAccessView, canPerformAction } from './utils/
 import type { RBACAction } from './utils/rbac';
 import { canUserLoginNow, matchesSessionIdentity, matchesRememberedSession } from './utils/accessControl';
 import { allocateLabPayment } from './utils/labFinancials';
-import { prepareLabMetadataSave, prepareLabPricingSave, mergeLabCaseWorkflowUpdate } from './utils/labManagement';
-import { mergeExpenseUpdate } from './utils/expenseUtils';
+import { prepareLabMetadataSave, prepareLabPricingSave, mergeLabCaseWorkflowUpdate, assertLabCaseSessionLink } from './utils/labManagement';
+import { mergeExpenseUpdate, assertUniqueSupplierInvoice } from './utils/expenseUtils';
 import { getInventory } from './utils/inventory';
 import { appendSessionReceipt } from './utils/financials';
-import { isValidAppointmentDate, appointmentTimeMinutes, localDateISO } from './components/appointments/appointmentScheduling';
+import { isValidAppointmentDate, localDateISO } from './components/appointments/appointmentScheduling';
 import { ToastAndConfirmProvider, useToastAndConfirm } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
 import { SidebarNav } from './components/navigation/SidebarNav';
@@ -183,6 +183,16 @@ export function AppContent() {
   const [whatsappSettings, setWhatsappSettings] = useState<import('./types').WhatsappSettings>(() => Storage.getWhatsappSettings());
   const [drugCatalog, setDrugCatalog] = useState<import('./types').DrugCatalogItem[]>(() => Storage.getDrugCatalogFresh());
   const [isPrivacyMode, setIsPrivacyMode] = useState<boolean>(() => Storage.getPrivacyMode());
+
+  useEffect(() => {
+    const refreshMessagingAndPrivacy = (event: StorageEvent) => {
+      if (event.storageArea && event.storageArea !== localStorage) return;
+      if (event.key === null || event.key === WHATSAPP_SETTINGS_STORAGE_KEY) setWhatsappSettings(Storage.getWhatsappSettingsFresh());
+      if (event.key === null || event.key === PRIVACY_MODE_STORAGE_KEY) setIsPrivacyMode(Storage.getPrivacyModeFresh());
+    };
+    window.addEventListener('storage', refreshMessagingAndPrivacy);
+    return () => window.removeEventListener('storage', refreshMessagingAndPrivacy);
+  }, []);
 
   const publishDomain = useCallback((data: ClinicDomainData) => {
     setPatients(data.patients); setAppointments(data.appointments); setLabCases(data.labCases);
@@ -563,18 +573,13 @@ export function AppContent() {
   }, []);
 
   // Patient Actions
-  const handleSavePatient = (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string) => {
+  const handleSavePatient = (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string, baseline?: Patient) => {
     return commitDomain([originalId === undefined ? 'add_patient' : 'edit_patient'], data => ({ ...data,
-      patients: savePatientRecord(data.patients, patientData, originalId) }));
+      patients: savePatientRecord(data.patients, patientData, originalId, baseline) }));
   };
 
   const handleDeletePatient = async (patientId: string) => {
-    await commitDomain(['delete_patient'], data => {
-      if (data.labCases.some(item => item.patientId === patientId)) throw new Error('الملف مرتبط بشغل معمل. احتفظ به للحفاظ على ارتباط الحسابات وسجل التركيبات.');
-      if (!data.patients.some(patient => patient.id === patientId)) throw new Error('الملف لم يعد موجودًا.');
-      return { ...data, patients: data.patients.filter(patient => patient.id !== patientId),
-        appointments: data.appointments.filter(appointment => appointment.patientId !== patientId) };
-    });
+    await commitDomain(['delete_patient'], data => deletePatientRecord(data, patientId));
     if (selectedPatientId === patientId) {
       setSelectedPatientId(null);
       setActiveView('patients');
@@ -612,25 +617,8 @@ export function AppContent() {
   };
 
   // Appointment Actions
-  const handleSaveAppointment = (apptData: Omit<Appointment, 'id'> & { id?: string }) => {
-    return commitDomain(['manage_appointments'], data => {
-    const linkedPatient = data.patients.find(patient => patient.id === apptData.patientId);
-    if (!linkedPatient) throw new Error('اختر ملف مريض موجودًا قبل حجز الموعد.');
-    if (!isValidAppointmentDate(apptData.date) || appointmentTimeMinutes(apptData.time) === null) throw new Error('اختر تاريخًا ووقتًا صحيحين للموعد.');
-    if (apptData.durationMinutes !== undefined && (!Number.isFinite(apptData.durationMinutes) || apptData.durationMinutes <= 0 || apptData.durationMinutes > 1440)) throw new Error('أدخل مدة موعد صحيحة أكبر من صفر وأقل من يوم.');
-    const canonicalData = { ...apptData, patientName: linkedPatient.name, fileNo: linkedPatient.id, mobile: linkedPatient.mobile };
-    if (apptData.id) {
-      if (!data.appointments.some(appointment => appointment.id === apptData.id)) throw new Error('الموعد المطلوب تعديله غير موجود.');
-      return { ...data, appointments: data.appointments.map(a => a.id === apptData.id ? { ...a, ...canonicalData } as Appointment : a) };
-    } else {
-      const newAppt: Appointment = {
-        ...canonicalData,
-        id: `a_${crypto.randomUUID()}`
-      };
-      return { ...data, appointments: [newAppt, ...data.appointments] };
-    }
-    });
-  };
+  const handleSaveAppointment = (apptData: Omit<Appointment, 'id'> & { id?: string }, baseline?: Appointment) =>
+    commitDomain(['manage_appointments'], data => savePatientAppointment(data, apptData, baseline));
 
   const handleUpdateApptStatus = (apptId: string, status: AppointmentStatus) => {
     return commitDomain(['manage_appointments'], data => {
@@ -698,31 +686,39 @@ export function AppContent() {
 
   const handleSaveLabCase = (caseData: Omit<LabCase, 'id'> & { id?: string }) => {
     return commitDomain(['manage_lab', 'view_lab_costs'], data => {
-    if (!data.patients.some(patient => patient.id === caseData.patientId) || !Storage.getLabsFresh().some(lab => lab.id === caseData.labId)) throw new Error('اختر مريضًا ومعملًا موجودين.');
-    if ([caseData.labTotal, caseData.labPaid, caseData.patientTotal].some(amount => !Number.isFinite(amount) || amount < 0) || caseData.labPaid > caseData.labTotal) throw new Error('راجع مبالغ التركيبة وحساب المعمل.');
     if (caseData.id) {
-      if (!data.labCases.some(item => item.id === caseData.id)) throw new Error('حالة المعمل لم تعد موجودة.');
-      return { ...data, labCases: data.labCases.map(c => c.id === caseData.id ? mergeLabCaseWorkflowUpdate(c, caseData as LabCase) : c) };
+      const current = data.labCases.find(item => item.id === caseData.id);
+      if (!current) throw new Error('حالة المعمل لم تعد موجودة.');
+      const next = mergeLabCaseWorkflowUpdate(current, caseData as LabCase);
+      assertLabCaseSessionLink(data.labCases, data.patients, next);
+      return { ...data, labCases: data.labCases.map(c => c.id === next.id ? next : c) };
     } else {
+      if (!data.patients.some(patient => patient.id === caseData.patientId) || !Storage.getLabsFresh().some(lab => lab.id === caseData.labId)) throw new Error('اختر مريضًا ومعملًا موجودين.');
+      if ([caseData.labTotal, caseData.labPaid, caseData.patientTotal].some(amount => !Number.isFinite(amount) || amount < 0) || caseData.labPaid > caseData.labTotal) throw new Error('راجع مبالغ التركيبة وحساب المعمل.');
       const newCase: LabCase = {
         ...caseData,
         id: `lc_${crypto.randomUUID()}`
       };
+      assertLabCaseSessionLink(data.labCases, data.patients, newCase);
       return { ...data, labCases: [newCase, ...data.labCases] };
     }
     });
   };
 
   const handleUpdateLabCase = (updatedCase: LabCase) => {
-    return commitDomain(['manage_lab'], data => ({ ...data, labCases: data.labCases.map(c => {
+    return commitDomain(['manage_lab'], data => {
+      if (!data.labCases.some(item => item.id === updatedCase.id)) throw new Error('حالة المعمل لم تعد موجودة.');
+      return { ...data, labCases: data.labCases.map(c => {
       if (c.id !== updatedCase.id) return c;
       if (c.linkedSessionId !== updatedCase.linkedSessionId) {
         requireFreshSettingsPermission('view_lab_costs');
-        if (updatedCase.linkedSessionId && data.labCases.some(other => other.id !== c.id && other.patientId === c.patientId && other.linkedSessionId === updatedCase.linkedSessionId)) throw new Error('الخدمة مرتبطة بحالة معمل أخرى.');
       }
       // A status/link change must not replace a newer payment snapshot.
-      return mergeLabCaseWorkflowUpdate(c, updatedCase);
-    }) }));
+      const next = mergeLabCaseWorkflowUpdate(c, updatedCase);
+      assertLabCaseSessionLink(data.labCases, data.patients, next);
+      return next;
+    }) };
+    });
   };
 
   const handleAddLabCasePayment = (caseId: string, amount: number) => {
@@ -856,16 +852,20 @@ export function AppContent() {
 
   const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }) => {
     return commitDomain(['view_expenses'], data => {
-    if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل تعديل المصروفات.');
+    if (Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل تعديل المصروفات.');
     if (!Number.isFinite(expenseData.amount) || expenseData.amount < 0 || !isValidAppointmentDate(expenseData.date) || !expenseData.title?.trim()) throw new Error('راجع اسم المصروف ومبلغه وتاريخه.');
     if (expenseData.id) {
-      if (!data.expenses.some(expense => expense.id === expenseData.id)) throw new Error('المصروف لم يعد موجودًا.');
-      return { ...data, expenses: data.expenses.map(e => e.id === expenseData.id ? mergeExpenseUpdate(e, expenseData) : e) };
+      const current = data.expenses.find(expense => expense.id === expenseData.id);
+      if (!current) throw new Error('المصروف لم يعد موجودًا.');
+      const next = mergeExpenseUpdate(current, expenseData);
+      assertUniqueSupplierInvoice(data.expenses, next);
+      return { ...data, expenses: data.expenses.map(e => e.id === next.id ? next : e) };
     } else {
       const newExp: import('./types').Expense = {
         ...expenseData,
         id: `exp_${crypto.randomUUID()}`
       };
+      assertUniqueSupplierInvoice(data.expenses, newExp);
       return { ...data, expenses: [newExp, ...data.expenses] };
     }
     });
@@ -910,7 +910,7 @@ export function AppContent() {
 
   const handleImportContacts = async (rows: ContactImportInput[]): Promise<ContactImportSummary> => {
     let summary: ContactImportSummary = { addedCount: 0, duplicateCount: 0, invalidCount: 0 };
-    await commitDomain(['view_patients', 'edit_patient'], data => {
+    await commitDomain(['access_control_panel', 'view_patients', 'edit_patient'], data => {
       const result = applyContactImport(data.contacts, rows);
       summary = { addedCount: result.addedCount, duplicateCount: result.duplicateCount, invalidCount: result.invalidCount };
       return { ...data, contacts: result.contacts };
@@ -918,7 +918,17 @@ export function AppContent() {
     return summary;
   };
 
-  const authorizeContactExport = () => { requireFreshSettingsPermission('view_patients'); };
+  const authorizeContactExport = () => { requireFreshSettingsPermission('access_control_panel'); requireFreshSettingsPermission('view_patients'); };
+
+  const authorizeWhatsappSend = ({ isCampaign, requiresFinance }: { isCampaign: boolean; requiresFinance: boolean }) => {
+    requireFreshSettingsPermission('view_patients');
+    if (isCampaign) requireFreshSettingsPermission('access_control_panel');
+    if (requiresFinance) {
+      requireFreshSettingsPermission('view_patient_finance');
+      requireFreshSettingsPermission('view_remaining_balance');
+      if (Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل إرسال بيانات حسابه.');
+    }
+  };
 
   const openContactPatient = (patientId: string) => {
     try {
@@ -967,7 +977,11 @@ export function AppContent() {
     }
   };
 
-  const handleImportPatients = (imported: Patient[]) => commitDomain(['add_patient'], latest => {
+  const authorizePatientImport = () => {
+    (['access_control_panel', 'view_patients', 'add_patient'] as RBACAction[]).forEach(requireFreshSettingsPermission);
+  };
+
+  const handleImportPatients = (imported: Patient[]) => commitDomain(['access_control_panel', 'view_patients', 'add_patient'], latest => {
     const checked = assertClinicBackup({ patients: imported });
     return { ...latest, patients: importPatientRecords(latest.patients, checked.patients!) };
   });
@@ -1098,7 +1112,6 @@ export function AppContent() {
             canAccessView(currentUser, 'contacts') ? <ClinicContacts contacts={contacts} patients={patients}
               canManageContacts={canPerformAction(currentUser, 'edit_patient')}
               onSave={handleSaveContact} onDelete={handleDeleteContact} onOpenPatient={openContactPatient}
-              onImportContacts={handleImportContacts} onAuthorizeExport={authorizeContactExport}
               onOpenCampaigns={canPerformAction(currentUser, 'access_control_panel') ? openContactCampaigns : undefined} />
               : <PermissionDeniedCard title="جهات الاتصال" onBackToHome={() => handleNavigateWithSubTab('home')} />
           )}
@@ -1106,6 +1119,7 @@ export function AppContent() {
           {activeView === 'patient-file' && activePatient && (
             canAccessView(currentUser, 'patient-file') ? (
               <PatientFileView
+                key={activePatient.id}
                 patient={activePatient}
                 appointments={appointments}
                 origin={navigationOrigin}
@@ -1114,6 +1128,7 @@ export function AppContent() {
                 crownPrices={crownPrices}
                 clinicName={clinicName}
                 whatsappSettings={whatsappSettings}
+                onAuthorizeWhatsappSend={authorizeWhatsappSend}
                 drugCatalog={drugCatalog}
                 isPrivacyMode={isPrivacyMode || !canPerformAction(currentUser, 'view_patient_finance')}
                 capabilities={{
@@ -1127,7 +1142,7 @@ export function AppContent() {
                 }}
                 onSaveSession={handleSaveSession}
                 onAddPaymentInstallment={handleAddPaymentInstallment}
-                onUpdatePatient={data => handleSavePatient(data, data.id)}
+                onUpdatePatient={(data, baseline) => handleSavePatient(data, data.id, baseline)}
                 onDeletePatient={handleDeletePatient}
                 onSaveAppointment={handleSaveAppointment}
                 onUpdateApptStatus={handleUpdateApptStatus}
@@ -1243,6 +1258,7 @@ export function AppContent() {
                 canViewLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 canManageLabPrices={canPerformAction(currentUser, 'manage_prices') && canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 onSaveWhatsappSettings={handleSaveWhatsappSettings}
+                onAuthorizeWhatsappSend={authorizeWhatsappSend}
                 onSaveContact={handleSaveContact}
                 onDeleteContact={handleDeleteContact}
                 onImportContacts={handleImportContacts}
@@ -1252,6 +1268,8 @@ export function AppContent() {
                 onOpenPatient={canPerformAction(currentUser, 'view_patients') ? openContactPatient : undefined}
                 onSaveDrugCatalog={handleSaveDrugCatalog}
                 onImportPatients={handleImportPatients}
+                canImportPatients={canPerformAction(currentUser, 'view_patients') && canPerformAction(currentUser, 'add_patient')}
+                onAuthorizePatientImport={authorizePatientImport}
                 onRestoreFullData={handleRestoreFullData}
                 onResetAllData={handleResetAllData}
                 onBackToHome={() => handleNavigateWithSubTab('home')}

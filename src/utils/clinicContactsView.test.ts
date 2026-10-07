@@ -17,10 +17,12 @@ const bundle = buildSync({
       import { ToastAndConfirmProvider } from './src/components/common/ToastAndConfirm';
       import { ClinicContacts } from './src/components/settings/ClinicContacts';
       import { ContactExportDialog, ContactImportDialog } from './src/components/settings/ContactTransferDialog';
+      import { DataTransferManagement } from './src/components/settings/DataTransferManagement';
       const render = (Component, props) => renderToStaticMarkup(React.createElement(ToastAndConfirmProvider, null, React.createElement(Component, props)));
       export const renderView = props => render(ClinicContacts, props);
       export const renderExport = props => render(ContactExportDialog, props);
-      export const renderImport = props => render(ContactImportDialog, props);`,
+      export const renderImport = props => render(ContactImportDialog, props);
+      export const renderTransfer = props => render(DataTransferManagement, props);`,
     resolveDir: sourceRoot,
     sourcefile: 'clinicContactsView.fixture.tsx',
     loader: 'tsx',
@@ -33,16 +35,16 @@ const bundle = buildSync({
   loader: { '.css': 'empty' },
   logLevel: 'silent',
 });
-const compiled = { exports: {} as { renderView: (props: ClinicContactsProps) => string; renderExport: (props: unknown) => string; renderImport: (props: unknown) => string } };
+const compiled = { exports: {} as { renderView: (props: ClinicContactsProps) => string; renderExport: (props: unknown) => string; renderImport: (props: unknown) => string; renderTransfer: (props: unknown) => string } };
 new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(createRequire(import.meta.url), compiled, compiled.exports);
-const { renderView, renderExport, renderImport } = compiled.exports;
+const { renderView, renderExport, renderImport, renderTransfer } = compiled.exports;
 
 const contact: ClinicContact = { id: 'fake-contact', name: 'جهة اتصال تجريبية', mobile: '01012345678', notes: '', createdAt: '2026-10-07T12:00:00.000Z' };
 const patient = (id: string, mobile: string): Patient => ({ id, name: `مريض تجريبي ${id}`, mobile, age: 30, firstVisit: '2026-10-01', notes: 'PRIVATE_CLINICAL_NOTE', allergy: '', sessions: [], payments: [] });
 const baseProps: ClinicContactsProps = { contacts: [contact], patients: [patient('401', '+201012345678'), patient('402', '٠١٠١٢٣٤٥٦٧٨')], onSave: () => {}, onDelete: () => {} };
 
-test('read-only contact view hides mutation controls even when import callback exists', () => {
-  const markup = renderView({ ...baseProps, onImportContacts: async () => ({ addedCount: 0, duplicateCount: 0, invalidCount: 0 }) });
+test('read-only contact view hides mutation controls and keeps transfer tools out of the directory', () => {
+  const markup = renderView(baseProps);
   assert.doesNotMatch(markup, /إضافة جهة اتصال|تعديل جهة الاتصال|حذف جهة الاتصال|استيراد ملف/);
   assert.match(markup, /البحث بالاسم أو الموبايل/);
   assert.doesNotMatch(markup, /PRIVATE_CLINICAL_NOTE/);
@@ -57,21 +59,15 @@ test('every shared-phone file has an explicit badge alongside the contact name',
   assert.match(markup, /تطابق رقم فقط/);
 });
 
-test('manager gets import/export actions without invoking authorization or data writes on render', () => {
-  let authorizationCalls = 0;
-  let imports = 0;
-  const markup = renderView({ ...baseProps, canManageContacts: true, onAuthorizeExport: () => { authorizationCalls++; }, onImportContacts: async () => { imports++; return { addedCount: 0, duplicateCount: 0, invalidCount: 0 }; } });
+test('manager keeps directory editing but import/export actions have moved to settings', () => {
+  const markup = renderView({ ...baseProps, canManageContacts: true });
   assert.match(markup, /إضافة جهة اتصال/);
   assert.match(markup, /تعديل جهة الاتصال/);
-  assert.match(markup, /استيراد ملف/);
-  assert.match(markup, />تصدير</);
-  assert.equal(authorizationCalls, 0);
-  assert.equal(imports, 0);
+  assert.doesNotMatch(markup, /استيراد ملف|>تصدير</);
 });
 
-test('read-only export is available only with an explicit authorization callback', () => {
+test('read-only directory has no export or empty add controls', () => {
   assert.doesNotMatch(renderView(baseProps), />تصدير</);
-  assert.match(renderView({ ...baseProps, onAuthorizeExport: () => {} }), />تصدير</);
   const emptyMarkup = renderView({ ...baseProps, contacts: [], patients: [] });
   assert.doesNotMatch(emptyMarkup, /إضافة أول جهة اتصال|إضافة جهة اتصال/);
 });
@@ -97,4 +93,19 @@ test('import dialog starts with file guidance and a disabled confirmation, not i
   assert.match(markup, /accept=".xlsx,.xls,.csv"/);
   assert.match(markup, /disabled=""[^>]*>[\s\S]*?استيراد 0 جهة اتصال/);
   assert.equal(imports, 0);
+});
+
+test('transfer management groups patient/contact tools and describes summary export accurately without writes on render', () => {
+  let operations = 0;
+  const markup = renderTransfer({ ...baseProps, canViewPatients: true, canImportPatients: true, canManageContacts: true, canExportPatientFinance: false, canExportFinancialReports: true,
+    onImportPatients: async () => { operations++; }, onImportContacts: async () => { operations++; }, onAuthorizeDataExport: () => { operations++; }, onAuthorizePatientImport: () => { operations++; }, onAuthorizeContactExport: () => { operations++; }, onExportFinancialReport: () => { operations++; } });
+  assert.match(markup, /التصدير والاستيراد/); assert.match(markup, /ملفات المرضى/); assert.match(markup, /جهات الاتصال/); assert.match(markup, /التقارير المالية/);
+  assert.match(markup, /استيراد ملفات المرضى/); assert.match(markup, /ليس نسخة احتياطية قابلة لاستعادة الجلسات والإيصالات/);
+  assert.doesNotMatch(markup, />المدفوع<|>المتبقي<|PRIVATE_CLINICAL_NOTE/); assert.equal(operations, 0);
+});
+
+test('patient imports are hidden without add permission and all transfer tools hidden without patient view permission', () => {
+  const props = { ...baseProps, canViewPatients: true, canImportPatients: false, canManageContacts: false, canExportPatientFinance: false, canExportFinancialReports: false };
+  assert.doesNotMatch(renderTransfer(props), /استيراد ملفات المرضى|التقارير المالية/);
+  const denied = renderTransfer({ ...props, canViewPatients: false }); assert.doesNotMatch(denied, /تنزيل Excel|تنزيل CSV|استيراد ملفات المرضى/); assert.match(denied, /صلاحية عرض المرضى/);
 });

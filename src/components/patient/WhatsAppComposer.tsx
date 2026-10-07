@@ -2,15 +2,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Appointment, Patient, WhatsappSettings } from '../../types';
 import { cleanEgyptianPhone, extraMessageTemplates, format12HourAr, formatArabicDate, getWhatsAppUrl } from '../../utils/whatsappUtils';
 import { getPatientFinancialSummary } from '../../utils/financials';
-import { prepareSafeWhatsAppMessage, whatsAppComposerContextKey } from '../../utils/whatsappSafety';
+import { getWhatsAppDraftTemplate, prepareFreshWhatsAppAction, prepareSafeWhatsAppMessage, whatsAppComposerContextKey, type WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import type { CampaignRecipient } from '../../utils/campaigns';
+import { Storage } from '../../utils/storage';
 
 interface CommonProps {
   key?: string;
   settings: WhatsappSettings;
   clinicName: string;
   onClose: () => void;
+  onAuthorizeSend?: (request: WhatsAppSendAuthorization) => void;
 }
 interface CampaignDraft {
   template: 'greeting' | 'offer';
@@ -61,6 +63,8 @@ function WhatsAppComposerBody(props: Props) {
   const [link, setLink] = useState(campaign?.link ?? '');
   const [attachment, setAttachment] = useState<File | null>(campaign?.attachment ?? null);
   const [notice, setNotice] = useState('');
+  const [sharing, setSharing] = useState(false);
+  const sharingRef = useRef(false);
   const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', ...(canViewPatientFinance && !campaign ? { accountBalance: 'الرصيد المتبقي' } : {}), postOp: 'تعليمات عامة',
     ...Object.fromEntries(Object.entries(extraMessageTemplates).map(([key, value]) => [key, value.title])) };
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -69,8 +73,7 @@ function WhatsAppComposerBody(props: Props) {
   const selected = appts.find(a => a.id === appointmentId);
   const activeDate = selected?.date || (appointmentId === 'manual' ? date : '');
   const activeTime = selected?.time || (appointmentId === 'manual' ? time : '');
-  const storedTemplate = campaign?.message ?? settings.templates[template as keyof typeof settings.templates] ?? extraMessageTemplates[template as keyof typeof extraMessageTemplates]?.text ?? '';
-  const raw = template === 'reminderTomorrow' ? storedTemplate.replace('غداً {date}', 'يوم {date}') : storedTemplate;
+  const raw = getWhatsAppDraftTemplate(template, settings, campaign?.message);
   const values: Record<string, string> = { patientName: recipient.name, clinicName };
   if (patient) values.fileNo = patient.id;
   if (isValidAppointmentDate(activeDate)) values.date = formatArabicDate(activeDate);
@@ -88,6 +91,10 @@ function WhatsAppComposerBody(props: Props) {
   let validLink = !link.trim();
   try { const url = new URL(link.trim()); validLink = ['https:', 'http:'].includes(url.protocol) && Boolean(url.hostname) && !/\s/.test(link.trim()); } catch { /* Optional blank links remain valid. */ }
   const ready = validPhone && !missingDate && !unfinished && validLink && !!message.trim() && safety.financeAllowed && safety.consentAllowed && !safety.unsupportedVariables.length;
+  const authorizeAction = () => prepareFreshWhatsAppAction({
+    templateName: template, rawTemplate: raw, editedText: edited, values, phone: recipient.mobile,
+    canViewPatientFinance, isCampaign: Boolean(campaign), link, appointmentReady: !missingDate,
+  }, Storage.getWhatsappSettingsFresh, props.onAuthorizeSend);
   return <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
     <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تجهيز رسالة واتساب" onKeyDown={e => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
@@ -123,12 +130,29 @@ function WhatsAppComposerBody(props: Props) {
       {safety.unsupportedVariables.length > 0 && <p className="text-amber-800 text-sm">{campaign ? 'الحملات تدعم اسم المستلم واسم العيادة فقط. ' : ''}راجع المتغيرات غير المتاحة: {safety.unsupportedVariables.join('، ')}.</p>}
       {notice && <p role="status" className="text-sm text-slate-700">{notice}</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!ready} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => { if (!ready) return; window.open(getWhatsAppUrl(recipient.mobile, text), '_blank', 'noopener,noreferrer'); campaign?.onOpened(); setNotice('طُلب فتح واتساب؛ راجع المستلم والإرسال داخله. هذا ليس تأكيد إرسال أو تسليم.'); }}>فتح الرسالة في واتساب</button>
-        {attachment && <button type="button" disabled={!ready} className="rounded-xl bg-slate-100 px-4 py-3 disabled:opacity-40" onClick={async () => {
-          if (!ready || !attachment) return;
+        <button type="button" disabled={!ready || sharing} className="rounded-xl bg-emerald-700 text-white px-4 py-3 disabled:opacity-40" onClick={() => {
+          if (sharingRef.current) return;
+          try {
+            const current = authorizeAction();
+            window.open(getWhatsAppUrl(current.phone, current.text), '_blank', 'noopener,noreferrer');
+            campaign?.onOpened();
+            setNotice('طُلب فتح واتساب؛ راجع المستلم والإرسال داخله. هذا ليس تأكيد إرسال أو تسليم.');
+          } catch (error) { setNotice(error instanceof Error ? error.message : 'تعذّر فتح واتساب. راجع البيانات وحاول مرة أخرى.'); }
+        }}>فتح الرسالة في واتساب</button>
+        {attachment && <button type="button" disabled={!ready || sharing} className="rounded-xl bg-slate-100 px-4 py-3 disabled:opacity-40" onClick={async () => {
+          if (sharingRef.current || !attachment) return;
           if (!navigator.canShare?.({ files: [attachment] })) { setNotice('مشاركة الصور غير متاحة في هذا المتصفح. افتح الرسالة وأرفق الصورة من واتساب يدوياً.'); return; }
-          try { await navigator.share({ files: [attachment], text }); setNotice('أُغلقت نافذة المشاركة؛ تحقق من المستلم والإرسال داخل واتساب. هذا ليس تأكيد إرسال أو تسليم.'); }
+          let current: ReturnType<typeof authorizeAction>;
+          try { current = authorizeAction(); }
+          catch (error) { setNotice(error instanceof Error ? error.message : 'تعذّر التحقق من صلاحية مشاركة الرسالة.'); return; }
+          try {
+            sharingRef.current = true;
+            setSharing(true);
+            await navigator.share({ files: [attachment], text: current.text });
+            setNotice('أُغلقت نافذة المشاركة؛ تحقق من المستلم والإرسال داخل واتساب. هذا ليس تأكيد إرسال أو تسليم.');
+          }
           catch (error) { setNotice(error instanceof Error && error.name === 'AbortError' ? 'تم إلغاء المشاركة' : 'تعذرت المشاركة؛ أرفق الصورة يدوياً داخل واتساب.'); }
+          finally { sharingRef.current = false; setSharing(false); }
         }}>مشاركة الصورة والنص</button>}
       </div>
     </section>

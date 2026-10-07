@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Expense } from '../types';
-import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
+import { assertUniqueSupplierInvoice, expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
 
 const expense = (id: string, title: string, category: Expense['category'], amount: number, date: string): Expense => ({ id, title, category, amount, date });
 
@@ -55,4 +55,27 @@ test('invoice payment summaries clamp invalid or excessive amounts', () => {
   assert.deepEqual(getExpensePaymentSummary({ amount: 500, paidAmount: NaN }), { total: 500, paid: 0, remaining: 500 });
   assert.deepEqual(getExpensePaymentSummary({ amount: 500, remainingAmount: 700 }), { total: 500, paid: 0, remaining: 500 });
   assert.deepEqual(getExpensePaymentSummary({ amount: Infinity, paidAmount: 10 }), { total: 0, paid: 0, remaining: 0 });
+});
+
+test('fresh invoice validation rejects repeated supplier invoices including fallback supplier names', () => {
+  const first = { ...expense('first', 'مورد خامات', 'supplies', 100, '2026-10-07'), supplierName: 'مورد خامات', invoiceNumber: 'INV-7' };
+  const current = [first];
+  const snapshot = structuredClone(current);
+  assert.throws(() => assertUniqueSupplierInvoice(current, { ...first, id: 'second' }), /مسجّل/);
+  assert.throws(() => assertUniqueSupplierInvoice(current, { ...first, id: undefined, supplierName: undefined }), /مسجّل/);
+  assert.throws(() => assertUniqueSupplierInvoice(current, { ...first, id: 'second', supplierName: ' مورد   خامات ', invoiceNumber: ' inv-7 ' }), /مسجّل/);
+  assert.deepEqual(current, snapshot);
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice(current, first));
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice(current, { ...first, id: 'second', supplierName: 'مورد آخر' }));
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice(current, { ...first, id: 'second', invoiceNumber: 'INV-8' }));
+});
+
+test('ordinary repeated expenses without invoice numbers remain valid and invoice edits use merged metadata', () => {
+  const first = { ...expense('first', 'إيجار', 'fixed', 100, '2026-10-07'), invoiceNumber: '  ' };
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice([first], { ...first, id: 'next' }));
+  const invoice = { ...first, supplierName: 'مورد', invoiceNumber: '001' };
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice([invoice], { ...invoice, id: 'next', invoiceNumber: '1' }));
+  assert.doesNotThrow(() => assertUniqueSupplierInvoice([invoice], mergeExpenseUpdate(invoice, { title: 'عنوان جديد' })));
+  const next = { ...invoice, id: 'next', invoiceNumber: '002' };
+  assert.throws(() => assertUniqueSupplierInvoice([invoice, next], mergeExpenseUpdate(next, { invoiceNumber: '001' })), /مسجّل/);
 });

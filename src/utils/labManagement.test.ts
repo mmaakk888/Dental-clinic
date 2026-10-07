@@ -1,14 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { Lab, LabCase, LabService } from '../types';
+import type { Lab, LabCase, LabService, Patient } from '../types';
 import { cloneLab } from './labPricing';
-import { mergeLabCaseWorkflowUpdate, prepareLabMetadataSave, prepareLabPricingSave } from './labManagement';
+import { assertLabCaseSessionLink, mergeLabCaseWorkflowUpdate, prepareLabMetadataSave, prepareLabPricingSave } from './labManagement';
 
 const service = (price = 400): LabService => ({ id: 'pfm', category: 'fixed', name: 'PFM', unitLabel: 'طربوش', price });
 const makeLabs = (): Lab[] => [
   { id: 'lab-a', name: 'معمل أول', phone: '01000', address: 'القاهرة', notes: 'ملاحظة', services: [service()], extra: { options: ['keep'] } },
   { id: 'lab-b', name: 'معمل ثان', services: [service(650)], extra: { options: ['second'] } },
 ] as unknown as Lab[];
+
+test('locked case linking rejects a second case for the same patient session', () => {
+  const patients = [{ id: '401', sessions: [{ id: 'session-1' }, { id: 'session-2' }] }, { id: '402', sessions: [{ id: 'session-1' }] }] as Patient[];
+  const existing = [{ id: 'case-1', patientId: '401', linkedSessionId: 'session-1' }] as LabCase[];
+  const snapshot = structuredClone({ patients, existing });
+  assert.throws(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: '401', linkedSessionId: 'session-1' }), /مرتبطة بالفعل/);
+  assert.throws(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: '401', linkedSessionId: 'missing' }), /لم تعد موجودة/);
+  assert.throws(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: 'missing' }), /لم يعد موجودًا/);
+  assert.doesNotThrow(() => assertLabCaseSessionLink(existing, patients, existing[0]));
+  assert.doesNotThrow(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: '401', linkedSessionId: 'session-2' }));
+  assert.doesNotThrow(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: '402', linkedSessionId: 'session-1' }));
+  assert.doesNotThrow(() => assertLabCaseSessionLink(existing, patients, { id: 'case-2', patientId: '401' }));
+  assert.deepEqual({ patients, existing }, snapshot);
+});
 
 test('pricing updates only the selected supplier and allows concurrent changes to other suppliers', () => {
   const latest = makeLabs();

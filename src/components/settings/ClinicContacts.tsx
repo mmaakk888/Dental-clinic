@@ -1,13 +1,10 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertCircle, BookUser, ChevronLeft, ChevronRight, Download, FileCheck2, Megaphone, Pencil, Phone, Plus, Save, Search, Trash2, Upload, UserRound, X } from 'lucide-react';
+import { AlertCircle, BookUser, ChevronLeft, ChevronRight, FileCheck2, Megaphone, Pencil, Phone, Plus, Save, Search, Trash2, UserRound, X } from 'lucide-react';
 import type { ClinicContact, Patient } from '../../types';
 import { contactMatchesSearch, findPatientsByPhone, normalizeContactPhone } from '../../utils/clinicContacts';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
-import type { ContactImportInput } from '../../utils/contactTransfer';
-import { ContactExportDialog, ContactImportDialog } from './ContactTransferDialog';
-import type { ContactImportResult } from './ContactTransferDialog';
 import './ClinicContacts.css';
 
 export interface ClinicContactsProps {
@@ -18,8 +15,6 @@ export interface ClinicContactsProps {
   onOpenPatient?: (patientId: string) => void;
   canManageContacts?: boolean;
   onOpenCampaigns?: () => void;
-  onImportContacts?: (rows: ContactImportInput[]) => Promise<ContactImportResult>;
-  onAuthorizeExport?: () => void;
 }
 
 type ContactFilter = 'all' | 'without-file' | 'with-file';
@@ -107,7 +102,7 @@ function ContactEditor({ original, contacts, patients, onSave, onClose, onOpenPa
   </div>;
 }
 
-export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPatient, canManageContacts = false, onOpenCampaigns, onImportContacts, onAuthorizeExport }: ClinicContactsProps) {
+export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPatient, canManageContacts = false, onOpenCampaigns }: ClinicContactsProps) {
   const id = `clinic-contacts-${useId().replace(/[^\w-]/g, '')}`;
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -115,11 +110,8 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [page, setPage] = useState(0);
   const [editor, setEditor] = useState<{ original?: ClinicContact } | null>(null);
-  const [transfer, setTransfer] = useState<'import' | 'export' | null>(null);
   const rows = useMemo(() => contacts.map(contact => ({ contact, matches: findPatientsByPhone(patients, contact.mobile) })).sort((left, right) => nameCollator.compare(left.contact.name, right.contact.name)), [contacts, patients]);
   const filtered = useMemo(() => rows.filter(({ contact, matches }) => contactMatchesSearch(contact, query) && (filter === 'all' || (filter === 'with-file' ? matches.length > 0 : matches.length === 0))), [rows, query, filter]);
-  const exportRows = useMemo(() => rows.map(({ contact, matches }) => ({ name: contact.name, mobile: contact.mobile, notes: contact.notes || '', patientIds: matches.map(patient => patient.id) })), [rows]);
-  const filteredExportRows = useMemo(() => filtered.map(({ contact, matches }) => ({ name: contact.name, mobile: contact.mobile, notes: contact.notes || '', patientIds: matches.map(patient => patient.id) })), [filtered]);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
@@ -127,7 +119,6 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   const withFiles = rows.filter(row => row.matches.length).length;
   useEffect(() => { setPage(0); }, [query, filter]);
   useEffect(() => { if (!canManageContacts) setEditor(null); }, [canManageContacts]);
-  useEffect(() => { if (transfer === 'import' && (!canManageContacts || !onImportContacts) || transfer === 'export' && !onAuthorizeExport) setTransfer(null); }, [canManageContacts, onImportContacts, onAuthorizeExport, transfer]);
   const resetFilters = () => { setQuery(''); setFilter('all'); setPage(0); };
   const remove = (contact: ClinicContact) => {
     if (saving || !canManageContacts) return;
@@ -138,7 +129,7 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
     <header className="cc-header"><div><span className="cc-eyebrow">دليل التواصل</span><h2 id={`${id}-title`}>جهات الاتصال</h2><p>اجمع الأسماء والأرقام اللي من غير ملف، وابحث فيها واستخدمها في الحملات.</p></div>{(canManageContacts || onOpenCampaigns) && <div className="cc-header-actions">{onOpenCampaigns && <button type="button" className="cc-button" onClick={onOpenCampaigns}><Megaphone aria-hidden="true" />تجهيز حملة</button>}{canManageContacts && <button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => setEditor({})}><Plus aria-hidden="true" />إضافة جهة اتصال</button>}</div>}</header>
     <div className="cc-scope-note"><BookUser aria-hidden="true" /><p>القائمة دي منفصلة عن ملفات المرضى. لو الرقم له ملف بالفعل هنوضّحه، من غير دمج أو إنشاء ملف تلقائي.</p></div>
     <section className="cc-directory" aria-label="دليل جهات الاتصال">
-      <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => setQuery(event.target.value)} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => setQuery('')}><X aria-hidden="true" /></button></div></div><div className="cc-filter"><label htmlFor={`${id}-filter`}>عرض</label><select id={`${id}-filter`} value={filter} onChange={event => setFilter(event.target.value as ContactFilter)}><option value="all">كل جهات الاتصال ({contacts.length})</option><option value="without-file">بدون ملف مطابق ({contacts.length - withFiles})</option><option value="with-file">رقم له ملف ({withFiles})</option></select></div>{((canManageContacts && onImportContacts) || onAuthorizeExport) && <div className="cc-transfer-actions"><span>ملفات جهات الاتصال</span><div>{canManageContacts && onImportContacts && <button type="button" className="cc-button" disabled={saving} onClick={() => setTransfer('import')}><Upload aria-hidden="true" />استيراد ملف</button>}{onAuthorizeExport && <button type="button" className="cc-button" disabled={saving || !contacts.length} onClick={() => setTransfer('export')}><Download aria-hidden="true" />تصدير</button>}</div></div>}</div>
+      <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => setQuery(event.target.value)} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => setQuery('')}><X aria-hidden="true" /></button></div></div><div className="cc-filter"><label htmlFor={`${id}-filter`}>عرض</label><select id={`${id}-filter`} value={filter} onChange={event => setFilter(event.target.value as ContactFilter)}><option value="all">كل جهات الاتصال ({contacts.length})</option><option value="without-file">بدون ملف مطابق ({contacts.length - withFiles})</option><option value="with-file">رقم له ملف ({withFiles})</option></select></div></div>
       {queryMatches.length > 0 && <div className="cc-search-match" role="status"><div className="cc-inline-heading"><FileCheck2 aria-hidden="true" /><strong>الرقم اللي بتبحث عنه له ملف بالفعل</strong></div><MatchingFiles matches={queryMatches} onOpenPatient={onOpenPatient} /><p>تطابق الرقم لا يثبت هوية الشخص؛ بعض الأسر بتستخدم رقمًا واحدًا.</p></div>}
       <div className="cc-results"><p role="status">{query || filter !== 'all' ? `عرض ${filtered.length} من ${contacts.length} جهة اتصال` : `${contacts.length} جهة اتصال`}<span> · مرتبة بالاسم</span></p>{(query || filter !== 'all') && <button type="button" className="cc-button cc-button-quiet" onClick={resetFilters}>عرض الكل</button>}</div>
       {visible.length > 0 ? <div className="cc-list">{visible.map(({ contact, matches }) => <article className="cc-contact" key={contact.id}><div className="cc-contact-main"><span className="cc-avatar" aria-hidden="true"><UserRound /></span><div className="cc-contact-details"><ContactName name={contact.name} matches={matches} /><div className="cc-contact-meta"><span className="cc-phone"><Phone aria-hidden="true" /><bdi dir="ltr">{contact.mobile}</bdi></span><span className={`cc-status${matches.length ? ' cc-status-matched' : ''}`}>{matches.length ? 'رقم له ملف' : 'جهة اتصال فقط'}</span></div>{contact.notes && <details className="cc-note-details"><summary>ملاحظة محفوظة</summary><p className="cc-contact-notes" dir="auto">{contact.notes}</p></details>}</div>{canManageContacts && <div className="cc-contact-actions"><button type="button" className="cc-icon-button" aria-label={`تعديل جهة الاتصال ${contact.name}`} title="تعديل" disabled={saving} onClick={() => setEditor({ original: { ...contact } })}><Pencil aria-hidden="true" /></button><button type="button" className="cc-icon-button cc-delete" aria-label={`حذف جهة الاتصال ${contact.name}`} title="حذف جهة الاتصال فقط" disabled={saving} onClick={() => remove(contact)}><Trash2 aria-hidden="true" /></button></div>}</div>{matches.length > 0 && <div className="cc-contact-files"><MatchingFiles matches={matches} onOpenPatient={onOpenPatient} /><small>تطابق رقم فقط · بدون دمج تلقائي</small></div>}</article>)}</div> : <div className="cc-empty"><BookUser aria-hidden="true" /><h3>{contacts.length ? 'مفيش جهات اتصال مطابقة' : canManageContacts ? 'ابدأ بقائمة الأسماء والأرقام' : 'لم تُضف جهات اتصال بعد'}</h3><p>{contacts.length ? 'جرّب اسمًا أو رقمًا آخر، أو اعرض القائمة كلها.' : canManageContacts ? 'أضف الأشخاص اللي عندك أرقامهم من غير فتح ملفات علاج لهم. هتلاقيهم بعد كده ضمن جمهور الحملات.' : 'جهات الاتصال المحفوظة هتظهر هنا للبحث ومراجعة الأرقام المرتبطة بملفات.'}</p>{(contacts.length > 0 || canManageContacts) && <button type="button" className="cc-button" onClick={contacts.length ? resetFilters : () => setEditor({})}>{contacts.length ? 'عرض الكل' : 'إضافة أول جهة اتصال'}</button>}</div>}
@@ -146,7 +137,5 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
     </section>
     <p className="cc-footer-note">الحملات بتجمع جهات الاتصال والمرضى بدون تكرار نفس الرقم، وبشرط وجود موافقة مسجّلة على رسائل الحملات.</p>
     {canManageContacts && editor && <ContactEditor original={editor.original} contacts={contacts} patients={patients} onSave={onSave} onClose={() => setEditor(null)} onOpenPatient={onOpenPatient ? patientId => { setEditor(null); onOpenPatient(patientId); } : undefined} />}
-    {transfer === 'import' && canManageContacts && onImportContacts && <ContactImportDialog contacts={contacts} patients={patients} onImport={onImportContacts} onAuthorizeExport={onAuthorizeExport} onClose={() => setTransfer(null)} />}
-    {transfer === 'export' && onAuthorizeExport && <ContactExportDialog allRows={exportRows} filteredRows={filteredExportRows} filterActive={!!query || filter !== 'all'} onAuthorizeExport={onAuthorizeExport} onClose={() => setTransfer(null)} />}
   </section>;
 }

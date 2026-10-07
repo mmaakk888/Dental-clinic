@@ -5,13 +5,15 @@ import { Appointment, Patient } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, isValidAppointmentDate, localDateISO, occupiesAppointmentSlot } from './appointmentScheduling';
 import { useAppointmentDialog } from './useAppointmentDialog';
+import { useConfirmedAction } from '../common/useConfirmedAction';
+import { createAppointmentDraftGuard } from './appointmentDraftGuard';
 
 interface SmartScheduleModalProps {
   isOpen: boolean;
   onClose: () => void;
   patients: Patient[];
   existingAppointments: Appointment[];
-  onBookAppointment: (appt: Partial<Appointment>) => void;
+  onBookAppointment: (appt: Partial<Appointment>) => void | Promise<void>;
 }
 
 const PROCEDURES = [
@@ -38,9 +40,49 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [recommendation, setRecommendation] = useState<ScheduleRecommendation | null>(null);
-  const { showToast, validationFail, askConfirm } = useToastAndConfirm();
+  const { showToast, validationFail, askConfirm, cancelConfirm } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
+  const committingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const draftGuardRef = useRef(createAppointmentDraftGuard());
+  const pendingConfirmationRef = useRef<(() => boolean) | null>(null);
   const timeWasEditedRef = useRef(false);
-  const dialogRef = useAppointmentDialog(isOpen, onClose);
+  const durationMinutes = recommendation?.estimatedMinutes || PROCEDURES.find(procedure => procedure.label === procedureType)?.duration || 30;
+  const draftContext = JSON.stringify([selectedPatientId, patients.find(patient => patient.id === selectedPatientId), procedureType, apptDate, selectedTime, notes, durationMinutes, existingAppointments]);
+  draftGuardRef.current.update(isOpen, draftContext);
+  const invalidateConfirmation = () => {
+    draftGuardRef.current.invalidate();
+    if (pendingConfirmationRef.current) {
+      pendingConfirmationRef.current = null;
+      cancelConfirm();
+    }
+  };
+  const handleClose = () => {
+    if (committingRef.current) return;
+    invalidateConfirmation();
+    onClose();
+  };
+  const dialogRef = useAppointmentDialog(isOpen, handleClose);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    draftGuardRef.current.update(isOpen, draftContext);
+    return () => {
+      mountedRef.current = false;
+      draftGuardRef.current.update(false, '');
+      if (pendingConfirmationRef.current) {
+        pendingConfirmationRef.current = null;
+        cancelConfirm();
+      }
+    };
+  }, [cancelConfirm]);
+
+  useEffect(() => {
+    if (pendingConfirmationRef.current && !pendingConfirmationRef.current()) {
+      pendingConfirmationRef.current = null;
+      cancelConfirm();
+    }
+  }, [draftContext, isOpen, cancelConfirm]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -92,6 +134,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
   if (!isOpen) return null;
 
   const handleSave = () => {
+    if (committingRef.current) return;
     const patient = patients.find(p => p.id === selectedPatientId);
     if (!patient) {
       validationFail('smart-schedule-dialog', 'smart-schedule-patient', 'اختر ملف مريض موجودًا للحجز');
@@ -106,7 +149,6 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
       return;
     }
 
-    const durationMinutes = recommendation?.estimatedMinutes || PROCEDURES.find(procedure => procedure.label === procedureType)?.duration || 30;
     const appointment: Partial<Appointment> = {
       patientId: patient.id,
       fileNo: patient.id,
@@ -121,16 +163,21 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
       isFollowUp: procedureType.includes('متابعة'),
       isWalkIn: false,
     };
-    const saveAppointment = () => {
+    const isCurrentDraft = draftGuardRef.current.capture();
+    const saveAppointment = async () => {
+      if (committingRef.current || !isCurrentDraft()) return;
+      pendingConfirmationRef.current = null;
+      committingRef.current = true;
       try {
-        onBookAppointment(appointment);
-        showToast('تم حجز الموعد بنجاح');
-        onClose();
-      } catch {
-        showToast('تعذّر حفظ الموعد. راجع البيانات وحاول مرة أخرى.', 'error');
-      }
+        await run(() => onBookAppointment(appointment), () => {
+          if (!mountedRef.current) return;
+          showToast('تم حجز الموعد بنجاح');
+          onClose();
+        });
+      } finally { committingRef.current = false; }
     };
     if (findAppointmentConflicts(existingAppointments, apptDate, selectedTime, durationMinutes).length) {
+      pendingConfirmationRef.current = isCurrentDraft;
       askConfirm({
         title: 'موعد متعارض',
         message: 'يتداخل هذا الموعد مع حجز آخر مسجل. هل تريد تأكيد الحجز رغم التعارض؟',
@@ -140,7 +187,7 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
       });
       return;
     }
-    saveAppointment();
+    void saveAppointment();
   };
 
   return (
@@ -157,13 +204,13 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
               <p className="text-xs text-indigo-200/80">مدة تقديرية للإجراء وأوقات خالية من التعارض</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} aria-label="إلغاء وإغلاق" className="min-w-[44px] min-h-[44px] shrink-0 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition">
+          <button type="button" disabled={saving} onClick={handleClose} aria-label="إلغاء وإغلاق" className="min-w-[44px] min-h-[44px] shrink-0 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition disabled:opacity-50">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-4 sm:p-5 space-y-4 min-h-0 overflow-y-auto">
+        <fieldset disabled={saving} className="p-4 sm:p-5 space-y-4 min-w-0 min-h-0 overflow-y-auto">
           {/* Patient select */}
           <div>
             <label htmlFor="smart-schedule-patient" className="block text-sm font-bold text-slate-700 mb-1">المريض</label>
@@ -293,20 +340,21 @@ export const SmartScheduleModal: React.FC<SmartScheduleModalProps> = ({
               />
             </div>
           </div>
-        </div>
+        </fieldset>
 
         {/* Footer */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2 shrink-0">
-          <button type="button" onClick={onClose} className="px-4 py-2 min-h-[44px] text-sm font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition">
+          <button type="button" disabled={saving} onClick={handleClose} className="px-4 py-2 min-h-[44px] text-sm font-bold text-slate-700 hover:bg-slate-200 rounded-xl transition disabled:opacity-50">
             إلغاء وإغلاق
           </button>
           <button
             type="button"
+            disabled={saving}
             onClick={handleSave}
             className="px-5 py-2 min-h-[44px] text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-md transition flex items-center gap-1.5"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>تأكيد وجدولة الموعد</span>
+            <span>{saving ? 'جارٍ حفظ الموعد…' : 'تأكيد وجدولة الموعد'}</span>
           </button>
         </div>
       </div>
