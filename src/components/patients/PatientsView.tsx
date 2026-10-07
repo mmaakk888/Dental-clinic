@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { 
   Search, 
+  ContactRound,
   UserPlus, 
   Edit3, 
   MessageCircle, 
@@ -45,6 +46,7 @@ interface PatientsViewProps {
   onDeletePatient: (patientId: string) => void | Promise<void>;
   onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
   onBackToHome: () => void;
+  onOpenContacts?: () => void;
 }
 
 type FilterChip = 'all' | 'todayAppt' | 'ongoing' | 'debt' | 'allergy' | 'lab' | 'noAppt';
@@ -81,7 +83,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   onSelectPatient,
   onSavePatient,
   onDeletePatient,
-  onSaveAppointment
+  onSaveAppointment,
+  onOpenContacts
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -425,6 +428,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
           </div>
         </div>
         <div className="patients-page-actions">
+          {onOpenContacts && canPerformAction(currentUser ?? null, 'view_patients') && <button type="button" onClick={onOpenContacts} className="patients-secondary-button" title="أسماء وأرقام بدون ملفات مرضى"><ContactRound aria-hidden="true" /><span>جهات الاتصال</span></button>}
           {canEditPatient && <button type="button" onClick={handleOpenAddModal} className="patients-add-button"><UserPlus /><span>إضافة مريض</span></button>}
         </div>
       </header>

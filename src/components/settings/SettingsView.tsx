@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Download, Upload, Check, Trash2, Plus, MessageCircle, Pill, Save, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
-import { ThemeSettings, UILabels, User, Patient, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
+import { ThemeSettings, UILabels, User, Patient, ClinicContact, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
 import { IdentityAppearance } from './IdentityAppearance';
@@ -23,7 +23,7 @@ const settingsSections = [
   { key: 'identity', group: 'appearance', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
   { key: 'layout', group: 'appearance', label: 'المحتوى والترتيب', description: 'نصوص الرئيسية وأقسام التنقل', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
   { key: 'services', group: 'practice', label: 'الخدمات والأسعار', description: 'الخدمات وأسعار البيع وتكاليف المعامل', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
-  { key: 'whatsapp', group: 'practice', label: 'إدارة واتساب', description: 'الرسائل الجاهزة والحملات والربط', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
+  { key: 'whatsapp', group: 'practice', label: 'إدارة واتساب', description: 'جهات الاتصال والرسائل والحملات', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
   { key: 'drugs', group: 'practice', label: 'فهرس الأدوية', description: 'فهرس الأدوية المستخدم في الروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
   { key: 'firebase', group: 'data', label: 'النسخ السحابي', description: 'إعدادات النسخ الاحتياطي السحابي', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
   { key: 'users', group: 'people', label: 'المستخدمون والصلاحيات', description: 'حسابات العمل وصلاحيات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },
@@ -93,6 +93,10 @@ interface SettingsViewProps {
   canManageLabPrices: boolean;
   initialPricingLabId?: string;
   patients: Patient[];
+  contacts: ClinicContact[];
+  canViewPatients?: boolean;
+  canManageContacts?: boolean;
+  initialWhatsAppSection?: 'templates' | 'campaigns';
   appointments: Appointment[];
   labs: Lab[];
   labCases: LabCase[];
@@ -111,6 +115,9 @@ interface SettingsViewProps {
   onSaveServiceCatalog: (values: ServiceCatalogValues) => void;
   onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
+  onSaveContact: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
+  onDeleteContact: (original: ClinicContact) => void | Promise<void>;
+  onOpenPatient?: (patientId: string) => void;
   onSaveDrugCatalog: (catalog: DrugCatalogItem[]) => void;
   onImportPatients: (newPatients: Patient[]) => Promise<void>;
   onRestoreFullData: (data: any) => Promise<void>;
@@ -135,6 +142,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   canManageLabPrices,
   initialPricingLabId,
   patients,
+  contacts,
+  canViewPatients = false,
+  canManageContacts = false,
+  initialWhatsAppSection = 'templates',
   appointments,
   labs,
   labCases,
@@ -153,12 +164,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaveServiceCatalog,
   onSaveLabPricing,
   onSaveWhatsappSettings,
+  onSaveContact,
+  onDeleteContact,
+  onOpenPatient,
   onSaveDrugCatalog,
   onImportPatients,
   onRestoreFullData,
   onResetAllData,
   onBackToHome
-}) => {
+}: SettingsViewProps) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
 
   const [activeSubTab, setActiveSubTab] = useState<SettingsSectionKey>(
@@ -463,6 +477,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       onAuthorizeDataExport('full_backup');
       const fullData = assertClinicBackup({
         patients,
+        contacts,
         appointments,
         labs,
         labCases,
@@ -664,9 +679,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div key={activeSubTab} className="settings-section-enter">
 
         {/* WhatsApp Integration SubTab */}
-        {activeSubTab === "whatsapp" && (
+        {activeSubTab === 'whatsapp' && !canViewPatients && <p role="status" className="p-5 text-sm text-slate-600">جهات الاتصال والرسائل تشمل أسماء وأرقام المرضى. يلزم تفعيل صلاحية عرض المرضى مع الوصول للوحة التحكم.</p>}
+        {activeSubTab === "whatsapp" && canViewPatients && (
           <WhatsAppManagement clinicName={clinicName} whatsappSettings={whatsappSettings}
-            patients={patients} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
+            patients={patients} contacts={contacts} appointments={appointments} canViewPatientFinance={canViewPatientFinance}
+            onSaveContact={onSaveContact} onDeleteContact={onDeleteContact} onOpenPatient={onOpenPatient}
+            canManageContacts={canManageContacts} initialSection={initialWhatsAppSection}
             onSaveWhatsappSettings={onSaveWhatsappSettings} />
         )}
 

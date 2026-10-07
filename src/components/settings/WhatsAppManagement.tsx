@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Appointment, Patient, WhatsappSettings } from '../../types';
-import { Clipboard, ExternalLink, FileText, ImagePlus, Info, LockKeyhole, Megaphone, MessageCircle, Plug, Save, Search, Send, X } from 'lucide-react';
+import { Appointment, Patient, ClinicContact, WhatsappSettings } from '../../types';
+import { Clipboard, ContactRound, ExternalLink, FileText, ImagePlus, Info, LockKeyhole, Megaphone, MessageCircle, Plug, Save, Search, Send, X } from 'lucide-react';
 import { cleanEgyptianPhone, extraMessageTemplates, fillMessageTemplate, format12HourAr, formatArabicDate, getWhatsAppUrl } from '../../utils/whatsappUtils';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
+import { ClinicContacts } from './ClinicContacts';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import './WhatsAppManagement.css';
@@ -13,12 +14,18 @@ interface Props {
   clinicName: string;
   whatsappSettings: WhatsappSettings;
   patients: Patient[];
+  contacts: ClinicContact[];
+  canManageContacts?: boolean;
+  initialSection?: 'templates' | 'campaigns';
+  onSaveContact: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
+  onDeleteContact: (original: ClinicContact) => void | Promise<void>;
+  onOpenPatient?: (patientId: string) => void;
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   appointments?: Appointment[];
   canViewPatientFinance?: boolean;
 }
 type TemplateKey = keyof WhatsappSettings['templates'];
-type Section = 'templates' | 'individual' | 'campaigns' | 'connection';
+type Section = 'templates' | 'individual' | 'contacts' | 'campaigns' | 'connection';
 type Category = 'all' | 'appointments' | 'care' | 'campaigns';
 const catalog: Array<{ key: TemplateKey; title: string; category: Exclude<Category, 'all'>; description: string; fallback: string }> = [
   { key: 'reminderTomorrow', title: 'تذكير بالموعد', category: 'appointments', description: 'تذكير بموعد المريض، مع التاريخ والوقت.', fallback: 'أهلاً {patientName}، نذكرك بموعدك في {clinicName} يوم {date} الساعة {time}.' },
@@ -43,10 +50,11 @@ const isDateValid = (value: string) => {
 const isTimeValid = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const normalizeSearch = (value: string) => value.toLowerCase().replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
 
-export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
+export function WhatsAppManagement({ clinicName, whatsappSettings, patients, contacts, canManageContacts = false, initialSection = 'templates', onSaveContact, onDeleteContact, onOpenPatient, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
-  const [section, setSection] = useState<Section>('templates');
+  const [section, setSection] = useState<Section>(initialSection);
+  useEffect(() => { setSection(initialSection); }, [initialSection]);
   const [draft, setDraft] = useState<WhatsappSettings>({ ...whatsappSettings });
   const previousSettings = useRef(whatsappSettings);
   useEffect(() => {
@@ -168,9 +176,9 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
   </aside>;
 
   return <section className="wa-management" dir="rtl" aria-labelledby="wa-management-title">
-    <header className="wa-management-header"><div className="wa-section-identity"><span className="wa-section-symbol"><MessageCircle size={23} /></span><div><h2 id="wa-management-title">إدارة واتساب</h2><p>مكتبة رسائلك، تجهيز فردي، وحملات منظمة من مكان واحد.</p></div></div><span className="wa-mode-badge"><ExternalLink size={14} /> الوضع الحالي: فتح يدوي</span></header>
-    <nav className="wa-section-navigation wa-four-sections" aria-label="أقسام إدارة واتساب">{[
-      { key: 'templates' as const, title: 'مكتبة الرسائل', icon: FileText }, { key: 'individual' as const, title: 'رسالة فردية', icon: Send }, { key: 'campaigns' as const, title: 'الحملات', icon: Megaphone }, { key: 'connection' as const, title: 'الربط المستقبلي', icon: Plug },
+    <header className="wa-management-header"><div className="wa-section-identity"><span className="wa-section-symbol"><MessageCircle size={23} /></span><div><h2 id="wa-management-title">إدارة واتساب</h2><p>جهات اتصالك ورسائلك وحملاتك في مكان واحد.</p></div></div><span className="wa-mode-badge"><ExternalLink size={14} /> الوضع الحالي: فتح يدوي</span></header>
+    <nav className="wa-section-navigation wa-five-sections" aria-label="أقسام إدارة واتساب">{[
+      { key: 'templates' as const, title: 'مكتبة الرسائل', icon: FileText }, { key: 'individual' as const, title: 'رسالة فردية', icon: Send }, { key: 'contacts' as const, title: 'جهات الاتصال', icon: ContactRound }, { key: 'campaigns' as const, title: 'الحملات', icon: Megaphone }, { key: 'connection' as const, title: 'الربط المستقبلي', icon: Plug },
     ].map(item => <button key={item.key} type="button" aria-pressed={section === item.key} onClick={() => setSection(item.key)}><item.icon size={18} /><span>{item.title}</span></button>)}</nav>
 
     <div hidden={section !== 'templates'}>
@@ -207,7 +215,8 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, onS
         </div></div>
     </div>
 
-    <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} settings={draft} clinicName={clinicName} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
+    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} /></div>
+    <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} contacts={contacts} settings={draft} clinicName={clinicName} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
     <div hidden={section !== 'connection'} className="wa-panel wa-section-content"><div className="wa-panel-heading"><div><h3>الربط والقدرات المستقبلية</h3><p>الوضع اليدوي يعمل الآن. الخيارات الآلية تحتاج خدمة خلفية موثوقة قبل تفعيلها.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div><div className="wa-capability-grid">{[
       { title: 'تذكيرات المواعيد', detail: 'جدولة التذكير للمرضى بعد ربط خدمة الإرسال والتحقق من الموافقات.' }, { title: 'حملات مجدولة', detail: 'إرسال منظم مع حد للرسائل وإلغاء الحملة؛ غير متاح في الوضع اليدوي.' }, { title: 'تتبع الرسائل', detail: 'حالات الإرسال والتسليم من ردود الخدمة الفعلية، لا من مجرد فتح واتساب.' }, { title: 'وسائط مرفقة', detail: 'إرسال الصور والمرفقات عبر الخدمة بعد إعداد آمن، ومراجعة المستلم.' },
     ].map(item => <article key={item.title}><LockKeyhole size={20} /><h4>{item.title}</h4><p>{item.detail}</p><span>يتطلب الربط · غير مفعّل</span></article>)}</div><p className="wa-context-note"><Info size={17} /> مفاتيح الاتصال لا تُحفظ داخل واجهة المتصفح. لا يفعّل حفظ الرسائل أي إرسال تلقائي أو اشتراك.</p><button type="button" className="wa-button wa-button-secondary wa-back-to-manual" onClick={() => setSection('individual')}><MessageCircle size={17} /> استخدام الفتح اليدوي الآن</button></div>

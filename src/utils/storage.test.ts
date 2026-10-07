@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Storage, STORAGE_FAILURE_EVENT, SERVICE_CATALOG_STORAGE_KEYS, LABS_STORAGE_KEY } from './storage';
+import { Storage, STORAGE_FAILURE_EVENT, SERVICE_CATALOG_STORAGE_KEYS, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS } from './storage';
 import { LabCase, User } from '../types';
 import { INITIAL_PATIENTS } from '../data/initialData';
 import { DEFAULT_THEME, DEFAULT_UI_LABELS } from '../data/initialData';
+import { normalizeNavigationOrder } from './clinicContent';
 
 const local = new Map<string, string>();
 const session = new Map<string, string>();
@@ -11,6 +12,88 @@ const adapter = (map: Map<string, string>) => ({ getItem: (key: string) => map.g
 Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true });
 Object.defineProperty(globalThis, 'sessionStorage', { value: adapter(session), configurable: true });
 Object.defineProperty(globalThis, 'window', { value: new EventTarget(), configurable: true });
+
+const testContact = () => ({ id: 'contact-storage-test', name: 'جهة اختبار', mobile: '01012345678', notes: '', createdAt: '2026-10-07T09:00:00.000Z' });
+
+test('contacts default empty and are included in the same confirmed domain write and cross-tab key list', () => {
+  Storage.resetAll();
+  assert.deepEqual(Storage.getContacts(), []);
+  assert.equal(local.has('dental_contacts'), false);
+  assert.ok(CLINIC_DOMAIN_STORAGE_KEYS.includes('dental_contacts'));
+  const before = Storage.getDomainData();
+  const next = { ...before, contacts: [testContact()] };
+  Storage.saveDomainDataConfirmed(next, before);
+  assert.deepEqual(Storage.getContacts(), next.contacts);
+  assert.deepEqual(JSON.parse(local.get('dental_contacts')!), next.contacts);
+  assert.equal(local.has('dental_patients_v2'), false, 'adding a contact does not write/create a patient');
+  next.contacts[0].name = 'caller mutation';
+  assert.equal(Storage.getContacts()[0].name, 'جهة اختبار');
+  Storage.resetAll();
+});
+
+test('contacts fresh reads observe other tabs, clone records and refuse corrupt lists without replacement', () => {
+  Storage.resetAll();
+  local.set('dental_contacts', JSON.stringify([{ ...testContact(), metadata: { keep: ['original'] } }]));
+  const first: any[] = Storage.getContactsFresh();
+  first[0].metadata.keep.push('draft');
+  assert.deepEqual((Storage.getContactsFresh()[0] as any).metadata.keep, ['original']);
+  local.set('dental_contacts', JSON.stringify([{ ...testContact(), name: 'تبويب آخر' }]));
+  assert.equal(Storage.getDomainData().contacts[0].name, 'تبويب آخر');
+  for (const raw of ['{broken', '{}', 'null']) {
+    local.set('dental_contacts', raw);
+    assert.throws(() => Storage.getContacts(), /لم يتم استبدالها/);
+    assert.throws(() => Storage.getDomainData(), /لم يتم استبدالها/);
+    assert.equal(local.get('dental_contacts'), raw);
+  }
+  Storage.resetAll();
+});
+
+test('contact persistence failure rolls back every domain key and refuses silent no-op success', () => {
+  Storage.resetAll();
+  const before = Storage.getDomainData();
+  Storage.saveDomainDataConfirmed({ ...before, contacts: [testContact()] }, before);
+  const saved = Storage.getDomainData(); const persisted = new Map(local);
+  let failOnce = true;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem(key: string, value: string) {
+    local.set(key, value);
+    if (key === 'dental_contacts' && failOnce) { failOnce = false; throw new Error('quota after write'); }
+  } } });
+  try {
+    assert.throws(() => Storage.saveDomainDataConfirmed({ ...saved, patients: [], contacts: [] }, saved));
+    assert.deepEqual(local, persisted);
+    assert.deepEqual(Storage.getDomainData(), saved);
+  } finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); }
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem: () => undefined } });
+  try {
+    assert.throws(() => Storage.saveDomainDataConfirmed({ ...saved, contacts: [] }, saved));
+    assert.deepEqual(local, persisted);
+    assert.deepEqual(Storage.getContacts(), saved.contacts);
+  } finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); Storage.resetAll(); }
+});
+
+test('contact backup restore is optional for old copies, explicit empty list clears and later failures roll back', () => {
+  Storage.resetAll();
+  Storage.saveBackupConfirmed({ contacts: [testContact()] });
+  const before = new Map(local);
+  Storage.saveBackupConfirmed({ clinicName: 'اسم اختبار' });
+  assert.deepEqual(Storage.getContacts(), [testContact()], 'legacy backup without contacts preserves existing contacts');
+  let failOnce = true;
+  const restoredBefore = new Map(local);
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem(key: string, value: string) {
+    if (key === 'dental_clinic_name_v2' && failOnce) { failOnce = false; throw new Error('quota'); }
+    local.set(key, value);
+  } } });
+  try {
+    assert.throws(() => Storage.saveBackupConfirmed({ contacts: [], clinicName: 'بعد الاستعادة' }));
+    assert.deepEqual(local, restoredBefore);
+    assert.deepEqual(Storage.getContacts(), [testContact()]);
+  } finally { Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true }); }
+  Storage.saveBackupConfirmed({ contacts: [] });
+  assert.deepEqual(Storage.getContacts(), []);
+  assert.equal(before.has('dental_patients_v2'), false);
+  Storage.resetAll();
+  assert.equal(local.has('dental_contacts'), false);
+});
 
 test('fresh lab cases observe a newly linked case without returning mutable cached records', () => {
   const key = 'dental_lab_cases_v2';
@@ -272,9 +355,9 @@ test('content saves confirm both keys and preserve unrelated records, identity a
     Storage.saveClinicContent(draft);
     assert.deepEqual(writtenKeys, ['dental_ui_labels_v2', 'dental_tile_order_v2']);
     assert.deepEqual(JSON.parse(local.get('dental_ui_labels_v2')!), draft.labels);
-    assert.deepEqual(JSON.parse(local.get('dental_tile_order_v2')!), draft.tileOrder);
+    assert.deepEqual(JSON.parse(local.get('dental_tile_order_v2')!), normalizeNavigationOrder(draft.tileOrder));
     assert.deepEqual(Storage.getUILabels(), draft.labels);
-    assert.deepEqual(Storage.getTileOrder(), draft.tileOrder);
+    assert.deepEqual(Storage.getTileOrder(), normalizeNavigationOrder(draft.tileOrder));
     for (const [key, value] of unrelatedBefore) assert.equal(local.get(key), value, `${key} remains unchanged`);
     assert.deepEqual(Storage.getUILabels().tabs, draft.labels.tabs);
     assert.deepEqual(Storage.getUILabels().tiles.customSection, draft.labels.tiles.customSection);
@@ -312,7 +395,7 @@ test('content save normalizes duplicate, unknown and missing section order befor
   draft.tileOrder = ['settings', 'home', 'patients', 'settings', 'unknown', 'lab'];
   const originalOrder = [...draft.tileOrder];
   Storage.saveClinicContent(draft);
-  const expected = ['settings', 'patients', 'lab', 'appointments', 'summary'];
+  const expected = ['settings', 'patients', 'contacts', 'lab', 'appointments', 'summary'];
   assert.deepEqual(Storage.getTileOrder(), expected);
   assert.deepEqual(JSON.parse(local.get('dental_tile_order_v2')!), expected);
   assert.deepEqual(draft.tileOrder, originalOrder, 'normalization does not mutate the caller draft');
@@ -343,7 +426,7 @@ test('an interrupted second content write restores both persisted keys and their
     assert.throws(() => Storage.saveClinicContent(next), /لم تُحفظ/);
     assert.deepEqual(local, persistedBefore);
     assert.deepEqual(Storage.getUILabels(), original.labels);
-    assert.deepEqual(Storage.getTileOrder(), original.tileOrder);
+    assert.deepEqual(Storage.getTileOrder(), JSON.parse(persistedBefore.get('dental_tile_order_v2')!));
     assert.equal(failures, 1);
   } finally {
     window.removeEventListener(STORAGE_FAILURE_EVENT, listener);
@@ -382,7 +465,7 @@ test('fresh content snapshots observe external changes, normalize order without 
   const original = makeContentDraft();
   Storage.saveClinicContent(original);
   assert.deepEqual(Storage.getUILabels(), original.labels);
-  assert.deepEqual(Storage.getTileOrder(), original.tileOrder);
+  assert.deepEqual(Storage.getTileOrder(), normalizeNavigationOrder(original.tileOrder));
 
   const external = makeContentDraft();
   external.labels.homeSubtitle = 'وصف محفوظ في تبويب آخر';
@@ -393,7 +476,7 @@ test('fresh content snapshots observe external changes, normalize order without 
   local.set('dental_ui_labels_v2', JSON.stringify(external.labels));
   local.set('dental_tile_order_v2', JSON.stringify(externalOrder));
   assert.equal(Storage.getUILabels().homeSubtitle, original.labels.homeSubtitle, 'ordinary reads still have the old cache');
-  assert.deepEqual(Storage.getTileOrder(), original.tileOrder);
+  assert.deepEqual(Storage.getTileOrder(), normalizeNavigationOrder(original.tileOrder));
 
   const persistedBefore = new Map(local);
   const writes: string[] = [];
@@ -405,7 +488,7 @@ test('fresh content snapshots observe external changes, normalize order without 
   try {
     const snapshot = Storage.getClinicContent();
     assert.deepEqual(snapshot.labels, external.labels);
-    assert.deepEqual(snapshot.tileOrder, ['settings', 'lab', 'patients', 'appointments', 'summary']);
+    assert.deepEqual(snapshot.tileOrder, ['settings', 'lab', 'patients', 'contacts', 'appointments', 'summary']);
     assert.deepEqual(local, persistedBefore, 'fresh reads do not rewrite malformed persisted order');
     assert.deepEqual(writes, []);
 
@@ -418,7 +501,7 @@ test('fresh content snapshots observe external changes, normalize order without 
     snapshot.tileOrder.reverse();
     assert.deepEqual(Storage.getUILabels(), external.labels, 'the returned snapshot does not alias cached labels');
     assert.deepEqual(Storage.getClinicContent().labels, external.labels);
-    assert.deepEqual(Storage.getClinicContent().tileOrder, ['settings', 'lab', 'patients', 'appointments', 'summary']);
+    assert.deepEqual(Storage.getClinicContent().tileOrder, ['settings', 'lab', 'patients', 'contacts', 'appointments', 'summary']);
     assert.deepEqual(local, persistedBefore);
     assert.deepEqual(writes, []);
   } finally {
@@ -451,7 +534,7 @@ test('content saves report silent rollback failure without publishing partially 
     assert.deepEqual(JSON.parse(local.get('dental_ui_labels_v2')!), next.labels);
     assert.equal(local.get('dental_tile_order_v2'), originalOrder);
     assert.deepEqual(Storage.getUILabels(), original.labels, 'failed content writes never publish their labels to cache');
-    assert.deepEqual(Storage.getTileOrder(), original.tileOrder, 'failed content writes never publish their order to cache');
+    assert.deepEqual(Storage.getTileOrder(), JSON.parse(originalOrder), 'failed content writes never publish their order to cache');
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { value: adapter(local), configurable: true });
     Storage.resetAll();

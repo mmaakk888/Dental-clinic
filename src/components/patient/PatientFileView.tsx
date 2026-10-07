@@ -693,7 +693,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-colors cursor-pointer active:scale-95 touch-manipulation min-h-[44px]"
           >
             <ArrowRight className="w-4 h-4" />
-            <span>{origin === 'appointments' ? 'جدول المواعيد' : 'فهرس الحالات'}</span>
+            <span>{origin === 'contacts' ? 'جهات الاتصال' : origin === 'appointments' ? 'جدول المواعيد' : 'فهرس الحالات'}</span>
           </button>
 
           <div className="flex items-center gap-2">

@@ -9,6 +9,38 @@ const fixtures = () => structuredClone({ patients: INITIAL_PATIENTS, appointment
   whatsappSettings: DEFAULT_WHATSAPP_SETTINGS, clinicName: 'عيادة اختبار', clinicLogo: null,
   theme: DEFAULT_THEME, labels: DEFAULT_UI_LABELS, tileOrder: DEFAULT_TILE_ORDER });
 
+const backupContact = () => ({ id: 'contact-backup-test', name: 'جهة اختبار', mobile: '01012345678', notes: '', createdAt: '2026-10-07T09:00:00.000Z' });
+
+test('contacts are recognized independently from files and legacy backups keep their omission', () => {
+  const input = { contacts: [{ ...backupContact(), future: { tags: ['keep'] } }] };
+  const value = assertClinicBackup(input);
+  assert.deepEqual(value.contacts, input.contacts);
+  assert.equal('patients' in value, false);
+  (value.contacts![0] as typeof input.contacts[0]).future.tags.push('independent');
+  assert.deepEqual(input.contacts[0].future.tags, ['keep']);
+  assert.equal('contacts' in assertClinicBackup(fixtures()), false);
+  assert.deepEqual(assertClinicBackup({ contacts: [] }).contacts, []);
+});
+
+test('contact backup validation rejects malformed rows, duplicates and invalid names, phones or timestamps', () => {
+  const invalid: unknown[] = [null, {}, [null], [{ ...backupContact(), name: '' }], [{ ...backupContact(), name: 'n'.repeat(201) }],
+    [{ ...backupContact(), notes: 'n'.repeat(2001) }], [{ ...backupContact(), mobile: 'name01012345678' }],
+    [{ ...backupContact(), mobile: '0101234567' }], [{ ...backupContact(), createdAt: '2026-02-31T09:00:00.000Z' }],
+    [{ ...backupContact(), createdAt: undefined }], [backupContact(), { ...backupContact(), id: 'other', mobile: '+201012345678' }],
+    [backupContact(), { ...backupContact(), mobile: '01112345678' }]];
+  invalid.forEach(contacts => assert.equal(validateClinicBackup({ contacts }).valid, false));
+});
+
+test('contacts sharing an existing patient mobile remain separate records without auto-merging or consent', () => {
+  const input = { patients: [{ id: '401', name: 'مريض تجريبي', age: 30, mobile: '+201012345678' }],
+    contacts: [backupContact()] };
+  const value = assertClinicBackup(input);
+  assert.equal(value.contacts?.length, 1);
+  assert.equal(value.patients?.length, 1);
+  assert.equal(value.patients?.[0].id, '401');
+  assert.equal('whatsappSettings' in value, false);
+});
+
 test('whole backup validation accepts shipped legacy fixtures without repricing historical money', () => {
   const input = fixtures();
   const value = assertClinicBackup(input);

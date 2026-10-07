@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ActiveView, User as UserType, Appointment, LabCase, Patient } from '../../types';
 import { 
-  Home, Smartphone, Users, Calendar, Microscope, Landmark, Sliders, 
+  Home, Smartphone, Users, ContactRound, Calendar, Microscope, Landmark, Sliders,
   ChevronRight, ChevronLeft, X, Palette, Layout, MessageCircle, Pill, 
   Cloud, ShieldAlert, FileSpreadsheet, Server, LogOut, UserCheck, Sparkles, Compass
 } from 'lucide-react';
@@ -66,8 +66,15 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       icon: <Users className="w-5 h-5 text-sky-400" />, 
       allowed: canAccessView(currentUser, 'patients')
     },
-    { 
-      key: 'appointments' as ActiveView, 
+    {
+      key: 'contacts' as ActiveView,
+      label: 'جهات الاتصال',
+      desc: 'أسماء وأرقام بدون ملفات مرضى',
+      icon: <ContactRound className="w-5 h-5 text-emerald-400" />,
+      allowed: canAccessView(currentUser, 'contacts')
+    },
+    {
+      key: 'appointments' as ActiveView,
       label: 'المواعيد والحجوزات', 
       desc: 'جدول العيادة اليومي والشهري',
       icon: <Calendar className="w-5 h-5 text-amber-400" />, 

@@ -3,19 +3,28 @@ import assert from 'node:assert/strict';
 import { DEFAULT_UI_LABELS } from '../data/initialData';
 import { NAVIGATION_SECTIONS, cloneContentDraft, getHomeSubtitle, getHomeWelcome, getNavigationDescription, getNavigationItems, getNavigationLabel, moveNavigationSection, normalizeNavigationOrder, validateContentDraft, type ContentDraft } from './clinicContent';
 
-const keys = ['patients', 'appointments', 'lab', 'summary', 'settings'];
+const keys = ['patients', 'contacts', 'appointments', 'lab', 'summary', 'settings'];
 const makeDraft = (): ContentDraft => {
-  const labels: any = { ...DEFAULT_UI_LABELS, tiles: Object.fromEntries(Object.entries(DEFAULT_UI_LABELS.tiles).map(([key, entry]) => [key, { ...entry }])), tabs: { ...DEFAULT_UI_LABELS.tabs }, navigationLabels: { home: 'الرئيسية', patients: 'المرضى', appointments: 'المواعيد', lab: 'التركيبات', summary: 'الماليات', settings: 'الإعدادات' } };
+  const labels: any = { ...DEFAULT_UI_LABELS, tiles: Object.fromEntries(Object.entries(DEFAULT_UI_LABELS.tiles).map(([key, entry]) => [key, { ...entry }])), tabs: { ...DEFAULT_UI_LABELS.tabs }, navigationLabels: { home: 'الرئيسية', patients: 'المرضى', contacts: 'جهات الاتصال', appointments: 'المواعيد', lab: 'التركيبات', summary: 'الماليات', settings: 'الإعدادات' } };
   return { labels, tileOrder: [...keys] };
 };
 test('order ignores unknown/legacy keys and duplicates, preserves first known occurrences and appends missing', () => {
   const input = ['summary', 'home', 'secretary-desk', 'patients', 'summary', 'lab', 'unknown', 'patients'];
-  assert.deepEqual(normalizeNavigationOrder(input), ['summary', 'patients', 'lab', 'appointments', 'settings']);
+  assert.deepEqual(normalizeNavigationOrder(input), ['summary', 'patients', 'contacts', 'lab', 'appointments', 'settings']);
   assert.deepEqual(input, ['summary', 'home', 'secretary-desk', 'patients', 'summary', 'lab', 'unknown', 'patients']);
   for (const input of [null, undefined, {}, 'patients', 0]) assert.deepEqual(normalizeNavigationOrder(input), keys);
 });
+
+test('legacy order adds contacts beside patients without disturbing custom sections or an explicit contacts position', () => {
+  const legacy = ['settings', 'summary', 'patients', 'lab', 'appointments'];
+  assert.deepEqual(normalizeNavigationOrder(legacy), ['settings', 'summary', 'patients', 'contacts', 'lab', 'appointments']);
+  assert.deepEqual(legacy, ['settings', 'summary', 'patients', 'lab', 'appointments']);
+  const explicit = ['contacts', 'settings', 'summary', 'patients', 'lab', 'appointments'];
+  assert.deepEqual(normalizeNavigationOrder(explicit), explicit);
+  assert.deepEqual(normalizeNavigationOrder(['summary', 'settings']), ['summary', 'settings', 'patients', 'contacts', 'appointments', 'lab']);
+});
 test('legacy default tile names resolve to canonical short navigation labels, not patient tab names', () => {
-  assert.deepEqual(NAVIGATION_SECTIONS.map(section => getNavigationLabel(DEFAULT_UI_LABELS, section.key)), ['المرضى', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']);
+  assert.deepEqual(NAVIGATION_SECTIONS.map(section => getNavigationLabel(DEFAULT_UI_LABELS, section.key)), ['المرضى', 'جهات الاتصال', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']);
   assert.equal(getNavigationLabel(DEFAULT_UI_LABELS, 'lab'), 'التركيبات');
   assert.equal(DEFAULT_UI_LABELS.tabs.lab, 'حالات المعمل');
   assert.equal(getNavigationLabel(DEFAULT_UI_LABELS, 'home'), 'الرئيسية');
@@ -68,22 +77,22 @@ test('clone preserves unknown entries and nested fields without aliasing editabl
 });
 test('moves are pure, normalized, and do not cross boundaries or add home to order', () => {
   const input = ['patients', 'lab'];
-  assert.deepEqual(moveNavigationSection(input, 'patients', 'up'), ['patients', 'lab', 'appointments', 'summary', 'settings']);
-  assert.deepEqual(moveNavigationSection(input, 'lab', 'up'), ['lab', 'patients', 'appointments', 'summary', 'settings']);
+  assert.deepEqual(moveNavigationSection(input, 'patients', 'up'), ['patients', 'contacts', 'lab', 'appointments', 'summary', 'settings']);
+  assert.deepEqual(moveNavigationSection(input, 'lab', 'up'), ['patients', 'lab', 'contacts', 'appointments', 'summary', 'settings']);
   assert.deepEqual(moveNavigationSection(keys, 'settings', 'down'), keys);
-  assert.deepEqual(moveNavigationSection(keys, 'patients', 'down'), ['appointments', 'patients', 'lab', 'summary', 'settings']);
+  assert.deepEqual(moveNavigationSection(keys, 'patients', 'down'), ['contacts', 'patients', 'appointments', 'lab', 'summary', 'settings']);
   assert.deepEqual(input, ['patients', 'lab']);
 });
 test('navigation pins home, respects allowed order, and permission denial applies before More splitting', () => {
-  const order = ['settings', 'summary', 'lab', 'patients', 'appointments'];
+  const order = ['settings', 'summary', 'lab', 'patients', 'contacts', 'appointments'];
   const items = getNavigationItems(DEFAULT_UI_LABELS, order);
   assert.deepEqual(items.map(item => item.key), ['home', ...order]);
-  assert.deepEqual(items.slice(4).map(item => item.key), ['patients', 'appointments']);
+  assert.deepEqual(items.slice(4).map(item => item.key), ['patients', 'contacts', 'appointments']);
   const limited = getNavigationItems(DEFAULT_UI_LABELS, order, { patientView: false, lab: false });
   assert.deepEqual(limited.map(item => item.key), ['home', 'settings', 'summary', 'appointments']);
   assert.deepEqual(limited.slice(4), []);
   assert.deepEqual(getNavigationItems(DEFAULT_UI_LABELS, order, { patientView: false, appointments: false, lab: false, summary: false, controlPanel: false }).map(item => item.key), ['home']);
-  assert.deepEqual(order, ['settings', 'summary', 'lab', 'patients', 'appointments']);
+  assert.deepEqual(order, ['settings', 'summary', 'lab', 'patients', 'contacts', 'appointments']);
 });
 test('validation trims changed editable fields and preserves tabs, titles, unknown fields and baseline', () => {
   const baseline = makeDraft();
@@ -153,7 +162,7 @@ test('legacy validation does not invent mapping entries or change patient tabs a
   assert.equal(result.valid, true);
   assert.equal((result.value.labels as any).navigationLabels, undefined);
   assert.deepEqual(result.value.labels.tabs, DEFAULT_UI_LABELS.tabs);
-  assert.deepEqual(result.value.tileOrder, ['lab', 'patients', 'appointments', 'summary', 'settings']);
+  assert.deepEqual(result.value.tileOrder, ['lab', 'patients', 'contacts', 'appointments', 'summary', 'settings']);
   assert.deepEqual(draft.tileOrder, ['lab', 'secretary-desk', 'lab']);
 });
 test('all getters safely fall back for null, array, primitive or malformed persisted labels', () => {
@@ -164,7 +173,7 @@ test('all getters safely fall back for null, array, primitive or malformed persi
     assert.equal(getNavigationDescription(labels, 'patients'), DEFAULT_UI_LABELS.tiles.patients.desc);
     assert.equal(getHomeSubtitle(labels), 'مواعيد اليوم والمهام الأساسية في مكان واحد.');
     assert.equal(getHomeWelcome(labels), 'اختر الإجراء المطلوب للمتابعة');
-    assert.equal(getNavigationItems(labels, null).length, 6);
+    assert.equal(getNavigationItems(labels, null).length, 7);
   }
 });
 test('clone and validation recover malformed shape in memory without writing or mutating the source', () => {
@@ -173,10 +182,10 @@ test('clone and validation recover malformed shape in memory without writing or 
     const clone = cloneContentDraft(input);
     assert.equal(getNavigationLabel(clone.labels, 'patients'), 'المرضى');
     assert.equal(typeof clone.labels.tiles.patients.title, 'string');
-    assert.equal(clone.tileOrder.length, 5);
+    assert.equal(clone.tileOrder.length, 6);
     const checked = validateContentDraft(input, null);
     assert.equal(checked.valid, true);
-    assert.equal(checked.value.tileOrder.length, 5);
+    assert.equal(checked.value.tileOrder.length, 6);
   }
   const source = { labels: { homeSubtitle: null, welcomeText: [], extra: { nested: ['unchanged'] }, tiles: { patients: { title: null, desc: 42, metadata: { original: true } }, extra: { title: 'legacy', desc: 'legacy desc' } }, tabs: { lab: 'custom patient tab', home: 42, custom: 'untouched' }, navigationLabels: { patients: {}, extra: 'legacy mapping' } }, tileOrder: ['settings', 'settings', 42] };
   const snapshot = JSON.stringify(source);

@@ -1,13 +1,15 @@
-import type { Appointment, DrugCatalogItem, Expense, Lab, LabCase, MaterialUsage, Patient, ThemeSettings, UILabels, User, WhatsappSettings } from '../types';
+import type { Appointment, ClinicContact, DrugCatalogItem, Expense, Lab, LabCase, MaterialUsage, Patient, ThemeSettings, UILabels, User, WhatsappSettings } from '../types';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
 import { cloneContentDraft } from './clinicContent';
 import { normalizeHexColor } from './clinicIdentity';
 import { normalizeServiceName } from './serviceCatalog';
 import { canPerformAction } from './rbac';
 import { validateAccountSchedule } from './userAccounts';
+import { clinicContactValidationError, normalizeContactPhone } from './clinicContacts';
 
 export interface ValidatedClinicBackup {
   patients?: Patient[]; appointments?: Appointment[]; labs?: Lab[]; labCases?: LabCase[];
+  contacts?: ClinicContact[];
   expenses?: Expense[]; materialUsages?: MaterialUsage[]; users?: User[];
   serviceTypes?: string[]; crownPrices?: Record<string, number>; drugCatalog?: DrugCatalogItem[];
   whatsappSettings?: WhatsappSettings; clinicName?: string; clinicLogo?: string | null;
@@ -24,7 +26,7 @@ const MAX_MONEY = 1_000_000_000;
 type RecordValue = Record<string, any>;
 const isRecord = (value: unknown): value is RecordValue => value !== null && typeof value === 'object' && !Array.isArray(value)
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-const knownSections = ['patients', 'appointments', 'labs', 'labCases', 'expenses', 'materialUsages', 'users', 'serviceTypes', 'crownPrices', 'drugCatalog', 'whatsappSettings', 'clinicName', 'clinicLogo', 'theme', 'labels', 'tileOrder'] as const;
+const knownSections = ['patients', 'contacts', 'appointments', 'labs', 'labCases', 'expenses', 'materialUsages', 'users', 'serviceTypes', 'crownPrices', 'drugCatalog', 'whatsappSettings', 'clinicName', 'clinicLogo', 'theme', 'labels', 'tileOrder'] as const;
 
 /** Validate the entire input before the caller performs any state or storage writes.
  * Missing legacy sections stay absent; safe optional defaults do not invent charges.
@@ -165,6 +167,14 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     });
   };
   list(data, 'patients', 'backup', patientRow);
+  const contactPhones = new Set<string>();
+  list(data, 'contacts', 'backup', (row, path) => {
+    const error = clinicContactValidationError(row);
+    if (error) fail(path, error);
+    const phone = normalizeContactPhone(row.mobile);
+    if (phone && contactPhones.has(phone)) fail(`${path}.mobile`, 'رقم مكرر في جهات الاتصال');
+    if (phone) contactPhones.add(phone);
+  });
   list(data, 'appointments', 'backup', (row, path) => {
     strings(row, ['patientId', 'fileNo', 'mobile', 'doctorName', 'appointmentType'], path, 200);
     text(row, 'patientName', path, { required: true, max: 200 }); text(row, 'note', path, { defaultValue: '' });

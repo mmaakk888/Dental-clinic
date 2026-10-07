@@ -82,6 +82,7 @@ export const DEFAULT_UI_LABELS: UILabels = {
   welcomeText: 'أهلاً بك يا دكتور، اختر القسم المطلوب للمتابعة',
   tiles: {
     patients: { title: 'فهرس الحالات', desc: 'إدارة ملفات المرضى، السجل الطبي والمالي' },
+    contacts: { title: 'جهات الاتصال', desc: 'أسماء وأرقام بدون ملفات، وربط الأرقام بالملفات الموجودة' },
     appointments: { title: 'جدول المواعيد', desc: 'تنظيم الحجوزات اليومية والمتابعات' },
     lab: { title: 'حسابات المعمل', desc: 'متابعة أعمال التركيبات، الفواتير والأرباح' },
     summary: { title: 'الملخص المالي', desc: 'تقارير الإيرادات، التحصيل والمستحقات' },
@@ -96,7 +97,7 @@ export const DEFAULT_UI_LABELS: UILabels = {
   }
 };
 
-export const DEFAULT_TILE_ORDER = ['patients', 'appointments', 'lab', 'summary', 'settings'];
+export const DEFAULT_TILE_ORDER = ['patients', 'contacts', 'appointments', 'lab', 'summary', 'settings'];
 
 export const DEFAULT_USERS: User[] = [
   {

@@ -1,5 +1,5 @@
 import {
-  Patient, Appointment, Lab, LabCase, ThemeSettings, UILabels, User, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage
+  Patient, Appointment, Lab, LabCase, ThemeSettings, UILabels, User, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage, ClinicContact
 } from '../types';
 import {
   INITIAL_PATIENTS, INITIAL_APPOINTMENTS, INITIAL_LABS, INITIAL_LAB_CASES,
@@ -15,6 +15,7 @@ import { isSessionFresh, SESSION_MAX_AGE_MS, REMEMBERED_SESSION_MAX_AGE_MS } fro
 
 const KEYS = {
   PATIENTS: 'dental_patients_v2',
+  CONTACTS: 'dental_contacts',
   APPOINTMENTS: 'dental_appointments_v2',
   LABS: 'dental_labs_v2',
   LAB_CASES: 'dental_lab_cases_v2',
@@ -62,10 +63,11 @@ export const SERVICE_CATALOG_STORAGE_KEYS: readonly string[] = [KEYS.SERVICE_TYP
 export const USER_ACCOUNTS_STORAGE_KEY = KEYS.USERS;
 export const DRUG_CATALOG_STORAGE_KEY = KEYS.DRUG_CATALOG;
 export const LABS_STORAGE_KEY = KEYS.LABS;
-export const CLINIC_DOMAIN_STORAGE_KEYS = [KEYS.PATIENTS, KEYS.APPOINTMENTS, KEYS.LAB_CASES, KEYS.EXPENSES, KEYS.MATERIAL_USAGES] as const;
+export const CLINIC_DOMAIN_STORAGE_KEYS = [KEYS.PATIENTS, KEYS.APPOINTMENTS, KEYS.LAB_CASES, KEYS.EXPENSES, KEYS.MATERIAL_USAGES, KEYS.CONTACTS] as const;
 
 export interface ClinicDomainData {
   patients: Patient[];
+  contacts: ClinicContact[];
   appointments: Appointment[];
   labCases: LabCase[];
   expenses: Expense[];
@@ -214,6 +216,7 @@ function readDomainArray<T>(key: string, fallback: T[]): T[] {
 function getDomainData(): ClinicDomainData {
   return {
     patients: normalizeOriginalDemoPatients(readDomainArray(KEYS.PATIENTS, INITIAL_PATIENTS)),
+    contacts: readDomainArray(KEYS.CONTACTS, []),
     appointments: readDomainArray(KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
     labCases: readDomainArray(KEYS.LAB_CASES, INITIAL_LAB_CASES),
     expenses: readDomainArray(KEYS.EXPENSES, INITIAL_EXPENSES),
@@ -225,6 +228,7 @@ function saveDomainDataConfirmed(next: ClinicDomainData, previous: ClinicDomainD
   const pairs: [keyof ClinicDomainData, string][] = [
     ['patients', KEYS.PATIENTS], ['appointments', KEYS.APPOINTMENTS], ['labCases', KEYS.LAB_CASES],
     ['expenses', KEYS.EXPENSES], ['materialUsages', KEYS.MATERIAL_USAGES],
+    ['contacts', KEYS.CONTACTS],
   ];
   const entries = pairs.filter(([field]) => JSON.stringify(next[field]) !== JSON.stringify(previous[field]))
     .map(([field, key]) => [key, cloneStoredValue(next[field])] as [string, unknown]);
@@ -249,6 +253,7 @@ export const Storage = {
   saveBackupConfirmed: (data: Record<string, unknown>) => {
     const fields: [string, string][] = [
       ['patients', KEYS.PATIENTS], ['appointments', KEYS.APPOINTMENTS], ['labs', KEYS.LABS], ['labCases', KEYS.LAB_CASES],
+      ['contacts', KEYS.CONTACTS],
       ['expenses', KEYS.EXPENSES], ['materialUsages', KEYS.MATERIAL_USAGES], ['users', KEYS.USERS],
       ['serviceTypes', KEYS.SERVICE_TYPES], ['crownPrices', KEYS.CROWN_PRICES], ['drugCatalog', KEYS.DRUG_CATALOG],
       ['whatsappSettings', KEYS.WHATSAPP_SETTINGS], ['clinicName', KEYS.CLINIC_NAME], ['clinicLogo', KEYS.CLINIC_LOGO],
@@ -269,6 +274,9 @@ export const Storage = {
   saveRestoredCatalogs,
   getPatients: (): Patient[] => normalizeOriginalDemoPatients(safeGet(KEYS.PATIENTS, INITIAL_PATIENTS)),
   savePatients: (patients: Patient[]) => safeSet(KEYS.PATIENTS, patients),
+
+  getContacts: (): ClinicContact[] => readDomainArray(KEYS.CONTACTS, []),
+  getContactsFresh: (): ClinicContact[] => readDomainArray(KEYS.CONTACTS, []),
 
   getAppointments: (): Appointment[] => safeGet(KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
   saveAppointments: (appointments: Appointment[]) => safeSet(KEYS.APPOINTMENTS, appointments),

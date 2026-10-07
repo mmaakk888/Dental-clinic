@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { AlertCircle, ArrowDown, ArrowUp, Calendar, CheckCircle2, ChevronLeft, Eye, Home, Landmark, ListOrdered, LockKeyhole, Microscope, Monitor, MoreHorizontal, RotateCcw, Save, Settings2, Smartphone, Type, Undo2, Users } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowUp, Calendar, CheckCircle2, ChevronLeft, ContactRound, Eye, Home, Landmark, ListOrdered, LockKeyhole, Microscope, Monitor, MoreHorizontal, RotateCcw, Save, Settings2, Smartphone, Type, Undo2, Users } from 'lucide-react';
 import type { UILabels } from '../../types';
 import { DEFAULT_UI_LABELS } from '../../data/initialData';
 import { cloneContentDraft, DEFAULT_HOME_SUBTITLE, DEFAULT_HOME_WELCOME, getHomeSubtitle, getHomeWelcome, getNavigationItems, getNavigationLabel, moveNavigationSection, NAVIGATION_SECTIONS, normalizeNavigationOrder, validateContentDraft } from '../../utils/clinicContent';
@@ -17,7 +17,7 @@ const sections = [
   { key: 'preview', label: 'المعاينة', icon: Eye },
 ] as const;
 type EditorSection = typeof sections[number]['key'];
-const icons = { home: Home, patients: Users, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
+const icons = { home: Home, patients: Users, contacts: ContactRound, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
 const equalDrafts = (a: ContentDraft, b: ContentDraft) => JSON.stringify(a) === JSON.stringify(b);
 
 // Materialize the text already displayed by the app only in this local draft.

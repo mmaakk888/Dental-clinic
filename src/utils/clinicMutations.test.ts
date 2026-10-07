@@ -8,7 +8,7 @@ const session = (): Session => ({ id: 's1', type: 'حشو', tooth: null, amount:
   date: '2026-10-06', paymentsLog: [{ id: 'r1', date: '2026-10-06', amount: 20 }] });
 const patient = (): Patient => ({ id: '401', name: 'مريض اختبار', mobile: '01000000000', age: 25,
   firstVisit: '2026-10-06', notes: '', allergy: '', sessions: [session()], payments: [] });
-const domain = (): ClinicDomainData => ({ patients: [patient()], appointments: [], labCases: [], expenses: [], materialUsages: [] });
+const domain = (): ClinicDomainData => ({ patients: [patient()], contacts: [], appointments: [], labCases: [], expenses: [], materialUsages: [] });
 const appointment = (): Appointment => ({ id: 'a1', patientId: '401', fileNo: '401', patientName: 'اختبار', mobile: '',
   date: '2026-10-06', time: '17:30', note: '', status: 'attended', isFollowUp: false, isWalkIn: true });
 

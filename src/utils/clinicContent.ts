@@ -1,7 +1,7 @@
 import type { UILabels, UserPermission } from '../types';
 import { DEFAULT_UI_LABELS } from '../data/initialData';
 
-export type NavigationSectionKey = 'patients' | 'appointments' | 'lab' | 'summary' | 'settings';
+export type NavigationSectionKey = 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings';
 export type NavigationKey = 'home' | NavigationSectionKey;
 export interface ContentDraft { labels: UILabels; tileOrder: string[] }
 export interface NavigationItem { key: NavigationKey; label: string; description: string }
@@ -11,6 +11,7 @@ type LabelsWithNavigation = UILabels & { navigationLabels?: NavigationLabels };
 
 export const NAVIGATION_SECTIONS: readonly { key: NavigationSectionKey; label: string; description: string }[] = [
   { key: 'patients', label: 'المرضى', description: DEFAULT_UI_LABELS.tiles.patients.desc },
+  { key: 'contacts', label: 'جهات الاتصال', description: DEFAULT_UI_LABELS.tiles.contacts.desc },
   { key: 'appointments', label: 'المواعيد', description: DEFAULT_UI_LABELS.tiles.appointments.desc },
   { key: 'lab', label: 'التركيبات', description: DEFAULT_UI_LABELS.tiles.lab.desc },
   { key: 'summary', label: 'الماليات', description: DEFAULT_UI_LABELS.tiles.summary.desc },
@@ -30,6 +31,9 @@ export function normalizeNavigationOrder(input: unknown): NavigationSectionKey[]
   if (Array.isArray(input)) input.forEach(key => {
     if (canonicalKeys.includes(key as NavigationSectionKey) && !result.includes(key as NavigationSectionKey)) result.push(key as NavigationSectionKey);
   });
+  // Introduce contacts next to patients in legacy orders without rearranging
+  // any existing sections. An explicitly saved contacts position stays put.
+  if (!result.includes('contacts') && result.includes('patients')) result.splice(result.indexOf('patients') + 1, 0, 'contacts');
   canonicalKeys.forEach(key => { if (!result.includes(key)) result.push(key); });
   return result;
 }
@@ -59,7 +63,7 @@ export function getHomeWelcome(input: unknown): string {
 }
 
 export function getNavigationItems(labels: unknown, tileOrder: unknown, permissions?: Partial<UserPermission>): NavigationItem[] {
-  const permissionFields: Record<NavigationSectionKey, keyof UserPermission> = { patients: 'patientView', appointments: 'appointments', lab: 'lab', summary: 'summary', settings: 'controlPanel' };
+  const permissionFields: Record<NavigationSectionKey, keyof UserPermission> = { patients: 'patientView', contacts: 'patientView', appointments: 'appointments', lab: 'lab', summary: 'summary', settings: 'controlPanel' };
   const keys: NavigationKey[] = ['home', ...normalizeNavigationOrder(tileOrder).filter(key => permissions?.[permissionFields[key]] !== false)];
   return keys.map(key => ({ key, label: getNavigationLabel(labels, key), description: getNavigationDescription(labels, key) }));
 }

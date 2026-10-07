@@ -118,6 +118,15 @@ export interface DrugCatalogItem {
   defaultDuration: string;
 }
 
+/** A name and phone only; never a clinical patient file or a file number. */
+export interface ClinicContact {
+  id: string;
+  name: string;
+  mobile: string;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface WhatsappSettings {
   campaignConsent?: Record<string, 'allowed' | 'declined'>;
   apiKey: string;
@@ -290,7 +299,7 @@ export interface UILabels {
   tiles: Record<string, { title: string; desc: string }>;
   tabs: Record<string, string>;
   /** Floating navigation labels, separate from legacy patient-file tab labels. */
-  navigationLabels?: Partial<Record<'home' | 'patients' | 'appointments' | 'lab' | 'summary' | 'settings', string>>;
+  navigationLabels?: Partial<Record<'home' | 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings', string>>;
 }
 
 export interface UserPermission {
@@ -341,6 +350,7 @@ export type DeviceMode = 'auto' | 'mobile' | 'desktop' | 'tv';
 export type ActiveView = 
   | 'home'
   | 'patients'
+  | 'contacts'
   | 'patient-file'
   | 'appointments'
   | 'lab'
@@ -349,4 +359,4 @@ export type ActiveView =
   | 'settings'
   | 'secretary-desk';
 
-export type NavigationOrigin = 'patients' | 'appointments' | 'home' | 'lab';
+export type NavigationOrigin = 'patients' | 'contacts' | 'appointments' | 'home' | 'lab';

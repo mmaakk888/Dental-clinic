@@ -11,8 +11,8 @@ export interface AccountPermission {
 
 export const ACCOUNT_PERMISSION_GROUPS: readonly { title: string; items: readonly AccountPermission[] }[] = [
   { title: 'المرضى والمواعيد', items: [
-    { key: 'patientView', action: 'view_patients', label: 'عرض ملفات المرضى', help: 'فتح الملفات وقراءة التفاصيل وطباعة الروشتة.' },
-    { key: 'patientEdit', action: 'edit_patient', label: 'إضافة وتعديل المرضى والجلسات', help: 'تسجيل مريض أو جلسة وتعديل بيانات الملف.' },
+    { key: 'patientView', action: 'view_patients', label: 'عرض ملفات المرضى', help: 'فتح الملفات وقراءة التفاصيل وطباعة الروشتة وعرض جهات الاتصال.' },
+    { key: 'patientEdit', action: 'edit_patient', label: 'إضافة وتعديل المرضى والجلسات', help: 'تسجيل مريض أو جلسة وتعديل بيانات الملف، وإضافة وتعديل وحذف جهات الاتصال فقط دون حذف ملف مريض.' },
     { key: 'deletePatients', action: 'delete_patient', label: 'حذف المرضى والجلسات', help: 'صلاحية حساسة لحذف بيانات طبية مسجلة.' },
     { key: 'appointments', action: 'manage_appointments', label: 'إدارة المواعيد', help: 'تسجيل المواعيد ومتابعتها وتعديلها.' },
   ] },

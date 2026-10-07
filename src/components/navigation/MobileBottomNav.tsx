@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Home, Users, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, X, ChevronLeft } from 'lucide-react';
+import { Home, Users, ContactRound, Calendar, Landmark, MoreHorizontal, Microscope, Settings2, X, ChevronLeft } from 'lucide-react';
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
 import { getNavigationItems } from '../../utils/clinicContent';
+import { canAccessView } from '../../utils/rbac';
 
 interface Props {
   activeView: ActiveView;
@@ -13,15 +14,15 @@ interface Props {
   onNavigate: (view: ActiveView) => void;
 }
 
-const navigationIcons = { home: Home, patients: Users, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
+const navigationIcons = { home: Home, patients: Users, contacts: ContactRound, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
 
 export const MobileBottomNav = React.memo(({ activeView, labels, tileOrder, currentUser, onNavigate }: Props) => {
   const [open, setOpen] = useState(false);
   const dock = useRef<HTMLElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
-  const permissions = currentUser?.permissions;
-  const items = getNavigationItems(labels, tileOrder, permissions).map(item => ({ ...item, icon: navigationIcons[item.key] }));
+  const items = getNavigationItems(labels, tileOrder).filter(item => canAccessView(currentUser, item.key))
+    .map(item => ({ ...item, icon: navigationIcons[item.key] }));
   const extra = items.slice(4);
   const selected = activeView === 'patient-file' ? 'patients' : activeView === 'lab-detail' ? 'lab' : activeView === 'secretary-desk' ? 'home' : activeView;
 

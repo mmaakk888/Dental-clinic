@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import { ActiveView, NavigationOrigin, LabService, Patient, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
+import { ActiveView, NavigationOrigin, LabService, Patient, ClinicContact, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
 import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS } from './utils/storage';
 import type { ClinicIdentitySettings, ClinicDomainData } from './utils/storage';
 import { withClinicWriteLock } from './utils/clinicWriteLock';
 import { addWalkInRecord, savePatientRecord, addPatientReceipt, importPatientRecords, canonicalFileNumber } from './utils/clinicMutations';
+import { saveClinicContact, deleteClinicContact } from './utils/clinicContacts';
 import { isLocalClinicHost } from './utils/localRuntime';
 import { assertClinicBackup } from './utils/backupValidation';
 import { authenticateLocalAccount, secureUserAccountsForStorage } from './utils/passwords';
@@ -33,6 +34,7 @@ import { HomeView } from './components/home/HomeView';
 
 // Code-split views & modals via React.lazy for ultra-fast mobile startup and reduced bundle size
 const PatientsView = lazy(() => import('./components/patients/PatientsView').then(m => ({ default: m.PatientsView })));
+const ClinicContacts = lazy(() => import('./components/settings/ClinicContacts').then(m => ({ default: m.ClinicContacts })));
 const PatientFileView = lazy(() => import('./components/patient/PatientFileView').then(m => ({ default: m.PatientFileView })));
 const AppointmentsView = lazy(() => import('./components/appointments/AppointmentsView').then(m => ({ default: m.AppointmentsView })));
 const LabView = lazy(() => import('./components/lab/LabView').then(m => ({ default: m.LabView })));
@@ -149,6 +151,7 @@ export function AppContent() {
 
   // Persistent Domain Data
   const [patients, setPatients] = useState<Patient[]>(() => Storage.getPatients());
+  const [contacts, setContacts] = useState<ClinicContact[]>(() => Storage.getContacts());
   const [appointments, setAppointments] = useState<Appointment[]>(() => Storage.getAppointments());
   const [labs, setLabs] = useState<Lab[]>(() => Storage.getLabsFresh());
   const [labCases, setLabCases] = useState<LabCase[]>(() => Storage.getLabCases());
@@ -182,7 +185,7 @@ export function AppContent() {
 
   const publishDomain = useCallback((data: ClinicDomainData) => {
     setPatients(data.patients); setAppointments(data.appointments); setLabCases(data.labCases);
-    setExpenses(data.expenses); setMaterialUsages(data.materialUsages);
+    setExpenses(data.expenses); setMaterialUsages(data.materialUsages); setContacts(data.contacts);
   }, []);
 
   const commitDomain = async (actions: RBACAction[], mutate: (data: ClinicDomainData) => ClinicDomainData) => {
@@ -236,6 +239,7 @@ export function AppContent() {
 
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<string>('identity');
+  const [initialWhatsAppSection, setInitialWhatsAppSection] = useState<'templates' | 'campaigns'>('templates');
   const [labPricingTarget, setLabPricingTarget] = useState<string>();
 
   // Walk-in Visit and End-of-day report modal states
@@ -365,6 +369,7 @@ export function AppContent() {
 
   const handleNavigateWithSubTab = useCallback((view: ActiveView, subTab?: string) => {
     setActiveView(view === 'secretary-desk' ? 'home' : view);
+    if (view === 'settings') setInitialWhatsAppSection('templates');
     if (subTab) {
       setActiveSubTab(subTab);
     }
@@ -896,6 +901,28 @@ export function AppContent() {
     setWhatsappSettings(settings);
   });
 
+  const handleSaveContact = (contact: ClinicContact, original?: ClinicContact) =>
+    commitDomain(['view_patients', 'edit_patient'], data => ({ ...data, contacts: saveClinicContact(data.contacts, contact, original) }));
+
+  const handleDeleteContact = (original: ClinicContact) =>
+    commitDomain(['view_patients', 'edit_patient'], data => ({ ...data, contacts: deleteClinicContact(data.contacts, original) }));
+
+  const openContactPatient = (patientId: string) => {
+    try {
+      requireFreshSettingsPermission('view_patients');
+      handleSelectPatient(patientId, 'contacts');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر فتح ملف المريض.', 'error'); }
+  };
+
+  const openContactCampaigns = () => {
+    try {
+      requireFreshSettingsPermission('view_patients');
+      requireFreshSettingsPermission('access_control_panel');
+      handleNavigateWithSubTab('settings', 'whatsapp');
+      setInitialWhatsAppSection('campaigns');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'تعذّر فتح الحملات.', 'error'); }
+  };
+
   const handleSaveDrugCatalog = (catalog: import('./types').DrugCatalogItem[]) => {
     requireFreshSettingsPermission('access_control_panel');
     const latest = Storage.getDrugCatalogFresh();
@@ -1046,11 +1073,20 @@ export function AppContent() {
                 onSavePatient={handleSavePatient}
                 onDeletePatient={handleDeletePatient}
                 onSaveAppointment={handleSaveAppointment}
+                onOpenContacts={() => handleNavigateWithSubTab('contacts')}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
               />
             ) : (
               <PermissionDeniedCard title="قائمة وسجلات المرضى" onBackToHome={() => handleNavigateWithSubTab('home')} />
             )
+          )}
+
+          {activeView === 'contacts' && (
+            canAccessView(currentUser, 'contacts') ? <ClinicContacts contacts={contacts} patients={patients}
+              canManageContacts={canPerformAction(currentUser, 'edit_patient')}
+              onSave={handleSaveContact} onDelete={handleDeleteContact} onOpenPatient={openContactPatient}
+              onOpenCampaigns={canPerformAction(currentUser, 'access_control_panel') ? openContactCampaigns : undefined} />
+              : <PermissionDeniedCard title="جهات الاتصال" onBackToHome={() => handleNavigateWithSubTab('home')} />
           )}
 
           {activeView === 'patient-file' && activePatient && (
@@ -1082,7 +1118,7 @@ export function AppContent() {
                 onSaveAppointment={handleSaveAppointment}
                 onUpdateApptStatus={handleUpdateApptStatus}
                 onDeleteAppointment={handleDeleteAppointment}
-                onBack={() => handleNavigateWithSubTab(navigationOrigin === 'appointments' ? 'appointments' : 'patients')}
+                onBack={() => handleNavigateWithSubTab(navigationOrigin === 'contacts' ? 'contacts' : navigationOrigin === 'appointments' ? 'appointments' : 'patients')}
               />
             ) : (
               <PermissionDeniedCard title="ملف المريض" onBackToHome={() => handleNavigateWithSubTab('home')} />
@@ -1170,6 +1206,8 @@ export function AppContent() {
                 crownPrices={crownPrices}
                 canManagePrices={canPerformAction(currentUser, 'manage_prices')}
                 patients={patients}
+                contacts={contacts}
+                canViewPatients={canPerformAction(currentUser, 'view_patients')}
                 appointments={appointments}
                 labs={labs}
                 labCases={labCases}
@@ -1191,6 +1229,11 @@ export function AppContent() {
                 canViewLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 canManageLabPrices={canPerformAction(currentUser, 'manage_prices') && canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 onSaveWhatsappSettings={handleSaveWhatsappSettings}
+                onSaveContact={handleSaveContact}
+                onDeleteContact={handleDeleteContact}
+                canManageContacts={canPerformAction(currentUser, 'view_patients') && canPerformAction(currentUser, 'edit_patient')}
+                initialWhatsAppSection={initialWhatsAppSection}
+                onOpenPatient={canPerformAction(currentUser, 'view_patients') ? openContactPatient : undefined}
                 onSaveDrugCatalog={handleSaveDrugCatalog}
                 onImportPatients={handleImportPatients}
                 onRestoreFullData={handleRestoreFullData}

@@ -97,6 +97,7 @@ export function canAccessView(user: User | null, view: ActiveView): boolean {
     case 'home':
       return true;
     case 'patients':
+    case 'contacts':
     case 'patient-file':
       return perms.patientView === true;
     case 'appointments':

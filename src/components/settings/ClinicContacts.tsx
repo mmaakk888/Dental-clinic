@@ -1,0 +1,137 @@
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AlertCircle, BookUser, ChevronLeft, ChevronRight, FileCheck2, Megaphone, Pencil, Phone, Plus, Save, Search, Trash2, UserRound, X } from 'lucide-react';
+import type { ClinicContact, Patient } from '../../types';
+import { contactMatchesSearch, findPatientsByPhone, normalizeContactPhone } from '../../utils/clinicContacts';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import { useConfirmedAction } from '../common/useConfirmedAction';
+import './ClinicContacts.css';
+
+export interface ClinicContactsProps {
+  contacts: ClinicContact[];
+  patients: Patient[];
+  onSave: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
+  onDelete: (original: ClinicContact) => void | Promise<void>;
+  onOpenPatient?: (patientId: string) => void;
+  canManageContacts?: boolean;
+  onOpenCampaigns?: () => void;
+}
+
+type ContactFilter = 'all' | 'without-file' | 'with-file';
+const PAGE_SIZE = 25;
+const nameCollator = new Intl.Collator('ar-EG', { sensitivity: 'base', numeric: true });
+
+function MatchingFiles({ matches, onOpenPatient }: { matches: Patient[]; onOpenPatient?: (patientId: string) => void }) {
+  return <div className="cc-matching-files">{matches.map(patient => onOpenPatient
+    ? <button type="button" className="cc-file-link" key={patient.id} onClick={() => onOpenPatient(patient.id)}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span><ChevronLeft aria-hidden="true" /></button>
+    : <span className="cc-file-label" key={patient.id}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span></span>)}</div>;
+}
+
+function ContactEditor({ original, contacts, patients, onSave, onClose, onOpenPatient }: Omit<ClinicContactsProps, 'onDelete'> & { original?: ClinicContact; onClose: () => void }) {
+  const id = `contact-editor-${useId().replace(/[^\w-]/g, '')}`;
+  const { showToast } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
+  const busy = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const continueRef = useRef<HTMLButtonElement>(null);
+  const [draft, setDraft] = useState(() => ({ name: original?.name || '', mobile: original?.mobile || '', notes: original?.notes || '' }));
+  const [errors, setErrors] = useState<{ name?: string; mobile?: string }>({});
+  const [discardPrompt, setDiscardPrompt] = useState(false);
+  const changed = draft.name !== (original?.name || '') || draft.mobile !== (original?.mobile || '') || draft.notes !== (original?.notes || '');
+  const currentOriginal = original ? contacts.find(contact => contact.id === original.id) : undefined;
+  const conflict = !!original && JSON.stringify(currentOriginal) !== JSON.stringify(original);
+  const phone = normalizeContactPhone(draft.mobile);
+  const duplicate = phone ? contacts.find(contact => contact.id !== original?.id && normalizeContactPhone(contact.mobile) === phone) : undefined;
+  const matches = useMemo(() => findPatientsByPhone(patients, draft.mobile), [patients, draft.mobile]);
+  const requestClose = () => {
+    if (busy.current) return;
+    if (discardPrompt) { setDiscardPrompt(false); return; }
+    if (!changed) { onClose(); return; }
+    setDiscardPrompt(true);
+    requestAnimationFrame(() => continueRef.current?.focus());
+  };
+  const dialogRef = useAppointmentDialog(true, requestClose);
+  const update = (key: keyof typeof draft, value: string) => {
+    setDraft(current => ({ ...current, [key]: value }));
+    setErrors(current => ({ ...current, [key]: undefined }));
+  };
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy.current || conflict || discardPrompt) return;
+    const nextErrors = {
+      name: draft.name.trim() ? undefined : 'اكتب اسم جهة الاتصال.',
+      mobile: !phone ? 'اكتب رقم موبايل كاملًا وصحيحًا، مثل 01012345678 أو +201012345678.' : duplicate ? `الرقم محفوظ بالفعل باسم «${duplicate.name}». عدّل جهة الاتصال الموجودة بدل تكرارها.` : undefined,
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.mobile) {
+      requestAnimationFrame(() => formRef.current?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus());
+      return;
+    }
+    busy.current = true;
+    try {
+      await run(async () => {
+        await onSave({ ...original, id: original?.id || `contact_${crypto.randomUUID()}`, name: draft.name.trim(), mobile: draft.mobile.trim(), notes: draft.notes.trim(), createdAt: original?.createdAt || new Date().toISOString() }, original);
+      }, () => { showToast(original ? 'تم حفظ تعديلات جهة الاتصال.' : 'تمت إضافة جهة الاتصال دون إنشاء ملف مريض.', 'success'); onClose(); });
+    } finally { busy.current = false; }
+  };
+
+  return <div className="clinic-modal-overlay cc-overlay" dir="rtl" onClick={event => { if (event.target === event.currentTarget) requestClose(); }}>
+    <div ref={dialogRef} className="clinic-modal-panel clinic-modal-panel--framed cc-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} aria-describedby={`${id}-intro`} tabIndex={-1}>
+      <header className="cc-dialog-header"><span className="cc-icon"><BookUser aria-hidden="true" /></span><div><h2 id={`${id}-title`}>{original ? 'تعديل جهة اتصال' : 'إضافة جهة اتصال'}</h2><p id={`${id}-intro`}>اسم ورقم للتواصل فقط، من غير رقم ملف أو حساب مالي.</p></div><button type="button" className="cc-icon-button" aria-label="إلغاء وإغلاق جهة الاتصال" disabled={saving} onClick={requestClose}><X aria-hidden="true" /></button></header>
+      <form ref={formRef} onSubmit={save} className="cc-editor-form" noValidate>
+        <div className="cc-editor-body overflow-y-auto">
+          {discardPrompt ? <section className="cc-discard"><AlertCircle aria-hidden="true" /><h3>إغلاق من غير حفظ؟</h3><p>التعديلات دي لسه ما اتحفظتش. تقدر ترجع تكملها، أو تقفل من غير تغيير القائمة.</p><div><button type="button" ref={continueRef} className="cc-button cc-button-primary" onClick={() => setDiscardPrompt(false)}>متابعة التعديل</button><button type="button" className="cc-button" onClick={onClose}>إغلاق بدون حفظ</button></div></section> : <>
+            {conflict && <div className="cc-notice cc-notice-warning" role="alert"><AlertCircle aria-hidden="true" /><p>جهة الاتصال اتعدّلت أو اتحذفت في تبويب آخر. المسودة محفوظة هنا، لكن لازم تقفل النافذة وتفتح السجل الحالي قبل الحفظ.</p></div>}
+            <fieldset disabled={saving} className="cc-fields">
+              <div className="cc-field"><label htmlFor={`${id}-name`}>الاسم</label><input id={`${id}-name`} data-dialog-autofocus type="text" dir="auto" autoComplete="name" maxLength={200} value={draft.name} required aria-invalid={!!errors.name} aria-describedby={errors.name ? `${id}-name-error` : undefined} onChange={event => update('name', event.target.value)} />{errors.name && <p id={`${id}-name-error`} role="alert" className="cc-error">{errors.name}</p>}</div>
+              <div className="cc-field"><label htmlFor={`${id}-mobile`}>رقم الموبايل</label><input id={`${id}-mobile`} type="tel" dir="ltr" inputMode="tel" autoComplete="tel" maxLength={60} placeholder="01012345678" value={draft.mobile} required aria-invalid={!!errors.mobile} aria-describedby={`${id}-phone-hint${errors.mobile ? ` ${id}-mobile-error` : ''}`} onChange={event => update('mobile', event.target.value)} /><p id={`${id}-phone-hint`} className="cc-hint">بنطابق الرقم كاملًا، سواء مكتوب 01 أو +20 أو بأرقام عربية.</p>{errors.mobile && <p id={`${id}-mobile-error`} role="alert" className="cc-error">{errors.mobile}</p>}</div>
+              {duplicate && !errors.mobile && <div className="cc-notice cc-notice-warning" role="status"><AlertCircle aria-hidden="true" /><p>الرقم موجود في جهات الاتصال باسم «{duplicate.name}». لن نضيف نسخة مكررة.</p></div>}
+              {matches.length > 0 && <div className="cc-match-notice" role="status"><div><FileCheck2 aria-hidden="true" /><strong>{matches.length === 1 ? 'الرقم ده مسجل في ملف مريض بالفعل' : `الرقم ده مسجل في ${matches.length} ملفات`}</strong></div><MatchingFiles matches={matches} onOpenPatient={onOpenPatient ? patientId => { if (!changed) onOpenPatient(patientId); else showToast('احفظ المسودة أو أغلقها أولًا، ثم افتح الملف من بطاقة جهة الاتصال.', 'warning'); } : undefined} /><p>ده تطابق رقم فقط، مش تأكيد إنهم نفس الشخص. مش هنعمل دمج أو ننشئ ملف تلقائيًا.</p></div>}
+              <div className="cc-field"><label htmlFor={`${id}-notes`}>ملاحظة <span>اختياري · بدون تفاصيل طبية</span></label><textarea id={`${id}-notes`} dir="auto" maxLength={2000} rows={3} value={draft.notes} placeholder="مثل: الاسم المتعارف عليه أو أفضل وقت للتواصل" onChange={event => update('notes', event.target.value)} /></div>
+            </fieldset>
+            <p className="cc-hint">إضافة الرقم مش معناها موافقة على الدعاية. موافقة الحملات بتتحدد بشكل منفصل من قسم الحملات.</p>
+          </>}
+        </div>
+        {!discardPrompt && <footer className="cc-dialog-footer"><button type="button" className="cc-button" disabled={saving} onClick={requestClose}>إلغاء وإغلاق</button><button type="submit" className="cc-button cc-button-primary" disabled={saving || conflict || (!!original && !changed)}><Save aria-hidden="true" />{saving ? 'جارٍ الحفظ…' : 'حفظ جهة الاتصال'}</button></footer>}
+      </form>
+    </div>
+  </div>;
+}
+
+export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPatient, canManageContacts = false, onOpenCampaigns }: ClinicContactsProps) {
+  const id = `clinic-contacts-${useId().replace(/[^\w-]/g, '')}`;
+  const { showToast, askConfirm } = useToastAndConfirm();
+  const { saving, run } = useConfirmedAction();
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<ContactFilter>('all');
+  const [page, setPage] = useState(0);
+  const [editor, setEditor] = useState<{ original?: ClinicContact } | null>(null);
+  const rows = useMemo(() => contacts.map(contact => ({ contact, matches: findPatientsByPhone(patients, contact.mobile) })).sort((left, right) => nameCollator.compare(left.contact.name, right.contact.name)), [contacts, patients]);
+  const filtered = useMemo(() => rows.filter(({ contact, matches }) => contactMatchesSearch(contact, query) && (filter === 'all' || (filter === 'with-file' ? matches.length > 0 : matches.length === 0))), [rows, query, filter]);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pages - 1);
+  const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+  const queryMatches = useMemo(() => findPatientsByPhone(patients, query), [patients, query]);
+  const withFiles = rows.filter(row => row.matches.length).length;
+  useEffect(() => { setPage(0); }, [query, filter]);
+  useEffect(() => { if (!canManageContacts) setEditor(null); }, [canManageContacts]);
+  const resetFilters = () => { setQuery(''); setFilter('all'); setPage(0); };
+  const remove = (contact: ClinicContact) => {
+    if (saving || !canManageContacts) return;
+    askConfirm({ title: `حذف جهة الاتصال «${contact.name}»؟`, message: 'هنحذف الاسم والرقم من قائمة جهات الاتصال فقط. أي ملف مريض موجود بنفس الرقم، وجلساته وحساباته، مش هيتغير. موافقة الحملات لهذا الرقم لا تتغير بالحذف.', confirmLabel: 'حذف جهة الاتصال فقط', tone: 'danger', onConfirm: async () => { await run(async () => { await onDelete(contact); }, () => showToast('تم حذف جهة الاتصال فقط، دون تغيير أي ملف مريض.', 'success')); } });
+  };
+
+  return <section className="clinic-contacts" dir="rtl" aria-labelledby={`${id}-title`}>
+    <header className="cc-header"><div><span className="cc-eyebrow">دليل التواصل</span><h2 id={`${id}-title`}>جهات الاتصال</h2><p>اجمع الأسماء والأرقام اللي من غير ملف، وابحث فيها واستخدمها في الحملات.</p></div>{(canManageContacts || onOpenCampaigns) && <div className="cc-header-actions">{onOpenCampaigns && <button type="button" className="cc-button" onClick={onOpenCampaigns}><Megaphone aria-hidden="true" />تجهيز حملة</button>}{canManageContacts && <button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => setEditor({})}><Plus aria-hidden="true" />إضافة جهة اتصال</button>}</div>}</header>
+    <div className="cc-scope-note"><BookUser aria-hidden="true" /><p>القائمة دي منفصلة عن ملفات المرضى. لو الرقم له ملف بالفعل هنوضّحه، من غير دمج أو إنشاء ملف تلقائي.</p></div>
+    <section className="cc-directory" aria-label="دليل جهات الاتصال">
+      <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => setQuery(event.target.value)} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => setQuery('')}><X aria-hidden="true" /></button></div></div><div className="cc-filter"><label htmlFor={`${id}-filter`}>عرض</label><select id={`${id}-filter`} value={filter} onChange={event => setFilter(event.target.value as ContactFilter)}><option value="all">كل جهات الاتصال ({contacts.length})</option><option value="without-file">بدون ملف مطابق ({contacts.length - withFiles})</option><option value="with-file">رقم له ملف ({withFiles})</option></select></div></div>
+      {queryMatches.length > 0 && <div className="cc-search-match" role="status"><div className="cc-inline-heading"><FileCheck2 aria-hidden="true" /><strong>الرقم اللي بتبحث عنه له ملف بالفعل</strong></div><MatchingFiles matches={queryMatches} onOpenPatient={onOpenPatient} /><p>تطابق الرقم لا يثبت هوية الشخص؛ بعض الأسر بتستخدم رقمًا واحدًا.</p></div>}
+      <div className="cc-results"><p role="status">{query || filter !== 'all' ? `عرض ${filtered.length} من ${contacts.length} جهة اتصال` : `${contacts.length} جهة اتصال`}<span> · مرتبة بالاسم</span></p>{(query || filter !== 'all') && <button type="button" className="cc-button cc-button-quiet" onClick={resetFilters}>عرض الكل</button>}</div>
+      {visible.length > 0 ? <div className="cc-list">{visible.map(({ contact, matches }) => <article className="cc-contact" key={contact.id}><div className="cc-contact-main"><span className="cc-avatar" aria-hidden="true"><UserRound /></span><div className="cc-contact-details"><h3 dir="auto">{contact.name}</h3><div className="cc-contact-meta"><span className="cc-phone"><Phone aria-hidden="true" /><bdi dir="ltr">{contact.mobile}</bdi></span><span className={`cc-status${matches.length ? ' cc-status-matched' : ''}`}>{matches.length ? 'رقم له ملف' : 'جهة اتصال فقط'}</span></div>{contact.notes && <details className="cc-note-details"><summary>ملاحظة محفوظة</summary><p className="cc-contact-notes" dir="auto">{contact.notes}</p></details>}</div>{canManageContacts && <div className="cc-contact-actions"><button type="button" className="cc-icon-button" aria-label={`تعديل جهة الاتصال ${contact.name}`} title="تعديل" disabled={saving} onClick={() => setEditor({ original: { ...contact } })}><Pencil aria-hidden="true" /></button><button type="button" className="cc-icon-button cc-delete" aria-label={`حذف جهة الاتصال ${contact.name}`} title="حذف جهة الاتصال فقط" disabled={saving} onClick={() => remove(contact)}><Trash2 aria-hidden="true" /></button></div>}</div>{matches.length > 0 && <div className="cc-contact-files"><MatchingFiles matches={matches} onOpenPatient={onOpenPatient} /><small>تطابق رقم فقط · بدون دمج تلقائي</small></div>}</article>)}</div> : <div className="cc-empty"><BookUser aria-hidden="true" /><h3>{contacts.length ? 'مفيش جهات اتصال مطابقة' : canManageContacts ? 'ابدأ بقائمة الأسماء والأرقام' : 'لم تُضف جهات اتصال بعد'}</h3><p>{contacts.length ? 'جرّب اسمًا أو رقمًا آخر، أو اعرض القائمة كلها.' : canManageContacts ? 'أضف الأشخاص اللي عندك أرقامهم من غير فتح ملفات علاج لهم. هتلاقيهم بعد كده ضمن جمهور الحملات.' : 'جهات الاتصال المحفوظة هتظهر هنا للبحث ومراجعة الأرقام المرتبطة بملفات.'}</p>{(contacts.length > 0 || canManageContacts) && <button type="button" className="cc-button" onClick={contacts.length ? resetFilters : () => setEditor({})}>{contacts.length ? 'عرض الكل' : 'إضافة أول جهة اتصال'}</button>}</div>}
+      {pages > 1 && <nav className="cc-pagination" aria-label="صفحات جهات الاتصال"><button type="button" className="cc-button" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronRight aria-hidden="true" />السابق</button><span aria-live="polite">{currentPage + 1} / {pages}</span><button type="button" className="cc-button" disabled={currentPage === pages - 1} onClick={() => setPage(value => Math.min(pages - 1, value + 1))}>التالي<ChevronLeft aria-hidden="true" /></button></nav>}
+    </section>
+    <p className="cc-footer-note">الحملات بتجمع جهات الاتصال والمرضى بدون تكرار نفس الرقم، وبشرط وجود موافقة مسجّلة على رسائل الحملات.</p>
+    {canManageContacts && editor && <ContactEditor original={editor.original} contacts={contacts} patients={patients} onSave={onSave} onClose={() => setEditor(null)} onOpenPatient={onOpenPatient ? patientId => { setEditor(null); onOpenPatient(patientId); } : undefined} />}
+  </section>;
+}
