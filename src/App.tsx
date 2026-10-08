@@ -1044,12 +1044,21 @@ export function AppContent() {
     if (checked.users) { const saved = Storage.getUsers(); setUsers(saved); refreshCurrentAccount(saved); }
   });
 
-  const handleResetAllData = () => withClinicWriteLock(() => {
+  const handleClearOperationalData = () => withClinicWriteLock(() => {
     authorizeDataExport('full_backup');
-    if (currentUser?.role !== 'admin' && currentUser?.role !== 'doctor') throw new Error('إعادة ضبط العيادة متاحة للطبيب أو مدير النظام فقط.');
-    cancelConfirm();
-    Storage.resetAll();
-    window.location.reload();
+    const latestUser = Storage.getUsers().find(user => user.id === currentUser?.id);
+    if (latestUser?.role !== 'admin' && latestUser?.role !== 'doctor') throw new Error('بدء عيادة فارغة متاح للطبيب أو مدير النظام فقط.');
+    // Explicit confirmed local clear only. Never reset accounts or settings,
+    // import a backup, or write to either Firebase project here.
+    Storage.clearOperationalDataConfirmed();
+    publishDomain({ patients: [], contacts: [], appointments: [], labCases: [], expenses: [], materialUsages: [] });
+    setLabs([]);
+    setSelectedPatientId(null); setLabPricingTarget(undefined);
+    setEndoPatientName('');
+    setIsHomePaymentOpen(false); setIsWalkInModalOpen(false); setIsDailyReportModalOpen(false);
+    setIsApprovalQueueOpen(false); setIsSmartScheduleOpen(false); setIsInvoiceOcrOpen(false);
+    setIsAddExpenseModalOpen(false); setIsEndoHelperOpen(false); setIsMobileDrawerOpen(false);
+    setActiveView('home');
   });
 
   const activePatient = useMemo(() => patients.find(p => p.id === selectedPatientId), [patients, selectedPatientId]);
@@ -1312,7 +1321,7 @@ export function AppContent() {
                 canImportPatients={canPerformAction(currentUser, 'view_patients') && canPerformAction(currentUser, 'add_patient')}
                 onAuthorizePatientImport={authorizePatientImport}
                 onRestoreFullData={handleRestoreFullData}
-                onResetAllData={handleResetAllData}
+                onClearOperationalData={handleClearOperationalData}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
               />
             ) : (

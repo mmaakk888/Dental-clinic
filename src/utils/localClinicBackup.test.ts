@@ -83,6 +83,9 @@ test('fresh full snapshot ignores stale cache, excludes sessions and rejects mal
   try {
     values.set('dental_clinic_name_v2', JSON.stringify('قبل')); assert.equal(Storage.getClinicName(), 'قبل');
     values.set('dental_clinic_name_v2', JSON.stringify('بعد')); values.set('dental_remembered_session_v2', 'PRIVATE_REMEMBER');
+    // Fresh clinics no longer inject demo patients. Install an explicit synthetic
+    // saved record to test deep-clone isolation, not a runtime fallback.
+    values.set('dental_patients_v2', JSON.stringify([INITIAL_PATIENTS[0]]));
     const snapshot = Storage.getBackupDataFresh(); assert.equal(snapshot.clinicName, 'بعد'); assert.equal(Object.keys(snapshot).length, 17);
     assert.equal('rememberedSession' in snapshot, false); assert.equal('currentUser' in snapshot, false);
     (snapshot.patients as any[])[0].name = 'changed clone'; assert.notEqual((Storage.getBackupDataFresh().patients as any[])[0].name, 'changed clone');

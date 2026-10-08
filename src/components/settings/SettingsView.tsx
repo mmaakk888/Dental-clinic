@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useState, useEffect, useRef } from 'react';
-import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, RotateCcw, Check, Trash2, MessageCircle, Pill, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
+import { ArrowRight, Sliders, Palette, Layout, FileSpreadsheet, Users, ShieldAlert, Check, Trash2, MessageCircle, Pill, Cloud, CloudUpload, CloudDownload, RefreshCw, Database, Server, CheckCircle2, ChevronLeft, ChevronDown, X } from 'lucide-react';
 import { ThemeSettings, UILabels, User, Patient, ClinicContact, Appointment, Lab, LabService, LabCase, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import type { FirebaseBackupMeta } from '../../utils/firebaseService';
@@ -14,6 +14,7 @@ import { serializeClinicCsv } from '../../utils/csvExport';
 import { retainVisitedSettingsSection } from './settingsSectionState';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { assertClinicBackup } from '../../utils/backupValidation';
+import { EmptyClinicCard } from './EmptyClinicCard';
 import './settingsNavigation.css';
 
 // Editors are loaded when first opened, not together with the settings shell.
@@ -142,7 +143,7 @@ interface SettingsViewProps {
   onSaveDrugCatalog: (catalog: DrugCatalogItem[]) => void;
   onImportPatients: (newPatients: Patient[]) => Promise<void>;
   onRestoreFullData: (data: any) => Promise<void>;
-  onResetAllData: () => Promise<void>;
+  onClearOperationalData: () => Promise<void>;
   onBackToHome: () => void;
 }
 
@@ -197,7 +198,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaveDrugCatalog,
   onImportPatients,
   onRestoreFullData,
-  onResetAllData,
+  onClearOperationalData,
   onBackToHome
 }: SettingsViewProps) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
@@ -742,39 +743,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </SettingsSectionContent>
         )}
 
-        {/* 6. System & Reset SubTab */}
-        {activeSubTab === 'system' && !canManageFullBackup && <p role="status" className="p-5 border rounded-2xl text-sm text-slate-600">إعادة ضبط العيادة غير متاحة لهذا الحساب أو في وضع الخصوصية.</p>}
-        {activeSubTab === 'system' && canManageFullBackup && (
-          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
-            <h3 className="text-base font-bold text-rose-800 font-tajawal flex items-center gap-2">
-              <RotateCcw className="w-5 h-5 text-rose-600" />
-              منطقة العمليات الحساسة وإعادة ضبط النظام
-            </h3>
-
-            <p className="text-xs text-slate-600 leading-relaxed">
-              تنبيه: زر إعادة الضبط يسترجع جميع البيانات الافتراضية للعيادة ويمسح أي تغييرات محلية تم إجراؤها.
-            </p>
-
-            <button
-              type="button"
-              onClick={() => {
-                askConfirm({
-                  title: 'إعادة ضبط النظام بالكامل',
-                  message: 'هل أنت متأكد من مسح جميع البيانات المحلية واستعادة الضبط الافتراضي؟',
-                  confirmLabel: 'مسح وإعادة الضبط',
-                  tone: 'danger',
-                  onConfirm: async () => {
-                    onAuthorizeDataExport('full_backup');
-                    await onResetAllData();
-                    showToast('تم إعادة ضبط البيانات للافتراضي', 'warning');
-                  }
-                });
-              }}
-              className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-colors"
-            >
-              إعادة ضبط البيانات للافتراضي
-            </button>
-          </div>
+        {/* Never silently wipe existing browser data on an update. */}
+        {activeSubTab === 'system' && (!canManageFullBackup || currentUser?.role !== 'admin' && currentUser?.role !== 'doctor') && <p role="status" className="p-5 border rounded-2xl text-sm text-slate-600">بدء عيادة فارغة متاح للطبيب أو مدير النظام بالصلاحيات الكاملة، وخارج وضع الخصوصية.</p>}
+        {activeSubTab === 'system' && canManageFullBackup && (currentUser?.role === 'admin' || currentUser?.role === 'doctor') && (
+          <EmptyClinicCard onAuthorize={() => onAuthorizeDataExport('full_backup')} onClear={onClearOperationalData} />
         )}
         </div>
         </div>

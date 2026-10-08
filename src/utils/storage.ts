@@ -2,10 +2,10 @@ import {
   Patient, Appointment, Lab, LabCase, ThemeSettings, UILabels, User, Expense, WhatsappSettings, DrugCatalogItem, MaterialUsage, ClinicContact
 } from '../types';
 import {
-  INITIAL_PATIENTS, INITIAL_APPOINTMENTS, INITIAL_LABS, INITIAL_LAB_CASES,
+  INITIAL_PATIENTS,
   DEFAULT_THEME, DEFAULT_UI_LABELS, DEFAULT_TILE_ORDER, DEFAULT_USERS,
   DEFAULT_SERVICE_TYPES, DEFAULT_PATIENT_CROWN_PRICES,
-  INITIAL_EXPENSES, DEFAULT_WHATSAPP_SETTINGS, DEFAULT_DRUG_CATALOG
+  DEFAULT_WHATSAPP_SETTINGS, DEFAULT_DRUG_CATALOG
 } from '../data/initialData';
 import { cloneContentDraft, normalizeNavigationOrder } from './clinicContent';
 import type { ContentDraft } from './clinicContent';
@@ -217,13 +217,25 @@ function readDomainArray<T>(key: string, fallback: T[]): T[] {
 
 function getDomainData(): ClinicDomainData {
   return {
-    patients: normalizeOriginalDemoPatients(readDomainArray(KEYS.PATIENTS, INITIAL_PATIENTS)),
+    patients: normalizeOriginalDemoPatients(readDomainArray<Patient>(KEYS.PATIENTS, [])),
     contacts: readDomainArray(KEYS.CONTACTS, []),
-    appointments: readDomainArray(KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
-    labCases: readDomainArray(KEYS.LAB_CASES, INITIAL_LAB_CASES),
-    expenses: readDomainArray(KEYS.EXPENSES, INITIAL_EXPENSES),
+    appointments: readDomainArray<Appointment>(KEYS.APPOINTMENTS, []),
+    labCases: readDomainArray<LabCase>(KEYS.LAB_CASES, []),
+    expenses: readDomainArray<Expense>(KEYS.EXPENSES, []),
     materialUsages: readDomainArray(KEYS.MATERIAL_USAGES, []),
   };
+}
+
+// Explicitly empty the seven operational lists, not the saved account/config
+// keys. Persist [] instead of deleting keys so no fallback can revive records.
+// Call under the clinic lock after fresh full-backup authorization.
+function clearOperationalDataConfirmed(): void {
+  saveConfirmedSettings([
+    [KEYS.PATIENTS, [] as Patient[]], [KEYS.CONTACTS, [] as ClinicContact[]],
+    [KEYS.APPOINTMENTS, [] as Appointment[]], [KEYS.LABS, [] as Lab[]],
+    [KEYS.LAB_CASES, [] as LabCase[]], [KEYS.EXPENSES, [] as Expense[]],
+    [KEYS.MATERIAL_USAGES, [] as MaterialUsage[]],
+  ], 'لم تكتمل بداية العيادة الفارغة؛ راجع مساحة التخزين ثم أعد المحاولة.');
 }
 
 function saveDomainDataConfirmed(next: ClinicDomainData, previous: ClinicDomainData): void {
@@ -251,13 +263,14 @@ function normalizeOriginalDemoPatients(patients: Patient[]): Patient[] {
 
 export const Storage = {
   getDomainData,
+  clearOperationalDataConfirmed,
   // Call under the clinic lock: export persisted values, never a stale React/cache
   // snapshot. A malformed saved section must not silently become demo/default data.
   getBackupDataFresh: (): Record<string, unknown> => {
     const sections: [string, string, unknown][] = [
-      ['patients', KEYS.PATIENTS, INITIAL_PATIENTS], ['contacts', KEYS.CONTACTS, []],
-      ['appointments', KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS], ['labs', KEYS.LABS, INITIAL_LABS],
-      ['labCases', KEYS.LAB_CASES, INITIAL_LAB_CASES], ['expenses', KEYS.EXPENSES, INITIAL_EXPENSES],
+      ['patients', KEYS.PATIENTS, [] as Patient[]], ['contacts', KEYS.CONTACTS, [] as ClinicContact[]],
+      ['appointments', KEYS.APPOINTMENTS, [] as Appointment[]], ['labs', KEYS.LABS, [] as Lab[]],
+      ['labCases', KEYS.LAB_CASES, [] as LabCase[]], ['expenses', KEYS.EXPENSES, [] as Expense[]],
       ['materialUsages', KEYS.MATERIAL_USAGES, []], ['users', KEYS.USERS, DEFAULT_USERS],
       ['serviceTypes', KEYS.SERVICE_TYPES, DEFAULT_SERVICE_TYPES], ['crownPrices', KEYS.CROWN_PRICES, DEFAULT_PATIENT_CROWN_PRICES],
       ['drugCatalog', KEYS.DRUG_CATALOG, DEFAULT_DRUG_CATALOG], ['whatsappSettings', KEYS.WHATSAPP_SETTINGS, DEFAULT_WHATSAPP_SETTINGS],
@@ -297,23 +310,23 @@ export const Storage = {
   getServiceCatalog,
   saveServiceCatalog,
   saveRestoredCatalogs,
-  getPatients: (): Patient[] => normalizeOriginalDemoPatients(safeGet(KEYS.PATIENTS, INITIAL_PATIENTS)),
+  getPatients: (): Patient[] => normalizeOriginalDemoPatients(safeGet<Patient[]>(KEYS.PATIENTS, [])),
   savePatients: (patients: Patient[]) => safeSet(KEYS.PATIENTS, patients),
 
   getContacts: (): ClinicContact[] => readDomainArray(KEYS.CONTACTS, []),
   getContactsFresh: (): ClinicContact[] => readDomainArray(KEYS.CONTACTS, []),
 
-  getAppointments: (): Appointment[] => safeGet(KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
+  getAppointments: (): Appointment[] => safeGet<Appointment[]>(KEYS.APPOINTMENTS, []),
   saveAppointments: (appointments: Appointment[]) => safeSet(KEYS.APPOINTMENTS, appointments),
 
-  getLabs: (): Lab[] => safeGet(KEYS.LABS, INITIAL_LABS),
-  getLabsFresh: (): Lab[] => freshCatalogList(KEYS.LABS, INITIAL_LABS),
+  getLabs: (): Lab[] => safeGet<Lab[]>(KEYS.LABS, []),
+  getLabsFresh: (): Lab[] => freshCatalogList<Lab>(KEYS.LABS, []),
   saveLabs: (labs: Lab[]) => safeSet(KEYS.LABS, labs),
   saveLabsConfirmed: (labs: Lab[]) => saveConfirmedSettings([[KEYS.LABS, cloneStoredValue(labs)]],
     'راجع مساحة التخزين ثم أعد حفظ بيانات المعامل.'),
 
-  getLabCases: (): LabCase[] => safeGet(KEYS.LAB_CASES, INITIAL_LAB_CASES),
-  getLabCasesFresh: (): LabCase[] => freshCatalogList(KEYS.LAB_CASES, INITIAL_LAB_CASES),
+  getLabCases: (): LabCase[] => safeGet<LabCase[]>(KEYS.LAB_CASES, []),
+  getLabCasesFresh: (): LabCase[] => freshCatalogList<LabCase>(KEYS.LAB_CASES, []),
   saveLabCases: (cases: LabCase[]) => safeSet(KEYS.LAB_CASES, cases),
 
   getTheme: (): ThemeSettings => safeGet(KEYS.THEME, DEFAULT_THEME),
@@ -351,7 +364,7 @@ export const Storage = {
   getClinicLogo: (): string | null => safeGet(KEYS.CLINIC_LOGO, null),
   saveClinicLogo: (logo: string | null) => safeSet(KEYS.CLINIC_LOGO, logo, true),
 
-  getExpenses: (): Expense[] => safeGet(KEYS.EXPENSES, INITIAL_EXPENSES),
+  getExpenses: (): Expense[] => safeGet<Expense[]>(KEYS.EXPENSES, []),
   saveExpenses: (expenses: Expense[]) => safeSet(KEYS.EXPENSES, expenses),
 
   getMaterialUsages: (): MaterialUsage[] => safeGet(KEYS.MATERIAL_USAGES, []),
