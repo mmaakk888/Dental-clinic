@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cloudSetupErrorMessage, cloudSetupNeedsSignIn, createCloudSetupSession, type CloudSetupAdapter } from './cloudAuthSetup';
 import type { CloudOwnerIdentity } from './cloudIdentity';
+import type { CloudOwnerMembershipAssessment } from './cloudMembership';
 
 const SYNTHETIC_EMAIL = 'owner@example.invalid';
 const SYNTHETIC_PASSWORD = 'synthetic-password-only';
 
 function syntheticIdentity(status: CloudOwnerIdentity['status'] = 'verification-required'): CloudOwnerIdentity {
   return { uid: 'synthetic-owner-uid', email: SYNTHETIC_EMAIL, status };
+}
+
+function syntheticMembership(): CloudOwnerMembershipAssessment {
+  return { status: 'membership-confirmed', identityVersion: 1, verifiedAfter: 1_700_000_000 };
 }
 
 function deferred<T = void>() {
@@ -20,6 +25,7 @@ function deferred<T = void>() {
 function harness(overrides: Partial<CloudSetupAdapter> = {}) {
   const calls: string[] = [];
   const signIns: [string, string][] = [];
+  const membershipReads: CloudOwnerIdentity[] = [];
   let identity = syntheticIdentity();
   const adapter: CloudSetupAdapter = {
     signIn: async (email, password) => {
@@ -31,6 +37,11 @@ function harness(overrides: Partial<CloudSetupAdapter> = {}) {
       calls.push('readIdentity');
       return overrides.readIdentity ? await overrides.readIdentity() : identity;
     },
+    readMembership: async owner => {
+      calls.push('readMembership');
+      membershipReads.push(owner);
+      return overrides.readMembership ? await overrides.readMembership(owner) : syntheticMembership();
+    },
     sendVerification: async () => { calls.push('sendVerification'); await overrides.sendVerification?.(); },
     signOut: async () => { calls.push('signOut'); await overrides.signOut?.(); },
     destroy: async () => { calls.push('destroy'); await overrides.destroy?.(); },
@@ -39,6 +50,7 @@ function harness(overrides: Partial<CloudSetupAdapter> = {}) {
     session: createCloudSetupSession(adapter),
     calls,
     signIns,
+    membershipReads,
     setIdentity: (next: CloudOwnerIdentity) => { identity = next; },
   };
 }
@@ -102,6 +114,7 @@ test('only one operation runs at a time and rejected concurrent requests do not 
   for (const operation of [
     () => fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD),
     () => fixture.session.refresh(),
+    () => fixture.session.checkMembership(),
     () => fixture.session.sendVerification(),
     () => fixture.session.signOut(),
   ]) await assert.rejects(operation(), /انتظر انتهاء العملية الحالية/u);
@@ -141,7 +154,7 @@ test('refresh failure signs out and preserves the failure even if cleanup also f
   assert.deepEqual(fixture.calls, ['readIdentity', 'signOut']);
 });
 
-test('creating a session, signing in and refreshing never send verification mail automatically', async () => {
+test('creating, signing in, refreshing and sending mail never read membership automatically', async () => {
   const fixture = harness();
   assert.deepEqual(fixture.calls, []);
   await fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD);
@@ -150,6 +163,117 @@ test('creating a session, signing in and refreshing never send verification mail
 
   await fixture.session.sendVerification();
   assert.deepEqual(fixture.calls, ['signIn', 'readIdentity', 'readIdentity', 'readIdentity', 'sendVerification']);
+  assert.deepEqual(fixture.membershipReads, []);
+});
+
+test('an explicit membership check passes the freshly verified identity and returns its assessment', async () => {
+  const assessment: CloudOwnerMembershipAssessment = {
+    status: 'membership-confirmed', identityVersion: 3, verifiedAfter: 1_700_000_123,
+  };
+  const fixture = harness({ readMembership: async () => assessment });
+  fixture.setIdentity(syntheticIdentity('owner-confirmed'));
+  await fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD);
+  const fresh: CloudOwnerIdentity = {
+    uid: 'synthetic-fresh-owner-uid', email: 'fresh-owner@example.invalid', status: 'owner-confirmed',
+  };
+  fixture.setIdentity(fresh);
+
+  assert.equal(await fixture.session.checkMembership(), assessment);
+  assert.deepEqual(fixture.calls, ['signIn', 'readIdentity', 'readIdentity', 'readMembership']);
+  assert.equal(fixture.membershipReads.length, 1);
+  assert.equal(fixture.membershipReads[0], fresh);
+});
+
+test('membership checks reject unverified identity before reading membership and require sign-in', async () => {
+  const fixture = harness();
+  await assert.rejects(fixture.session.checkMembership(), error => {
+    assert.equal(cloudSetupNeedsSignIn(error), true);
+    assert.match(cloudSetupErrorMessage(error), /[\u0600-\u06ff]/u);
+    return true;
+  });
+  assert.deepEqual(fixture.calls, ['readIdentity', 'signOut']);
+  assert.deepEqual(fixture.membershipReads, []);
+});
+
+test('revoked identity prevents membership reads and is replaced by a fixed safe sign-in error', async () => {
+  const secret = 'synthetic-revoked-id-token-never-display';
+  const fixture = harness({ readIdentity: async () => { throw new Error(secret); } });
+  await assert.rejects(fixture.session.checkMembership(), error => {
+    assert.equal(cloudSetupNeedsSignIn(error), true);
+    const message = cloudSetupErrorMessage(error);
+    assert.match(message, /[\u0600-\u06ff]/u);
+    assert.equal(message.includes(secret), false);
+    return true;
+  });
+  assert.deepEqual(fixture.calls, ['readIdentity', 'signOut']);
+  assert.deepEqual(fixture.membershipReads, []);
+});
+
+test('membership rejection and cleanup failure expose the same fixed error without provider details', async () => {
+  const secret = 'synthetic-membership-secret-never-display';
+  let fixedMessage: string | undefined;
+  for (const failure of [
+    new Error(`revoked ${secret}`),
+    { code: 'permission-denied', message: secret },
+    { code: 'unavailable', message: secret },
+  ]) {
+    const fixture = harness({
+      readMembership: async () => { throw failure; },
+      signOut: async () => { throw new Error(`cleanup ${secret}`); },
+    });
+    fixture.setIdentity(syntheticIdentity('owner-confirmed'));
+    await assert.rejects(fixture.session.checkMembership(), error => {
+      assert.equal(cloudSetupNeedsSignIn(error), true);
+      const message = cloudSetupErrorMessage(error);
+      assert.match(message, /[\u0600-\u06ff]/u);
+      assert.equal(message.includes(secret), false);
+      if (fixedMessage === undefined) fixedMessage = message;
+      else assert.equal(message, fixedMessage);
+      return true;
+    });
+    assert.deepEqual(fixture.calls, ['readIdentity', 'readMembership', 'signOut']);
+  }
+});
+
+test('a failed membership check releases single-flight state for explicit sign-in and retry', async () => {
+  let fail = true;
+  const fixture = harness({
+    readMembership: async () => {
+      if (fail) throw new Error('synthetic membership temporarily unavailable');
+      return syntheticMembership();
+    },
+  });
+  fixture.setIdentity(syntheticIdentity('owner-confirmed'));
+  await assert.rejects(fixture.session.checkMembership(), error => cloudSetupNeedsSignIn(error));
+  fail = false;
+  await fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD);
+  assert.deepEqual(await fixture.session.checkMembership(), syntheticMembership());
+  assert.deepEqual(fixture.calls, [
+    'readIdentity', 'readMembership', 'signOut', 'signIn', 'readIdentity', 'readIdentity', 'readMembership',
+  ]);
+});
+
+test('a pending membership check excludes every other operation until its result settles', async () => {
+  const started = deferred();
+  const release = deferred<CloudOwnerMembershipAssessment>();
+  const fixture = harness({ readMembership: async () => { started.resolve(); return release.promise; } });
+  fixture.setIdentity(syntheticIdentity('owner-confirmed'));
+  const checking = fixture.session.checkMembership();
+  await started.promise;
+
+  for (const operation of [
+    () => fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD),
+    () => fixture.session.refresh(),
+    () => fixture.session.checkMembership(),
+    () => fixture.session.sendVerification(),
+    () => fixture.session.signOut(),
+  ]) await assert.rejects(operation(), /انتظر انتهاء العملية الحالية/u);
+  assert.deepEqual(fixture.calls, ['readIdentity', 'readMembership']);
+
+  release.resolve(syntheticMembership());
+  assert.deepEqual(await checking, syntheticMembership());
+  await fixture.session.refresh();
+  assert.deepEqual(fixture.calls, ['readIdentity', 'readMembership', 'readIdentity']);
 });
 
 test('verification sending rechecks owner identity and refuses an already confirmed email', async () => {
@@ -208,6 +332,7 @@ test('dispose is idempotent, signs out before destroy and rejects every new oper
   for (const operation of [
     () => fixture.session.signIn(SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD),
     () => fixture.session.refresh(),
+    () => fixture.session.checkMembership(),
     () => fixture.session.sendVerification(),
     () => fixture.session.signOut(),
   ]) await assert.rejects(operation(), /أُغلقت جلسة التجهيز/u);
@@ -247,6 +372,26 @@ test('dispose also waits for an explicit verification send already in flight', a
   await rejectedSend;
   await disposal;
   assert.deepEqual(fixture.calls, ['readIdentity', 'sendVerification', 'signOut', 'destroy']);
+});
+
+test('dispose waits for pending membership, rejects its late result and cleans up once', async () => {
+  const started = deferred();
+  const release = deferred<CloudOwnerMembershipAssessment>();
+  const fixture = harness({ readMembership: async () => { started.resolve(); return release.promise; } });
+  fixture.setIdentity(syntheticIdentity('owner-confirmed'));
+  const checking = fixture.session.checkMembership();
+  const rejectedCheck = assert.rejects(checking, /أُغلقت جلسة التجهيز/u);
+  await started.promise;
+
+  const disposal = fixture.session.dispose();
+  assert.equal(fixture.session.dispose(), disposal);
+  await assert.rejects(fixture.session.checkMembership(), /أُغلقت جلسة التجهيز/u);
+  assert.deepEqual(fixture.calls, ['readIdentity', 'readMembership']);
+
+  release.resolve(syntheticMembership());
+  await rejectedCheck;
+  await disposal;
+  assert.deepEqual(fixture.calls, ['readIdentity', 'readMembership', 'signOut', 'destroy']);
 });
 
 test('dispose destroys the adapter even if sign-out fails and does not repeat cleanup', async () => {

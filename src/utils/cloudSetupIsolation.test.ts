@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 
-test('setup bundle cannot import clinical App, local record storage, old backups, Firestore or AI', async () => {
+test('setup bundle cannot import clinical App, local record storage, old backups, full Firestore or AI', async () => {
   const result = await build({
     entryPoints: ['src/components/auth/CloudSetupPage.tsx'], bundle: true, write: false,
     metafile: true, platform: 'browser', logLevel: 'silent',
@@ -14,7 +14,9 @@ test('setup bundle cannot import clinical App, local record storage, old backups
   assert.ok(inputs.includes('firebase.cloud-config.json'));
   for (const input of inputs) assert.doesNotMatch(input, /src\/App\.tsx|storage\.ts|firebaseService|offlineSync|aiService|firebase-applet-config/iu);
   const imports = Object.values(result.metafile!.outputs).flatMap(output => output.imports.map(item => item.path));
-  assert.doesNotMatch(imports.join('\n'), /firebase\/firestore|firebase\/storage|firebase-admin/iu);
+  assert.ok(imports.includes('firebase/firestore/lite'));
+  assert.equal(imports.includes('firebase/firestore'), false);
+  assert.doesNotMatch(imports.join('\n'), /firebase\/storage|firebase-admin/iu);
 });
 
 test('legacy backup initializer does not mistake a named setup app for the default app', async () => {

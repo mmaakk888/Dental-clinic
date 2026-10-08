@@ -3,11 +3,13 @@ import { ArrowRight, CheckCircle2, Cloud, LoaderCircle, LockKeyhole, Mail, Refre
 import { cloudSetupErrorMessage, cloudSetupNeedsSignIn, createCloudAuthSetupService, type CloudSetupSession } from '../../utils/cloudAuthSetup';
 import { CLOUD_PROJECT_ID, type CloudOwnerIdentity } from '../../utils/cloudIdentity';
 import { isCloudSetupRequest } from '../../utils/cloudSetupRoute';
+import type { CloudOwnerMembershipAssessment } from '../../utils/cloudMembership';
 
 export default function CloudSetupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [identity, setIdentity] = useState<CloudOwnerIdentity | null>(null);
+  const [membership, setMembership] = useState<CloudOwnerMembershipAssessment | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -40,7 +42,7 @@ export default function CloudSetupPage() {
   async function run(action: (session: CloudSetupSession) => Promise<void>, clearIdentityOnError = false) {
     if (pending.current) return;
     pending.current = true;
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setMessage(''); setMembership(null);
     try { await action(await getSession()); }
     catch (cause) {
       if (mounted.current) { setError(cloudSetupErrorMessage(cause)); if (clearIdentityOnError || cloudSetupNeedsSignIn(cause)) setIdentity(null); }
@@ -61,9 +63,9 @@ export default function CloudSetupPage() {
       <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8 shadow-sm space-y-6">
         <header className="flex items-start gap-3">
           <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><Cloud size={26} /></div>
-          <div className="min-w-0"><p className="text-xs font-bold text-indigo-600 mb-1">تجهيز Firebase · خطوة الحساب</p><h1 className="text-xl sm:text-2xl font-extrabold">تأكيد حساب مالك العيادة</h1><p className="text-sm text-slate-500 mt-2 leading-6">صفحة مستقلة لتأكيد الدخول والبريد فقط. لا تحمل ملفات المرضى أو ترفعها.</p></div>
+          <div className="min-w-0"><p className="text-xs font-bold text-indigo-600 mb-1">تجهيز Firebase · الحساب والربط</p><h1 className="text-xl sm:text-2xl font-extrabold">تأكيد حساب مالك العيادة</h1><p className="text-sm text-slate-500 mt-2 leading-6">صفحة مستقلة لتأكيد الدخول والبريد وفحص عضوية المالك. لا تحمل ملفات المرضى أو ترفعها.</p></div>
         </header>
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-7 text-amber-950">الموقع ما زال محليًا. نجاح هذه الخطوة لا يشغّل المزامنة ولا يفتح قاعدة بيانات العيادة.</div>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-7 text-amber-950">الموقع ما زال محليًا. نجاح هذه الخطوة لا يشغّل المزامنة ولا يتيح ملفات المرضى أو الماليات.</div>
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800">{error}</p>}
         {message && <p role="status" className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-900">{message}</p>}
         {!identity ? <form className="space-y-4" aria-busy={busy} onSubmit={event => {
@@ -81,8 +83,16 @@ export default function CloudSetupPage() {
           <div className={`rounded-2xl border p-4 ${verified ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
             <h2 className="flex items-center gap-2 font-bold">{verified ? <CheckCircle2 size={20} className="text-emerald-600" /> : <Mail size={20} className="text-indigo-600" />} {verified ? 'هوية المالك والبريد مؤكدان' : 'الدخول صحيح؛ باقي تأكيد البريد'}</h2>
             <p dir="ltr" className="mt-2 break-all text-sm text-slate-600">{identity.email}</p>
-            <p className="mt-2 text-sm leading-7 text-slate-600">{verified ? 'خطوة الحساب جاهزة. أخبرني بالإتمام لنكمل طبقة البيانات والصلاحيات المشتركة؛ لا توجد مزامنة أو بيانات سحابية مفعّلة الآن.' : 'اضغط إرسال رسالة التأكيد، وافتح الرسالة في بريدك ثم اضغط رابط التأكيد. بعد ذلك ارجع هنا وحدّث الحالة.'}</p>
+            <p className="mt-2 text-sm leading-7 text-slate-600">{verified ? 'البريد جاهز. اضغط فحص الربط للتحقق من سجل عضويتك على قاعدة البيانات. هذه ليست مزامنة أو صلاحية لملفات المرضى.' : 'اضغط إرسال رسالة التأكيد، وافتح الرسالة في بريدك ثم اضغط رابط التأكيد. بعد ذلك ارجع هنا وحدّث الحالة.'}</p>
           </div>
+          {verified && <div className="space-y-3">
+            <button type="button" disabled={busy} onClick={() => void run(async session => {
+              const next = await session.checkMembership();
+              if (mounted.current) setMembership(next);
+            })} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 p-3 font-bold text-white disabled:opacity-50"><Cloud size={19} /> فحص الربط بقاعدة البيانات</button>
+            {membership && <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-7 text-emerald-900"><p className="font-bold">تم تأكيد عضوية المالك والاتصال بقاعدة البيانات</p><p>تمت قراءة سجل عضويتك فقط. ملفات المرضى والماليات لم تُنقل، والموقع لم يُنشر بعد.</p></div>}
+            <p className="text-xs leading-6 text-slate-500">لو كانت الصفحة مفتوحة قبل تجهيز العضوية، سجّل الخروج والدخول من جديد أولًا؛ تحديث الرمز وحده لا يجدد وقت تسجيل الدخول.</p>
+          </div>}
           {!verified && <button type="button" disabled={busy || mailCooldown} onClick={() => void run(async session => {
             await session.sendVerification();
             if (!mounted.current) return;

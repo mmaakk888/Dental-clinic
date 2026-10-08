@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Membership diagnostic only. This ruleset never opens clinical records.
+    // Ownership is seeded by trusted IAM, never by a client signup or email.
+    function verifiedOwner(uid) {
+      return request.auth != null
+        && request.auth.uid is string
+        && request.auth.uid.size() > 0
+        && request.auth.uid.size() <= 128
+        && request.auth.uid == uid
+        && request.auth.token is map
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase is map
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.auth.token.dentalClinicId == 'main'
+        && request.auth.token.dentalClinicRole == 'owner'
+        && request.auth.token.auth_time is int
+        && request.auth.token.auth_time >= 0
+        && request.auth.token.auth_time <= 9007199254740991;
+    }
+
+    function activeOwnerMembership(uid) {
+      let data = resource.data;
+      let fields = ['schemaVersion', 'clinicId', 'uid', 'role', 'status', 'identityVersion', 'verifiedAfter'];
+      return data is map
+        && data.keys().hasAll(fields)
+        && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1
+        && data.clinicId == 'main'
+        && data.uid == uid
+        && data.role == 'owner'
+        && data.status == 'active'
+        && data.identityVersion is int
+        && data.identityVersion >= 1
+        && data.identityVersion <= 9007199254740991
+        && data.verifiedAfter is int
+        && data.verifiedAfter >= 0
+        && data.verifiedAfter <= 9007199254740991
+        && request.auth.token.auth_time >= data.verifiedAfter;
+    }
+
+    match /clinics/main/members/{uid} {
+      allow get: if database == '(default)'
+        && verifiedOwner(uid)
+        && activeOwnerMembership(uid);
+      allow list, create, update, delete: if false;
+    }
+
+    // A self-membership read grants no clinic, financial, patient or other access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
