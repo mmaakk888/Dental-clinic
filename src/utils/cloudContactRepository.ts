@@ -32,6 +32,8 @@ export interface CloudContactRecord {
   revision: number;
   deleted: boolean;
   lastOperationId: string;
+  /** Server-validated derived key; null only for tombstones. Not encryption. */
+  phoneKey: string | null;
   data: ClinicContact | null;
 }
 export interface CloudContactCommit {
@@ -86,14 +88,15 @@ function uid(value: unknown): value is string {
 }
 export function parseCloudContactRecord(value: unknown): CloudContactRecord {
   try {
-    const fields = record(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'deleted', 'lastOperationId', 'data']);
+    const fields = record(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'deleted', 'lastOperationId', 'phoneKey', 'data']);
     if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)
       || !revision(fields.revision) || typeof fields.deleted !== 'boolean' || typeof fields.lastOperationId !== 'string' || !UUID.test(fields.lastOperationId)) invalid();
     if (fields.deleted && fields.data !== null || !fields.deleted && fields.data === null) invalid();
+    if (fields.deleted ? fields.phoneKey !== null : typeof fields.phoneKey !== 'string' || !HASH.test(fields.phoneKey)) invalid();
     const data = fields.deleted ? null : contact(fields.data);
     if (data && data.id !== fields.recordId) invalid();
     return { schemaVersion: 1, clinicId: 'main', recordId: fields.recordId, revision: fields.revision,
-      deleted: fields.deleted, lastOperationId: fields.lastOperationId, data };
+      deleted: fields.deleted, lastOperationId: fields.lastOperationId, phoneKey: fields.phoneKey as string | null, data };
   } catch { return invalid(); }
 }
 function command(value: unknown): CloudContactCommand {
@@ -155,6 +158,7 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
           if (prepared.action === 'create' ? current !== null : !current || current.deleted || current.revision !== prepared.expectedRevision) throw new CloudContactError('conflict');
           if (current?.data && prepared.contact && (current.data.id !== prepared.contact.id || current.data.createdAt !== prepared.contact.createdAt)) throw new CloudContactError('conflict');
           const oldPhoneKey = current?.data ? await hash(`contact-phone-v1:${normalizeContactPhone(current.data.mobile)}`) : null;
+          if (current && current.phoneKey !== oldPhoneKey) invalid();
           const keys = Array.from(new Set([oldPhoneKey, nextPhoneKey].filter((key): key is string => key !== null)));
           const indexes = new Map<string, string | null>();
           for (const key of keys) indexes.set(key, phoneIndex(await transaction.get(phonePath(key)), key));
@@ -166,7 +170,7 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
           if (oldPhoneKey && oldPhoneKey !== nextPhoneKey) transaction.delete(phonePath(oldPhoneKey));
           if (nextPhoneKey) transaction.set(phonePath(nextPhoneKey), { schemaVersion: 1, clinicId: 'main', phoneKey: nextPhoneKey, recordId: prepared.recordId });
           transaction.set(recordPath(prepared.recordId), { schemaVersion: 1, clinicId: 'main', recordId: prepared.recordId,
-            revision: receipt.resultRevision, deleted: prepared.action === 'delete', lastOperationId: prepared.operationId, data: prepared.contact });
+            revision: receipt.resultRevision, deleted: prepared.action === 'delete', lastOperationId: prepared.operationId, phoneKey: nextPhoneKey, data: prepared.contact });
           transaction.set(operationPath(prepared.operationId), receipt);
           return { status: 'committed', recordId: prepared.recordId, revision: receipt.resultRevision };
         });

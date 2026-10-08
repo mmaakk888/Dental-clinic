@@ -154,14 +154,22 @@ test('malformed commands/extra fields/credentials/path IDs fail before transacti
 });
 
 test('record parsing rejects malformed/unknown envelopes and never runs input getters', () => {
-  const valid = { schemaVersion: 1, clinicId: 'main', recordId: ID, revision: 1, deleted: false, lastOperationId: OP, data: input().contact };
+  const valid = { schemaVersion: 1, clinicId: 'main', recordId: ID, revision: 1, deleted: false, lastOperationId: OP,
+    phoneKey: createHash('sha256').update('contact-phone-v1:201000000001').digest('hex'), data: input().contact };
   assert.deepEqual(parseCloudContactRecord(valid).data, input().contact);
   for (const value of [null, [], { ...valid, clinicId: 'other' }, { ...valid, revision: 0 }, { ...valid, deleted: true },
-    { ...valid, data: { ...input().contact, id: OTHER } }, { ...valid, accessToken: 'PRIVATE' }]) {
+    { ...valid, phoneKey: null }, { ...valid, phoneKey: 'invalid' }, { ...valid, data: { ...input().contact, id: OTHER } }, { ...valid, accessToken: 'PRIVATE' }]) {
     assert.throws(() => parseCloudContactRecord(value), hasCode('invalid'));
   }
   let reads = 0; const getter = { ...valid }; Object.defineProperty(getter, 'data', { enumerable: true, get: () => { reads++; throw new Error('PRIVATE'); } });
   assert.throws(() => parseCloudContactRecord(getter), hasCode('invalid')); assert.equal(reads, 0);
+});
+
+test('a stored derived phone key inconsistent with the actual phone fails closed', async () => {
+  const h = harness(); await h.repo.commit(input());
+  (h.rows.get(rPath()) as any).phoneKey = 'f'.repeat(64); const before = structuredClone(h.rows);
+  await assert.rejects(h.repo.commit(input({ operationId: OP2, action: 'update', expectedRevision: 1 })), hasCode('invalid'));
+  assert.deepEqual(h.rows, before);
 });
 
 test('authorization loss before reads or writes fails closed without committed changes', async () => {
