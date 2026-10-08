@@ -34,7 +34,8 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase App
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// A separate named Auth setup app must not be mistaken for the default app.
+const app = getApps().some(candidate => candidate.name === '[DEFAULT]') ? getApp() : initializeApp(firebaseConfig);
 
 // Initialize Firestore with specific database ID if available
 export const db = getFirestore(
