@@ -1,15 +1,17 @@
-import React, { useDeferredValue, useMemo, useState } from 'react';
+import React, { useDeferredValue, useMemo, useState, useEffect, useRef } from 'react';
 import {
   AlertCircle, Banknote, Calendar, CheckCircle2, ChevronLeft, Clock,
   FileText, Landmark, Microscope, Receipt, Search,
-  Stethoscope, UserPlus, X
+  UserPlus, X
 } from 'lucide-react';
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
-import { getHomeSubtitle, getHomeWelcome } from '../../utils/clinicContent';
 import { calculateDailyCollections, getPatientFinancialSummary } from '../../utils/financials';
 import { canAccessView, canPerformAction } from '../../utils/rbac';
 import { getHomeActionAccess } from '../../utils/homeActions';
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
+import { getHomeClockDisplay } from '../../utils/homeClock';
+import { useHomeClock } from '../../hooks/useHomeClock';
+import './HomeView.css';
 
 interface HomeViewProps {
   clinicName: string;
@@ -49,10 +51,9 @@ const money = (value: number, hidden: boolean) => hidden
   ? '••••••'
   : numberFormat.format(value) + ' ج.م';
 
-const localDateKey = () => {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-};
+const EMPTY_PATIENTS: Patient[] = [];
+const EMPTY_APPOINTMENTS: Appointment[] = [];
+const EMPTY_EXPENSES: Expense[] = [];
 
 const MetricCard: React.FC<{
   title: string; value: string | number; note: string; icon: React.ReactNode;
@@ -70,27 +71,35 @@ const MetricCard: React.FC<{
 };
 
 export const HomeView: React.FC<HomeViewProps> = React.memo(({
-  clinicName, labels, activeLabCount,
-  onNavigate, currentUser, patients = [], appointments = [], expenses = [],
+  activeLabCount,
+  onNavigate, currentUser, patients = EMPTY_PATIENTS, appointments = EMPTY_APPOINTMENTS, expenses = EMPTY_EXPENSES,
   isPrivacyMode = false, onSelectPatient, onOpenWalkIn, onOpenDailyReport,
   onOpenScheduleModal, onOpenInvoiceModal, onOpenPayment
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearch = useDeferredValue(searchQuery);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const today = localDateKey();
+  const [selectedPatientIndex, setSelectedPatientIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const clock = useHomeClock();
+  const clockDisplay = useMemo(() => getHomeClockDisplay(clock), [clock]);
+  const today = clockDisplay.day;
   const user = currentUser ?? null;
   const canPatients = canAccessView(user, 'patients');
   const canAppointments = canAccessView(user, 'appointments');
   const canLab = canAccessView(user, 'lab');
   const canFinance = canAccessView(user, 'summary');
-  const canSettings = canAccessView(user, 'settings');
   const actionAccess = getHomeActionAccess(user);
   const canViewCollections = canPerformAction(user, 'view_today_collections');
   const canViewRemaining = canPerformAction(user, 'view_remaining_balance');
   const canViewExpenses = canFinance && canPerformAction(user, 'view_expenses');
-  const showActions = !!((actionAccess.walkIn && onOpenWalkIn) || (actionAccess.schedule && onOpenScheduleModal)
-    || actionAccess.payment || (actionAccess.invoice && !isPrivacyMode && onOpenInvoiceModal) || (actionAccess.report && onOpenDailyReport));
+  const actions = [
+    { id: 'walkin', allowed: actionAccess.walkIn && !!onOpenWalkIn, title: 'زيارة بدون موعد', note: 'مريض مسجل أو جديد · خدمة وتحصيل', icon: <UserPlus />, tone: 'indigo' as Tone, run: onOpenWalkIn, dialog: true },
+    { id: 'schedule', allowed: actionAccess.schedule && !!onOpenScheduleModal, title: 'حجز موعد', note: 'اختيار ملف وموعد · بدون تحصيل', icon: <Calendar />, tone: 'amber' as Tone, run: onOpenScheduleModal, dialog: true },
+    { id: 'payment', allowed: actionAccess.payment, title: 'تسجيل دفعة', note: 'سداد خدمة سابقة · لا تُنشئ زيارة', icon: <Banknote />, tone: 'emerald' as Tone, run: onOpenPayment || (() => onNavigate('patients')), dialog: !!onOpenPayment },
+    { id: 'report', allowed: actionAccess.report && !!onOpenDailyReport, title: 'التقرير اليومي', note: 'من دفع والخدمات المنفذة · للعرض', icon: <FileText />, tone: 'teal' as Tone, run: onOpenDailyReport, dialog: true },
+    { id: 'invoice', allowed: actionAccess.invoice && !isPrivacyMode && !!onOpenInvoiceModal, title: 'إضافة فاتورة مصروف', note: 'صورة الفاتورة والأصناف · مراجعة أولًا', icon: <Receipt />, tone: 'rose' as Tone, run: onOpenInvoiceModal, dialog: true },
+  ].filter(action => action.allowed);
 
   const stats = useMemo(() => {
     const dayAppointments = appointments
@@ -98,7 +107,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
     const collected = canViewCollections && !isPrivacyMode
       ? calculateDailyCollections(patients, date => date === today).totalIncomeCollected : 0;
-    const spent = canViewExpenses ? expenses.filter(expense => expense.date === today)
+    const spent = canViewExpenses && !isPrivacyMode ? expenses.filter(expense => expense.date === today)
       .reduce((sum, expense) => sum + Number(expense.amount || 0), 0)
       : 0;
     const outstanding = canViewRemaining && !isPrivacyMode ? patients.reduce(
@@ -115,10 +124,18 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 
   const showAlerts = (canAppointments && stats.noShow > 0)
     || (canLab && activeLabCount > 0) || (canViewExpenses && stats.spent > 0);
-  const subtitle = getHomeSubtitle(labels);
-
-  const searchIndex = useMemo(() => buildHomePatientSearch(patients), [patients]);
+  const searchIndex = useMemo(() => buildHomePatientSearch(canPatients ? patients : EMPTY_PATIENTS), [patients, canPatients]);
   const filteredPatients = useMemo(() => searchHomePatients(searchIndex, deferredSearch, 6), [searchIndex, deferredSearch]);
+  const searchPending = searchQuery !== deferredSearch;
+  useEffect(() => { setSelectedPatientIndex(0); }, [deferredSearch, filteredPatients]);
+  const activePatientIndex = Math.min(selectedPatientIndex, Math.max(0, filteredPatients.length - 1));
+  const openPatient = (patient: Patient) => {
+    if (searchPending) return;
+    if (onSelectPatient) onSelectPatient(patient.id, 'home');
+    else onNavigate('patients');
+    setSearchQuery('');
+    setIsSearchFocused(false);
+  };
 
   const statusLabel: Record<string, string> = {
     scheduled: 'محجوز', waiting: 'في الانتظار', attended: 'تم الحضور', no_show: 'لم يحضر',
@@ -126,37 +143,62 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   };
 
   return (
-    <div className="dashboard-shell" dir="rtl">
-      <section className="dashboard-hero">
-        <div className="min-w-0">
-          <p className="dashboard-eyebrow">لوحة التشغيل اليومية</p>
-          <h1 className="dashboard-title">{clinicName || 'نظام إدارة عيادة الأسنان'}</h1>
-          <p className="dashboard-subtitle">{subtitle}</p>
-        </div>
-        <div className="dashboard-date"><Clock aria-hidden="true" /><span>{new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
+    <div className="dashboard-shell home-workspace" dir="rtl">
+      <h1 className="sr-only">لوحة اليوم</h1>
+      <section className="home-today-strip" aria-label="تاريخ اليوم والوقت المحلي">
+        <div><Calendar aria-hidden="true" /><time dateTime={clockDisplay.day}>{clockDisplay.dateLabel}</time></div>
+        <div><Clock aria-hidden="true" /><time dateTime={clockDisplay.instant} aria-label={`الساعة ${clockDisplay.timeLabel}`}>{clockDisplay.timeLabel}</time></div>
       </section>
 
       {canPatients && (
         <section role="search" aria-label="البحث في ملفات المرضى" className="dashboard-search-panel" onFocus={() => setIsSearchFocused(true)}
+          onKeyDown={event => {
+            if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
+              searchInputRef.current?.focus();
+              setIsSearchFocused(false);
+            }
+          }}
           onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSearchFocused(false); }}>
           <Search aria-hidden="true" className="pointer-events-none absolute start-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-          <input aria-label="البحث عن مريض بالاسم أو الهاتف أو رقم الملف" aria-controls="dashboard-patient-results" aria-expanded={!!searchQuery.trim() && isSearchFocused}
-            value={searchQuery} onChange={event => setSearchQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setIsSearchFocused(false); event.currentTarget.blur(); } }}
+          <input ref={searchInputRef} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-label="البحث عن مريض بالاسم أو الهاتف أو رقم الملف"
+            aria-controls={searchQuery.trim() && isSearchFocused ? 'dashboard-patient-results' : undefined} aria-expanded={!!searchQuery.trim() && isSearchFocused}
+            aria-activedescendant={isSearchFocused && !searchPending && filteredPatients.length ? `dashboard-patient-result-${activePatientIndex}` : undefined}
+            value={searchQuery} onChange={event => setSearchQuery(event.target.value)} onKeyDown={event => {
+              if (event.nativeEvent.isComposing) return;
+              if (searchPending || !filteredPatients.length) return;
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault(); setIsSearchFocused(true);
+                setSelectedPatientIndex(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + filteredPatients.length) % filteredPatients.length);
+              }
+              if (event.key === 'Enter' && isSearchFocused) { event.preventDefault(); openPatient(filteredPatients[activePatientIndex]); }
+            }}
             className="dashboard-search-input" placeholder="اسم المريض، الهاتف أو رقم الملف" autoComplete="off" />
           {searchQuery && <button type="button" aria-label="مسح البحث" className="dashboard-search-clear" onClick={() => setSearchQuery('')}><X aria-hidden="true" /></button>}
           {searchQuery.trim() && isSearchFocused && (
-            <div id="dashboard-patient-results" className="dashboard-search-results" aria-busy={searchQuery !== deferredSearch}>
-              {filteredPatients.length ? filteredPatients.map(patient => (
-                <button key={patient.id} type="button" className="dashboard-search-result" onClick={() => { onSelectPatient?.(patient.id, 'home'); setSearchQuery(''); }}>
+            <div id="dashboard-patient-results" role="listbox" aria-label="نتائج ملفات المرضى" className="dashboard-search-results" aria-busy={searchPending}>
+              {searchPending ? <p className="home-search-message" role="status">جارٍ البحث…</p> : filteredPatients.length ? filteredPatients.map((patient, index) => (
+                <button key={patient.id} id={`dashboard-patient-result-${index}`} role="option" aria-selected={activePatientIndex === index}
+                  type="button" className="dashboard-search-result" onClick={() => openPatient(patient)}>
                   <span className="dashboard-avatar">{patient.name.charAt(0)}</span>
                   <span className="min-w-0 flex-1"><strong>{patient.name}</strong><small>ملف <bdi>{patient.id}</bdi> · <bdi>{patient.mobile}</bdi></small></span>
                   <ChevronLeft aria-hidden="true" />
                 </button>
-              )) : <p className="p-4 text-center text-sm font-bold text-slate-500">لا توجد نتائج مطابقة</p>}
+              )) : <p className="home-search-message" role="status">لا توجد نتائج مطابقة</p>}
             </div>
           )}
         </section>
       )}
+
+      {actions.length > 0 && <section className="home-actions-panel" aria-labelledby="home-actions-title">
+        <div className="home-section-heading"><h2 id="home-actions-title">إجراءات اليوم</h2><p>اختصارات حسب صلاحيات حسابك</p></div>
+        <div className="home-action-grid">
+          {actions.map(action => <button key={action.id} type="button" className={`home-action-button home-action-${action.id}`}
+            onClick={action.run} aria-haspopup={action.dialog ? 'dialog' : undefined}>
+            <span aria-hidden="true" className={`home-action-icon ${tones[action.tone].icon}`}>{action.icon}</span>
+            <strong>{action.title}</strong><small>{action.note}</small>
+          </button>)}
+        </div>
+      </section>}
 
       <section className="dashboard-metrics" aria-label="ملخص اليوم">
         {canAppointments && <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الحضور'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />}
@@ -166,7 +208,6 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
       </section>
 
-      <div className={'dashboard-main-grid' + (!canAppointments || !showActions ? ' dashboard-main-grid-single' : '')}>
         {canAppointments && <section className="dashboard-panel">
           <div className="dashboard-panel-header">
             <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">جدول اليوم</h2></div>
@@ -190,17 +231,6 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
           )}
         </section>}
 
-        {showActions && <aside className="dashboard-panel">
-          <div className="dashboard-panel-header"><div><p className="dashboard-eyebrow">تنفيذ سريع</p><h2 className="dashboard-section-title">إجراءات اليوم</h2></div></div>
-          <div className="dashboard-actions">
-            {actionAccess.walkIn && onOpenWalkIn && <button type="button" onClick={onOpenWalkIn} className="dashboard-action" aria-haspopup="dialog"><span aria-hidden="true" className="dashboard-action-icon bg-indigo-100 text-indigo-700"><UserPlus /></span><span><strong>زيارة بدون موعد</strong><small>مريض مسجل أو جديد · خدمة وتحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
-            {actionAccess.schedule && onOpenScheduleModal && <button type="button" onClick={onOpenScheduleModal} className="dashboard-action" aria-haspopup="dialog"><span aria-hidden="true" className="dashboard-action-icon bg-amber-100 text-amber-700"><Calendar /></span><span><strong>حجز موعد</strong><small>اختيار ملف وموعد متاح · بدون تحصيل</small></span><ChevronLeft aria-hidden="true" /></button>}
-            {actionAccess.payment && <button type="button" onClick={() => onOpenPayment ? onOpenPayment() : onNavigate('patients')} className="dashboard-action" aria-haspopup={onOpenPayment ? 'dialog' : undefined}><span aria-hidden="true" className="dashboard-action-icon bg-emerald-100 text-emerald-700"><Banknote /></span><span><strong>تسجيل دفعة</strong><small>سداد خدمة سابقة · لا تُنشئ زيارة</small></span><ChevronLeft aria-hidden="true" /></button>}
-            {actionAccess.invoice && !isPrivacyMode && onOpenInvoiceModal && <button type="button" onClick={onOpenInvoiceModal} className="dashboard-action" aria-haspopup="dialog"><span aria-hidden="true" className="dashboard-action-icon bg-rose-100 text-rose-700"><Receipt /></span><span><strong>إضافة فاتورة مصروف</strong><small>صورة الفاتورة والأصناف · مراجعة قبل الحفظ</small></span><ChevronLeft aria-hidden="true" /></button>}
-            {actionAccess.report && onOpenDailyReport && <button type="button" onClick={onOpenDailyReport} className="dashboard-action" aria-haspopup="dialog"><span aria-hidden="true" className="dashboard-action-icon bg-slate-100 text-slate-700"><FileText /></span><span><strong>التقرير اليومي</strong><small>من دفع اليوم والخدمات المنفذة · للعرض</small></span><ChevronLeft aria-hidden="true" /></button>}
-          </div>
-        </aside>}
-      </div>
 
       {showAlerts && (
         <section className="dashboard-alerts">
@@ -213,11 +243,6 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         </section>
       )}
 
-
-      <section className="dashboard-footer-strip">
-        <Stethoscope aria-hidden="true" /><span>{getHomeWelcome(labels)}</span>
-        {canSettings && <button type="button" onClick={() => onNavigate('settings')}>إعدادات العيادة <ChevronLeft aria-hidden="true" /></button>}
-      </section>
     </div>
   );
 });

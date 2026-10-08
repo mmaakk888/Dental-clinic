@@ -51,11 +51,18 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
     const elements = (): HTMLElement[] => Array.from(confirmRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]') || []) as HTMLElement[];
     elements()[0]?.focus();
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setConfirmState(null); }
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopImmediatePropagation();
+        // An in-flight destructive action cannot be undone by dismissing its UI.
+        // Programmatic cancelConfirm remains available for security invalidation.
+        if (!confirmingRef.current) setConfirmState(null);
+      }
       if (event.key === 'Tab') {
         const list = elements();
         const first = list[0], last = list[list.length - 1];
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        if (!first) { event.preventDefault(); confirmRef.current?.focus(); }
+        else if (!confirmRef.current?.contains(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }
+        else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
         event.stopImmediatePropagation();
       }
@@ -181,7 +188,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
       {/* Confirm Modal */}
       {confirmState && (
         <div className="clinic-modal-overlay fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div ref={confirmRef} role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message" className="clinic-modal-panel bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto">
+          <div ref={confirmRef} role="alertdialog" aria-modal="true" aria-busy={confirming} tabIndex={-1} aria-labelledby="confirmation-title" aria-describedby="confirmation-message" className="clinic-modal-panel bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start gap-4">
               <div className={`p-3 rounded-xl shrink-0 ${
                 confirmState.tone === 'danger'
@@ -211,8 +218,9 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
             <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setConfirmState(null)}
-                className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                disabled={confirming}
+                onClick={() => { if (!confirmingRef.current) setConfirmState(null); }}
+                className="min-h-[44px] px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer disabled:opacity-50"
               >
                 {confirmState.cancelLabel || 'إلغاء'}
               </button>
@@ -230,7 +238,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                     showToast(error instanceof Error ? error.message : 'تعذّر تنفيذ العملية. لم يتم تأكيد نجاحها.', 'error');
                   } finally { confirmingRef.current = false; setConfirming(false); }
                 }}
-                className={`px-5 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all cursor-pointer ${
+                className={`min-h-[44px] px-5 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all cursor-pointer disabled:opacity-60 ${
                   confirmState.tone === 'danger'
                     ? 'bg-red-600 hover:bg-red-700 shadow-red-600/20'
                     : confirmState.tone === 'warning'
@@ -241,6 +249,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
                 {confirming ? 'جارٍ التنفيذ…' : confirmState.confirmLabel || 'تأكيد'}
               </button>
             </div>
+            {confirming && <p role="status" className="text-xs text-slate-600">بدأ التنفيذ؛ انتظر النتيجة ولا تغلق الصفحة. إغلاق التأكيد لا يلغي عملية بدأت بالفعل.</p>}
           </div>
         </div>
       )}

@@ -3,6 +3,8 @@ import { Home, Users, ContactRound, Calendar, Landmark, MoreHorizontal, Microsco
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
 import { getNavigationItems } from '../../utils/clinicContent';
 import { canAccessView } from '../../utils/rbac';
+import { getDockAppearance, splitMobileNavigation } from '../../utils/dockAppearance';
+import './dockAppearance.css';
 
 interface Props {
   activeView: ActiveView;
@@ -23,7 +25,8 @@ export const MobileBottomNav = React.memo(({ activeView, labels, tileOrder, curr
   const moreButton = useRef<HTMLButtonElement>(null);
   const items = getNavigationItems(labels, tileOrder).filter(item => canAccessView(currentUser, item.key))
     .map(item => ({ ...item, icon: navigationIcons[item.key] }));
-  const extra = items.slice(4);
+  const appearance = getDockAppearance(labels);
+  const { extra } = splitMobileNavigation(items, appearance);
   const selected = activeView === 'patient-file' ? 'patients' : activeView === 'lab-detail' ? 'lab' : activeView === 'secretary-desk' ? 'home' : activeView;
 
   useEffect(() => {
@@ -66,16 +69,16 @@ export const MobileBottomNav = React.memo(({ activeView, labels, tileOrder, curr
   if (!currentUser) return null;
 
   return <>
-    <nav ref={dock} className="clinic-dock" aria-label="التنقل الرئيسي" dir="rtl">
+    <nav ref={dock} className="clinic-dock" data-dock-size={appearance.size} data-show-labels={appearance.showLabels} aria-label="التنقل الرئيسي" dir="rtl">
       {items.map((item, index) => <button key={item.key} type="button"
-        className={'clinic-dock-item ' + (index >= 4 ? 'clinic-dock-desktop' : '')}
-        aria-current={selected === item.key ? 'page' : undefined} title={item.label}
+        className={'clinic-dock-item ' + (index >= appearance.mobileVisibleCount ? 'clinic-dock-desktop' : '')}
+        aria-current={selected === item.key ? 'page' : undefined} title={item.label} aria-label={item.label}
         onClick={() => navigate(item.key)}>
         <span className="clinic-dock-icon" aria-hidden="true"><item.icon /></span><span className="clinic-dock-label">{item.label}</span>
       </button>)}
       {!!extra.length && <button ref={moreButton} type="button" className="clinic-dock-item clinic-dock-more"
         data-active={extra.some(item => item.key === selected) || undefined}
-        aria-haspopup="dialog" aria-expanded={open} aria-controls="clinic-more-menu" onClick={() => setOpen(true)}>
+        aria-label="المزيد من الأقسام" title="المزيد من الأقسام" aria-haspopup="dialog" aria-expanded={open} aria-controls="clinic-more-menu" onClick={() => setOpen(true)}>
         <span className="clinic-dock-icon" aria-hidden="true"><MoreHorizontal /></span><span className="clinic-dock-label">المزيد</span>
       </button>}
     </nav>

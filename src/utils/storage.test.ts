@@ -335,6 +335,7 @@ const makeContentDraft = () => ({
       customSection: { title: 'عنوان قسم محفوظ', desc: 'وصف محفوظ' },
     },
     navigationLabels: { home: 'البداية', patients: 'المرضى' },
+    dockAppearance: { size: 'large' as const, showLabels: false, mobileVisibleCount: 3 as const },
     futureSetting: { tags: ['محفوظ'], nested: { enabled: true } },
   },
   tileOrder: ['summary', 'patients', 'appointments', 'lab', 'settings'],
@@ -379,6 +380,7 @@ test('saved content and nested legacy fields do not alias the mutable draft', ()
   draft.labels.tiles.patients.title = 'تغيير عنوان';
   draft.labels.tiles.customSection.desc = 'تغيير وصف';
   draft.labels.navigationLabels.home = 'تغيير الرئيسية';
+  draft.labels.dockAppearance.showLabels = true;
   draft.labels.futureSetting.tags.push('تغيير');
   draft.labels.futureSetting.nested.enabled = false;
   draft.tileOrder.reverse();

@@ -251,6 +251,29 @@ function normalizeOriginalDemoPatients(patients: Patient[]): Patient[] {
 
 export const Storage = {
   getDomainData,
+  // Call under the clinic lock: export persisted values, never a stale React/cache
+  // snapshot. A malformed saved section must not silently become demo/default data.
+  getBackupDataFresh: (): Record<string, unknown> => {
+    const sections: [string, string, unknown][] = [
+      ['patients', KEYS.PATIENTS, INITIAL_PATIENTS], ['contacts', KEYS.CONTACTS, []],
+      ['appointments', KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS], ['labs', KEYS.LABS, INITIAL_LABS],
+      ['labCases', KEYS.LAB_CASES, INITIAL_LAB_CASES], ['expenses', KEYS.EXPENSES, INITIAL_EXPENSES],
+      ['materialUsages', KEYS.MATERIAL_USAGES, []], ['users', KEYS.USERS, DEFAULT_USERS],
+      ['serviceTypes', KEYS.SERVICE_TYPES, DEFAULT_SERVICE_TYPES], ['crownPrices', KEYS.CROWN_PRICES, DEFAULT_PATIENT_CROWN_PRICES],
+      ['drugCatalog', KEYS.DRUG_CATALOG, DEFAULT_DRUG_CATALOG], ['whatsappSettings', KEYS.WHATSAPP_SETTINGS, DEFAULT_WHATSAPP_SETTINGS],
+      ['clinicName', KEYS.CLINIC_NAME, 'عيادة د. مريم علي للأسنان'], ['clinicLogo', KEYS.CLINIC_LOGO, null],
+      ['theme', KEYS.THEME, DEFAULT_THEME], ['labels', KEYS.UI_LABELS, DEFAULT_UI_LABELS], ['tileOrder', KEYS.TILE_ORDER, DEFAULT_TILE_ORDER],
+    ];
+    try {
+      return Object.fromEntries(sections.map(([section, key, fallback]) => {
+        const raw = localStorage.getItem(key);
+        const value = raw === null ? cloneStoredValue(fallback) : JSON.parse(raw);
+        return [section, section === 'patients' && Array.isArray(value) ? normalizeOriginalDemoPatients(value) : value];
+      }));
+    } catch {
+      throw new Error('تعذّر قراءة إحدى بيانات العيادة المحفوظة؛ لم يتم تنزيل نسخة ناقصة أو استبدال البيانات.');
+    }
+  },
   saveDomainDataConfirmed,
   saveBackupConfirmed: (data: Record<string, unknown>) => {
     const fields: [string, string][] = [

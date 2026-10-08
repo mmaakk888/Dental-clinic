@@ -1,29 +1,52 @@
-import React, { useState, useEffect, useRef, useMemo, lazy, Suspense, useCallback } from 'react';
-import { ActiveView, Patient, Appointment, LabCase, Expense, User as UserType, DeviceMode, UILabels } from '../../types';
-import { 
-  Home, Users, Calendar, Microscope, Landmark, Sliders, Search, Command, 
-  Eye, EyeOff, LogOut, Stethoscope, Bell, ChevronDown, CheckCircle2, ArrowRight, X, Shield,
-  Wifi, WifiOff, RefreshCw, AlertTriangle, Database, Cloud
-} from 'lucide-react';
+import React, { useState, useEffect, useMemo, lazy, Suspense, useCallback } from 'react';
+import type { ActiveView, Patient, Appointment, LabCase, Expense, User as UserType, DeviceMode, UILabels, NavigationOrigin } from '../../types';
+import { Sliders, Search, Eye, EyeOff, LogOut, Bell, ChevronDown, X, Wifi, WifiOff, AlertTriangle, Database, CloudOff, ArrowLeft } from 'lucide-react';
 import { useOfflineSyncStatus } from '../../hooks/useOfflineSyncStatus';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
-import { getPatientFinancialSummary } from '../../utils/financials';
-import { getNavigationLabel } from '../../utils/clinicContent';
 import { canPerformAction, canAccessView } from '../../utils/rbac';
+import { buildClinicNotifications, countUnreadNotifications, getLocalNotificationDay } from '../../utils/clinicNotifications';
+import { STORAGE_FAILURE_EVENT } from '../../utils/storage';
+import './HeaderNavbar.css';
 
 const GlobalSearchModal = lazy(() => import('./GlobalSearchModal').then(module => ({ default: module.GlobalSearchModal })));
 const NotificationCenterModal = lazy(() => import('./NotificationCenterModal').then(module => ({ default: module.NotificationCenterModal })));
 const EMPTY_RECORDS: never[] = [];
+const EMPTY_READ_KEYS: ReadonlySet<string> = new Set();
+type HeaderOverlay = 'account' | 'status' | 'search' | 'notifications' | null;
 
 function HeaderDialogLoading({ onClose }: { onClose: () => void }) {
   const dialogRef = useAppointmentDialog(true, onClose);
-  return <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" dir="rtl">
+  return <div className="clinic-modal-overlay clinic-topbar-overlay" dir="rtl">
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="فتح النافذة" tabIndex={-1}
-      className="clinic-modal-panel w-full max-w-xs bg-white p-5 text-center shadow-xl">
-      <p role="status" className="font-bold text-slate-700">جارٍ فتح النافذة…</p>
-      <button type="button" onClick={onClose} className="mt-4 min-h-[44px] rounded-xl bg-slate-100 px-5 py-2 font-bold text-slate-600">إلغاء وإغلاق</button>
+      className="clinic-modal-panel clinic-topbar-sheet clinic-topbar-loading">
+      <p role="status">جارٍ فتح النافذة…</p>
+      <button type="button" onClick={onClose} className="clinic-topbar-secondary">إلغاء وإغلاق</button>
     </div>
   </div>;
+}
+
+/** Updates at local midnight and when returning to an inactive/background tab. */
+function useNotificationDay() {
+  const [today, setToday] = useState(getLocalNotificationDay);
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout>;
+    const update = () => {
+      setToday(getLocalNotificationDay());
+      clearTimeout(timeout);
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      timeout = setTimeout(update, midnight.getTime() - now.getTime() + 100);
+    };
+    update();
+    window.addEventListener('focus', update);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('focus', update);
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, []);
+  return today;
 }
 
 interface HeaderNavbarProps {
@@ -46,583 +69,173 @@ interface HeaderNavbarProps {
   onChangeDeviceMode?: (mode: DeviceMode) => void;
   onTogglePrivacyMode: () => void;
   onNavigate: (view: ActiveView, subTab?: string) => void;
-  onSelectPatient: (patientId: string, origin: any) => void;
+  onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
   onLogout: () => void;
 }
 
+const getRoleLabel = (role?: string) => ({ doctor: 'طبيب العيادة', secretary: 'استقبال', receptionist: 'استقبال', admin: 'مدير النظام', accountant: 'محاسب' }[role || ''] || 'مستخدم');
+
 export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
-  activeView,
-  labels,
-  clinicName,
-  clinicLogo,
-  patients,
-  appointments = [],
-  labCases = [],
-  expenses = [],
-  currentUser,
-  isPrivacyMode,
-  isDetectedMobile = false,
-  onTogglePrivacyMode,
-  onNavigate,
-  onSelectPatient,
-  onLogout
+  clinicName, patients, appointments = EMPTY_RECORDS, labCases = EMPTY_RECORDS, expenses = EMPTY_RECORDS,
+  currentUser, isPrivacyMode, onTogglePrivacyMode, onNavigate, onSelectPatient, onLogout,
 }) => {
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [overlay, setOverlay] = useState<HeaderOverlay>(null);
   const [hasOpenedSearch, setHasOpenedSearch] = useState(false);
   const [hasOpenedNotifications, setHasOpenedNotifications] = useState(false);
-  const { online: isOnline, pending: pendingCount, failed: failedCount } = useOfflineSyncStatus();
-  // Shared cloud mutation transport is not configured; do not simulate syncing.
-  const isSyncing = false;
-  const profileRef = useRef<HTMLDivElement>(null);
-  const closeSearch = useCallback(() => setIsSearchOpen(false), []);
-  const closeNotifications = useCallback(() => setIsNotifOpen(false), []);
+  const [storageWarning, setStorageWarning] = useState(false);
+  const accountKey = currentUser ? `${currentUser.id}:${currentUser.username}` : '';
+  // Read acknowledgements stay in this account's current tab session only.
+  const [readState, setReadState] = useState<{ account: string; keys: ReadonlySet<string> }>({ account: accountKey, keys: EMPTY_READ_KEYS });
+  const readKeys = readState.account === accountKey ? readState.keys : EMPTY_READ_KEYS;
+  const today = useNotificationDay();
+  const { online, queued, pending, failed } = useOfflineSyncStatus();
+  const closeOverlay = useCallback(() => setOverlay(null), []);
+  const sheetRef = useAppointmentDialog(overlay === 'account' || overlay === 'status', closeOverlay);
+
   useEffect(() => {
-    if (isSearchOpen) setHasOpenedSearch(true);
-    if (isNotifOpen) setHasOpenedNotifications(true);
-  }, [isSearchOpen, isNotifOpen]);
+    setOverlay(null);
+    setReadState({ account: accountKey, keys: EMPTY_READ_KEYS });
+  }, [accountKey]);
+  useEffect(() => {
+    const onFailure = () => setStorageWarning(true);
+    window.addEventListener(STORAGE_FAILURE_EVENT, onFailure);
+    return () => window.removeEventListener(STORAGE_FAILURE_EVENT, onFailure);
+  }, []);
+  useEffect(() => {
+    if (overlay === 'search') setHasOpenedSearch(true);
+    if (overlay === 'notifications') setHasOpenedNotifications(true);
+  }, [overlay]);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.key.toLowerCase() !== 'k') return;
+      // Do not open a competing header overlay over an unrelated editing dialog.
+      if (!overlay && document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"], dialog[open]')) return;
+      event.preventDefault();
+      setOverlay(previous => previous === 'search' ? null : 'search');
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [overlay]);
 
   const canPatientView = canPerformAction(currentUser, 'view_patients');
-  const canPatientFinance = canPatientView && canPerformAction(currentUser, 'view_patient_finance') && canPerformAction(currentUser, 'view_remaining_balance') && !isPrivacyMode;
+  const canPatientFinance = canPatientView && canPerformAction(currentUser, 'view_patient_finance')
+    && canPerformAction(currentUser, 'view_remaining_balance') && !isPrivacyMode;
   const visiblePatients = canPatientView ? patients : EMPTY_RECORDS;
   const visibleAppointments = canAccessView(currentUser, 'appointments') ? appointments : EMPTY_RECORDS;
   const visibleLabCases = canAccessView(currentUser, 'lab') ? labCases : EMPTY_RECORDS;
   const visibleExpenses = canAccessView(currentUser, 'summary') && canPerformAction(currentUser, 'view_expenses') && !isPrivacyMode ? expenses : EMPTY_RECORDS;
-
-  // Notifications calculation
-  const { todayApptsCount, overduePatientsCount, pendingLabCount, totalNotifCount } = useMemo(() => {
-    const now = new Date();
-    const todayStr = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-    const appts = visibleAppointments.filter(a => a.date === todayStr).length;
-    const overdue = canPatientFinance ? visiblePatients.filter(p => getPatientFinancialSummary(p).totalRemaining > 500).length : 0;
-    const pendingLabs = visibleLabCases.filter(l => l.status === 'pending').length;
-    return {
-      todayApptsCount: appts,
-      overduePatientsCount: overdue,
-      pendingLabCount: pendingLabs,
-      totalNotifCount: appts + overdue + pendingLabs
-    };
-  }, [appointments, patients, labCases, currentUser, isPrivacyMode]);
-
-  // Shortcut Ctrl+K
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setIsSearchOpen(prev => !prev);
-      }
-      if (e.key === 'Escape') {
-        setIsSearchOpen(false);
-        setIsProfileMenuOpen(false);
-        setIsSyncModalOpen(false);
-        setIsNotifOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // Close profile menu on outside click
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
-        setIsProfileMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Role translation
-  const getRoleLabel = (role?: string) => {
-    switch (role) {
-      case 'doctor':
-        return 'طبيب العيادة';
-      case 'secretary':
-      case 'receptionist':
-        return 'استقبال';
-      case 'admin':
-        return 'مدير النظام';
-      case 'accountant':
-        return 'محاسب';
-      default:
-        return 'مستخدم';
-    }
+  const canSettings = canAccessView(currentUser, 'settings');
+  const canBackup = canSettings && canPerformAction(currentUser, 'backup_restore');
+  const notifications = useMemo(() => buildClinicNotifications({
+    patients: canPatientFinance ? visiblePatients : EMPTY_RECORDS, appointments: visibleAppointments, labCases: visibleLabCases, today,
+  }), [canPatientFinance, visiblePatients, visibleAppointments, visibleLabCases, today]);
+  const unreadCount = countUnreadNotifications(notifications, readKeys);
+  const markRead = useCallback((keys: string[]) => {
+    setReadState(previous => ({ account: accountKey, keys: new Set([
+      ...(previous.account === accountKey ? previous.keys : EMPTY_READ_KEYS), ...keys,
+    ]) }));
+  }, [accountKey]);
+  const navigateFromSheet = (view: ActiveView, subTab?: string) => {
+    closeOverlay();
+    onNavigate(view, subTab);
   };
 
-  return (
-    <>
-      <header className="bg-white border-b border-slate-200 font-['Cairo',sans-serif] w-full shadow-2xs">
-        <div className="clinic-header-inner max-w-[1800px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
-          
-          {/* RTL Right Side: Brand/Back & Clickable Account Area Trigger */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* Functional Back to Home button when in sub-views */}
-            {activeView !== 'home' && (
-              <button
-                type="button"
-                onClick={() => onNavigate('home')}
-                className="h-10 px-2.5 sm:px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5 active:scale-95 touch-manipulation shrink-0 z-20 min-h-[44px]"
-                title="العودة للشاشة الرئيسية"
-              >
-                <ArrowRight className="w-4 h-4 shrink-0" />
-                <span className="font-tajawal hidden sm:inline">{getNavigationLabel(labels, 'home')}</span>
-              </button>
-            )}
+  return <>
+    <header className="clinic-topbar" dir="rtl" aria-label="الحساب وأدوات العيادة">
+      <div className="clinic-topbar-inner">
+        <button type="button" className="clinic-topbar-account" onClick={() => setOverlay('account')}
+          aria-label={`قائمة الحساب: ${currentUser?.name || 'حساب العيادة'}`} aria-expanded={overlay === 'account'}
+          aria-haspopup="dialog" aria-controls="clinic-account-dialog">
+          <span className="clinic-topbar-avatar" aria-hidden="true">{currentUser?.name?.charAt(0) || 'ع'}</span>
+          <span className="clinic-topbar-account-text">
+            <span className="clinic-topbar-name">{currentUser?.name || clinicName || 'عيادة الأسنان'}</span>
+            <span className="clinic-topbar-meta">{getRoleLabel(currentUser?.role)}<span aria-hidden="true"> · </span>{clinicName || 'عيادة الأسنان'}</span>
+          </span>
+          <ChevronDown className="clinic-topbar-chevron" aria-hidden="true" />
+        </button>
 
-            {/* CLICKABLE ACCOUNT AREA (Circular Avatar + Doctor Name + Clinic Name) */}
-            {currentUser ? (
-              <button
-                type="button"
-                onClick={() => setIsProfileMenuOpen(true)}
-                className="clinic-account-trigger flex items-center gap-2 sm:gap-2.5 p-1 sm:p-1.5 px-2 sm:px-3 rounded-2xl bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 border border-slate-200/90 transition-all cursor-pointer shadow-2xs active:scale-98 min-h-[44px] group shrink-0"
-                title="قائمة الحساب والخيارات"
-              >
-                {/* Circular User Avatar */}
-                <div className="clinic-account-avatar w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white font-black text-xs sm:text-sm flex items-center justify-center border-2 border-indigo-200/90 shadow-2xs shrink-0 font-mono">
-                  {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'د'}
-                </div>
-
-                {/* Account Details: Doctor Name & Clinic/Role Name */}
-                <div className="flex flex-col text-right min-w-0">
-                  <span className="clinic-account-name text-xs sm:text-sm font-black text-slate-900 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight">
-                    {currentUser.name}
-                  </span>
-                  <span className="clinic-account-meta text-[10px] sm:text-[11px] font-bold text-slate-500 truncate font-tajawal max-w-[95px] sm:max-w-[170px] leading-tight flex items-center gap-1">
-                    <span className="text-indigo-700 font-extrabold">{getRoleLabel(currentUser.role)}</span>
-                    <span className="text-slate-300">•</span>
-                    <span>{clinicName || 'عيادة الأسنان'}</span>
-                  </span>
-                </div>
-
-                <ChevronDown className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-transform duration-200 shrink-0" />
-              </button>
-            ) : (
-              <div 
-                onClick={() => onNavigate('home')}
-                className="flex items-center gap-2 bg-slate-50 hover:bg-slate-100 p-1 px-2.5 rounded-xl border border-slate-200 transition-all cursor-pointer active:scale-95 touch-manipulation shrink-0 min-h-[44px]"
-              >
-                {clinicLogo ? (
-                  <img
-                    src={clinicLogo}
-                    alt="Logo"
-                    referrerPolicy="no-referrer"
-                    className="w-7 h-7 rounded-lg object-contain shrink-0"
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                ) : (
-                  <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-2xs shrink-0">
-                    <Stethoscope className="w-4 h-4 text-indigo-100" />
-                  </div>
-                )}
-                <span className="text-xs sm:text-sm font-black text-slate-900 truncate font-tajawal max-w-[120px] sm:max-w-none">
-                  {clinicName || 'عيادة الأسنان'}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* RTL Left Side Actions: Privacy Toggle, Connection Status & Notification Bell */}
-          <div className="clinic-header-tools flex items-center gap-1.5 sm:gap-2 shrink-0">
-            
-            {/* Patient-facing privacy toggle for mirrored clinic displays */}
-            <button
-              type="button"
-              onClick={onTogglePrivacyMode}
-              className={`h-11 px-2.5 sm:px-3 flex items-center justify-center gap-2 rounded-xl transition-all cursor-pointer border shrink-0 touch-manipulation active:scale-95 min-h-[44px] ${
-                isPrivacyMode 
-                  ? 'bg-amber-50 hover:bg-amber-100/90 text-amber-800 border-amber-300/80 shadow-2xs' 
-                  : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border-emerald-300/80 shadow-2xs'
-              }`}
-              title={isPrivacyMode ? 'المبالغ المالية مخفية - انقر لإظهارها' : 'المبالغ المالية ظاهرة - انقر لإخفائها'}
-            >
-              {isPrivacyMode ? (
-                <EyeOff className="w-4.5 h-4.5 text-amber-700 animate-fadeIn" />
-              ) : (
-                <Eye className="w-4.5 h-4.5 text-emerald-700 animate-fadeIn" />
-              )}
-              <span className="hidden lg:inline text-[11px] font-black">
-                {isPrivacyMode ? 'المبالغ مخفية' : 'إخفاء المبالغ'}
-              </span>
-            </button>
-
-            {/* PERMANENT CONNECTION STATUS INDICATOR BUTTON */}
-            <button
-              type="button"
-              onClick={() => setIsSyncModalOpen(true)}
-              className={`h-9.5 sm:h-10 px-2 sm:px-2.5 rounded-xl flex items-center gap-1.5 border font-bold text-xs transition-all cursor-pointer shrink-0 touch-manipulation active:scale-95 min-h-[44px] ${
-                isSyncing
-                  ? 'bg-amber-50 border-amber-300 text-amber-800'
-                  : !isOnline
-                  ? 'bg-sky-50 border-sky-300 text-sky-800'
-                  : failedCount > 0
-                  ? 'bg-rose-50 border-rose-300 text-rose-800'
-                  : 'bg-emerald-50 border-emerald-300 text-emerald-800'
-              }`}
-              title="حالة الاتصال وحفظ البيانات"
-            >
-              {isSyncing ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 text-amber-700 animate-spin shrink-0" />
-                  <span className="hidden sm:inline font-tajawal text-[11px]">مزامنة...</span>
-                </>
-              ) : !isOnline ? (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0" />
-                  <WifiOff className="w-3.5 h-3.5 text-sky-700 shrink-0" />
-                  <span className="hidden sm:inline font-tajawal text-[11px]">أوفلاين</span>
-                </>
-              ) : failedCount > 0 ? (
-                <>
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
-                  <span className="hidden sm:inline font-tajawal text-[11px]">خطأ</span>
-                </>
-              ) : (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                  <Wifi className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                  <span className="hidden sm:inline font-tajawal text-[11px]">متصل</span>
-                </>
-              )}
-            </button>
-
-            {/* Notification Bell - Touch Friendly min 44px */}
-            <button
-              type="button"
-              onClick={() => setIsNotifOpen(true)}
-              className="relative w-9.5 h-9.5 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer border border-slate-200 shrink-0 touch-manipulation active:scale-95 min-h-[44px]"
-              title="التنبيهات والإشعارات"
-              aria-label={totalNotifCount ? `التنبيهات والإشعارات (${totalNotifCount})` : 'التنبيهات والإشعارات'}
-              aria-expanded={isNotifOpen}
-              aria-controls="clinic-notifications-dialog"
-            >
-              <Bell className="w-4.5 h-4.5 text-slate-700" />
-              {totalNotifCount > 0 && (
-                <span aria-hidden="true" className="clinic-notification-count absolute -top-1 -right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center border border-white">
-                  {totalNotifCount > 9 ? '9+' : totalNotifCount}
-                </span>
-              )}
-            </button>
-
-          </div>
+        <div className="clinic-topbar-tools" role="group" aria-label="الأدوات السريعة">
+          <button type="button" className="clinic-topbar-tool" onClick={() => setOverlay('search')}
+            aria-label="البحث الشامل" title="البحث بالاسم أو رقم الملف أو الهاتف (Ctrl+K)"
+            aria-haspopup="dialog" aria-expanded={overlay === 'search'} aria-keyshortcuts="Control+k Meta+k">
+            <Search aria-hidden="true" /><span className="clinic-topbar-tool-label">بحث</span>
+          </button>
+          <button type="button" className={`clinic-topbar-tool ${isPrivacyMode ? 'clinic-topbar-tool--privacy' : ''}`}
+            onClick={onTogglePrivacyMode} aria-pressed={isPrivacyMode}
+            aria-label={isPrivacyMode ? 'إظهار المبالغ المالية' : 'إخفاء المبالغ المالية'}
+            title={isPrivacyMode ? 'المبالغ مخفية — اضغط لإظهارها' : 'إخفاء المبالغ المالية'}>
+            {isPrivacyMode ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            <span className="clinic-topbar-tool-label">{isPrivacyMode ? 'المبالغ مخفية' : 'إخفاء المبالغ'}</span>
+          </button>
+          <button type="button" className={`clinic-topbar-tool clinic-topbar-status ${storageWarning ? 'clinic-topbar-tool--warning' : ''}`}
+            onClick={() => setOverlay('status')} aria-label={storageWarning ? 'حالة الموقع: ظهر خطأ حفظ، راجع التفاصيل' : 'حالة الموقع: تخزين محلي، عرض التفاصيل'}
+            title="تخزين محلي في هذا المتصفح — تفاصيل الشبكة والنسخ الاحتياطي"
+            aria-haspopup="dialog" aria-expanded={overlay === 'status'} aria-controls="clinic-status-dialog">
+            {storageWarning ? <AlertTriangle aria-hidden="true" /> : <Database aria-hidden="true" />}
+            <span className="clinic-topbar-tool-label">{storageWarning ? 'راجع الحفظ' : 'محلي'}</span>
+            <span aria-hidden="true" className={`clinic-topbar-network-dot ${online ? 'is-online' : ''}`} />
+          </button>
+          <button type="button" className="clinic-topbar-tool clinic-topbar-bell" onClick={() => setOverlay('notifications')}
+            aria-label={unreadCount ? `التنبيهات والإشعارات (${unreadCount} غير مقروء)` : 'التنبيهات والإشعارات — لا جديد'}
+            title="التنبيهات والإشعارات" aria-haspopup="dialog" aria-expanded={overlay === 'notifications'} aria-controls="clinic-notifications-dialog">
+            <Bell aria-hidden="true" />
+            {unreadCount > 0 && <span aria-hidden="true" className="clinic-topbar-count">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+          </button>
         </div>
+      </div>
+    </header>
 
-      </header>
-
-      {/* MODERN ACCOUNT MENU BOTTOM SHEET */}
-      {isProfileMenuOpen && currentUser && (
-        <>
-          {/* Backdrop Overlay */}
-          <div 
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 animate-fadeIn transition-opacity cursor-pointer"
-            onClick={() => setIsProfileMenuOpen(false)}
-          />
-
-          {/* Bottom Sheet Card */}
-          <div 
-            className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[88dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]"
-            ref={profileRef}
-          >
-            {/* Sheet Handle & Header */}
-            <div className="relative mb-3.5">
-              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto" />
-              <div className="flex items-center justify-between mt-2 pt-1">
-                <span className="text-xs font-black text-slate-400 uppercase tracking-wider font-tajawal">
-                  قائمة الحساب والخيارات
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsProfileMenuOpen(false)}
-                  className="w-8.5 h-8.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-all active:scale-95 shrink-0 min-h-[44px] sm:min-h-0 cursor-pointer"
-                  title="إغلاق"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+    {(overlay === 'account' || overlay === 'status') && <div className="clinic-modal-overlay clinic-topbar-overlay" dir="rtl"
+      onClick={event => { if (event.target === event.currentTarget) closeOverlay(); }}>
+      <section ref={sheetRef} id={overlay === 'account' ? 'clinic-account-dialog' : 'clinic-status-dialog'}
+        role="dialog" aria-modal="true" aria-labelledby="clinic-topbar-dialog-title" tabIndex={-1}
+        className="clinic-modal-panel clinic-modal-panel--framed clinic-topbar-sheet">
+        <div className="clinic-topbar-sheet-heading">
+          <div><p className="clinic-topbar-eyebrow">{overlay === 'account' ? 'جلسة العمل' : 'على هذا الجهاز'}</p>
+            <h2 id="clinic-topbar-dialog-title">{overlay === 'account' ? 'الحساب والخيارات' : 'حالة الموقع والبيانات'}</h2></div>
+          <button type="button" className="clinic-topbar-close" onClick={closeOverlay} aria-label="إغلاق النافذة"><X aria-hidden="true" /></button>
+        </div>
+        <div className="clinic-topbar-sheet-body overflow-y-auto">
+          {overlay === 'account' ? <>
+            <div className="clinic-topbar-profile-card">
+              <span className="clinic-topbar-avatar" aria-hidden="true">{currentUser?.name?.charAt(0) || 'ع'}</span>
+              <div><h3>{currentUser?.name || 'حساب العيادة'}</h3><p dir="ltr">@{currentUser?.username}</p>
+                <span>{getRoleLabel(currentUser?.role)} · {clinicName || 'عيادة الأسنان'}</span></div>
             </div>
+            <button type="button" className="clinic-topbar-menu-action" onClick={() => setOverlay('search')}><Search aria-hidden="true" /><span>البحث الشامل<small>اسم المريض، رقم الملف، أو الموبايل</small></span><ArrowLeft aria-hidden="true" /></button>
+            {canSettings && <button type="button" className="clinic-topbar-menu-action" onClick={() => navigateFromSheet('settings')}><Sliders aria-hidden="true" /><span>إعدادات العيادة<small>الهوية والخدمات والحسابات والبيانات</small></span><ArrowLeft aria-hidden="true" /></button>}
+            <p className="clinic-topbar-note">التنقل بين الأقسام متاح من الشريط السفلي. إخفاء المبالغ لا يحوّل الصفحة إلى شاشة مريض مستقلة.</p>
+            <button type="button" className="clinic-topbar-logout" onClick={() => { closeOverlay(); onLogout(); }}><LogOut aria-hidden="true" />تسجيل الخروج من الحساب</button>
+          </> : <>
+            <div className="clinic-topbar-local-notice"><Database aria-hidden="true" /><div><h3>النسخة تعمل بتخزين محلي</h3><p>السجلات موجودة في متصفح هذا الجهاز، وليست قاعدة مشتركة بين الأجهزة. هذه الحالة ليست تأكيدًا لنجاح آخر حفظ أو وجود نسخة احتياطية.</p></div></div>
+            {storageWarning && <p role="alert" className="clinic-topbar-save-warning">ظهر خطأ حفظ خلال هذه الجلسة. راجع رسالة الخطأ وأعد المحاولة قبل إغلاق المسودة؛ لا تعتبر التعديل محفوظًا.</p>}
+            <dl className="clinic-topbar-status-list">
+              <div><dt>{online ? <Wifi aria-hidden="true" /> : <WifiOff aria-hidden="true" />}شبكة المتصفح</dt><dd>{online ? 'المتصفح يبلغ بتوفر شبكة' : 'المتصفح يبلغ بعدم الاتصال'}</dd></div>
+              <div><dt><CloudOff aria-hidden="true" />المزامنة بين الأجهزة</dt><dd>غير مفعّلة</dd></div>
+              <div><dt>الرفع السحابي</dt><dd>لا يوجد رفع مشترك مؤكّد</dd></div>
+              {queued > 0 && <div><dt>طابور محلي قديم</dt><dd>{queued.toLocaleString('ar-EG')} عملية — لم تُرفع</dd></div>}
+              {pending > 0 && <div><dt>بانتظار الربط</dt><dd>{pending.toLocaleString('ar-EG')} عملية</dd></div>}
+              {failed > 0 && <div><dt>بعلامة فشل في الطابور</dt><dd>{failed.toLocaleString('ar-EG')} عملية</dd></div>}
+            </dl>
+            <p className="clinic-topbar-note">مؤشر الشبكة لا يختبر الوصول إلى الإنترنت أو Firebase. احتفظ بنسخة احتياطية مؤكدة قبل تغيير الجهاز أو حذف بيانات المتصفح.</p>
+            {canBackup && <button type="button" className="clinic-topbar-primary" onClick={() => navigateFromSheet('settings', 'excel')}><Sliders aria-hidden="true" />النسخة الاحتياطية والتصدير</button>}
+          </>}
+        </div>
+        <div className="clinic-topbar-sheet-footer"><button type="button" className="clinic-topbar-secondary" onClick={closeOverlay}>إغلاق والعودة</button></div>
+      </section>
+    </div>}
 
-            {/* GROUP 1: User Profile & Doctor Details */}
-            <div className="p-3.5 bg-gradient-to-r from-slate-50 via-indigo-50/40 to-slate-50 rounded-2xl border border-slate-200/80 flex items-center gap-3.5 mb-4">
-              <div className="w-13 h-13 rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white font-black text-lg flex items-center justify-center border-2 border-indigo-200 shadow-sm shrink-0 font-mono">
-                {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'د'}
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-sm sm:text-base font-black text-slate-900 font-tajawal truncate">
-                  {currentUser.name}
-                </span>
-                <span className="text-xs text-slate-500 font-mono truncate dir-ltr text-right mb-1">
-                  @{currentUser.username}
-                </span>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="bg-indigo-100/90 text-indigo-800 text-[10px] font-black px-2 py-0.5 rounded-md font-tajawal border border-indigo-200/70">
-                    {getRoleLabel(currentUser.role)}
-                  </span>
-                  <span className="bg-amber-100/90 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-md font-tajawal border border-amber-200/70 truncate max-w-[140px]">
-                    {clinicName || 'عيادة الأسنان'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* GROUP 2: Clinic System Administration */}
-            <div className="space-y-2 mb-4">
-              <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block font-tajawal px-1">
-                إدارة العيادة والنظام
-              </span>
-              <div className="space-y-1.5">
-                {canAccessView(currentUser, 'settings') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsProfileMenuOpen(false);
-                      onNavigate('settings');
-                    }}
-                    className="w-full p-3 bg-slate-50 hover:bg-indigo-50/70 text-slate-800 font-bold text-xs sm:text-sm rounded-2xl border border-slate-200/80 flex items-center justify-between transition-all active:scale-98 min-h-[48px] group cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                        <Sliders className="w-4.5 h-4.5" />
-                      </div>
-                      <span className="font-tajawal">إعدادات العيادة والنظام</span>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors rotate-180" />
-                  </button>
-                )}
-
-                {activeView !== 'home' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsProfileMenuOpen(false);
-                      onNavigate('home');
-                    }}
-                    className="w-full p-3 bg-slate-50 hover:bg-slate-100 text-slate-800 font-bold text-xs sm:text-sm rounded-2xl border border-slate-200/80 flex items-center justify-between transition-all active:scale-98 min-h-[48px] group cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0 group-hover:bg-slate-800 group-hover:text-white transition-colors">
-                        <Home className="w-4.5 h-4.5" />
-                      </div>
-                      <span className="font-tajawal">العودة للشاشة الرئيسية</span>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-slate-700 transition-colors rotate-180" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* GROUP 3: Account Actions / Session */}
-            <div className="space-y-2">
-              <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block font-tajawal px-1">
-                جلسة العمل
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsProfileMenuOpen(false);
-                  onLogout();
-                }}
-                className="w-full p-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs sm:text-sm rounded-2xl border border-rose-200/80 flex items-center justify-center gap-2.5 transition-all active:scale-95 min-h-[48px] shadow-2xs cursor-pointer font-tajawal"
-              >
-                <LogOut className="w-4.5 h-4.5 text-rose-600 shrink-0" />
-                <span>تسجيل الخروج من الحساب</span>
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* SYNC & CONNECTION DETAILS BOTTOM SHEET */}
-      {isSyncModalOpen && (
-        <>
-          <div 
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 animate-fadeIn transition-opacity cursor-pointer"
-            onClick={() => setIsSyncModalOpen(false)}
-          />
-
-          <div className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-            {/* Sheet Handle & Header */}
-            <div className="relative mb-3.5">
-              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto" />
-              <div className="flex items-center justify-between mt-2 pt-1">
-                <span className="text-xs font-black text-slate-400 uppercase tracking-wider font-tajawal flex items-center gap-1.5">
-                  <Database className="w-4 h-4 text-indigo-600" />
-                  حالة الاتصال وقواعد البيانات (Offline First)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsSyncModalOpen(false)}
-                  className="w-8.5 h-8.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-all active:scale-95 shrink-0 min-h-[44px] sm:min-h-0 cursor-pointer"
-                  title="إغلاق"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* STATUS BANNER CARD */}
-            <div className={`p-3.5 rounded-2xl border mb-4 flex items-center gap-3.5 ${
-              isSyncing
-                ? 'bg-amber-50 border-amber-200 text-amber-900'
-                : !isOnline
-                ? 'bg-sky-50 border-sky-200 text-sky-900'
-                : failedCount > 0
-                ? 'bg-rose-50 border-rose-200 text-rose-900'
-                : 'bg-emerald-50 border-emerald-200 text-emerald-900'
-            }`}>
-              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
-                isSyncing
-                  ? 'bg-amber-100 text-amber-700'
-                  : !isOnline
-                  ? 'bg-sky-100 text-sky-700'
-                  : failedCount > 0
-                  ? 'bg-rose-100 text-rose-700'
-                  : 'bg-emerald-100 text-emerald-700'
-              }`}>
-                {isSyncing ? (
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                ) : !isOnline ? (
-                  <WifiOff className="w-5 h-5" />
-                ) : failedCount > 0 ? (
-                  <AlertTriangle className="w-5 h-5 animate-bounce" />
-                ) : (
-                  <Wifi className="w-5 h-5" />
-                )}
-              </div>
-              <div className="min-w-0">
-                <span className="text-sm font-black block font-tajawal">
-                  {isSyncing
-                    ? 'جاري مزامنة السجلات المعلقة الآن...'
-                    : !isOnline
-                    ? 'أنتم تعملون بوضع بدون إنترنت (Offline Mode)'
-                    : failedCount > 0
-                    ? 'توجد عمليات تعذر رفعها تلقائياً'
-                    : 'الإنترنت متاح — البيانات محفوظة على هذا الجهاز'}
-                </span>
-                <span className="text-[11px] opacity-90 block mt-0.5 leading-relaxed font-tajawal">
-                  {!isOnline
-                    ? 'يمكن متابعة العمل محليًا. احتفظ بنسخة احتياطية قبل تغيير الجهاز أو حذف بيانات المتصفح.'
-                    : 'النسخ السحابي اليدوي متاح من الإعدادات بعد تفعيل الحساب؛ المزامنة المشتركة لم تُفعّل بعد.'}
-                </span>
-              </div>
-            </div>
-
-            {/* DETAILED METRICS GRID */}
-            <div className="space-y-2 mb-4">
-              <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block font-tajawal px-1">
-                تفاصيل المزامنة وقواعد البيانات
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-tajawal">
-                
-                {/* Local DB */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Database className="w-4 h-4 text-indigo-600" />
-                    <span className="font-bold text-slate-700">قاعدة البيانات المحلية</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-black">
-                    حفظ محلي
-                  </span>
-                </div>
-
-                {/* Cloud DB */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Cloud className="w-4 h-4 text-sky-600" />
-                    <span className="font-bold text-slate-700">السحابة والخادم</span>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
-                    isOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {'الربط المشترك غير مفعّل'}
-                  </span>
-                </div>
-
-                {/* Last Sync Time */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                  <span className="font-bold text-slate-700">آخر مزامنة ناجحة</span>
-                  <span className="font-mono text-slate-900 font-bold">
-                    {'لم يتم التحقق من رفع سحابي'}
-                  </span>
-                </div>
-
-                {/* Pending Records Count */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                  <span className="font-bold text-slate-700">سجلات معلقة للمزامنة</span>
-                  <span className={`font-mono font-bold px-2 py-0.5 rounded-md text-[11px] ${
-                    pendingCount > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    {pendingCount} سجل
-                  </span>
-                </div>
-
-                {/* Failed Records Count */}
-                {failedCount > 0 && (
-                  <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 col-span-full flex items-center justify-between">
-                    <span className="font-bold text-rose-800">سجلات تعذر رفعها (إعادة المحاولة)</span>
-                    <span className="font-mono font-black text-rose-700 bg-white px-2 py-0.5 rounded border border-rose-200">
-                      {failedCount}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* SYNC ACTIONS */}
-            <div className="space-y-2">
-              <button
-                type="button"
-                disabled={true}
-                className={`w-full p-3.5 rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all active:scale-98 min-h-[48px] shadow-2xs font-tajawal cursor-pointer ${
-                  true
-                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                    : 'bg-indigo-600 hover:bg-indigo-700 text-white active:scale-95'
-                }`}
-              >
-                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'جاري المزامن الآن...' : 'المزامنة المشتركة غير مفعّلة'}</span>
-              </button>
-
-              <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 text-[11px] text-slate-500 text-center font-tajawal flex items-center justify-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span>لنسخ البيانات احتياطيًا، افتح الإعدادات ثم النسخ الاحتياطية.</span>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Global Search Modal */}
-      <Suspense fallback={isSearchOpen ? <HeaderDialogLoading onClose={closeSearch} /> : null}>
-      {(isSearchOpen || hasOpenedSearch) && <GlobalSearchModal
-        isOpen={isSearchOpen}
-        onClose={closeSearch}
-        patients={visiblePatients}
-        appointments={visibleAppointments}
-        labCases={visibleLabCases}
-        expenses={visibleExpenses}
-        showFinancials={canPatientFinance}
-        showLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
-        onSelectPatient={onSelectPatient}
-        onNavigate={onNavigate}
-      />}
-      </Suspense>
-
-      {/* Notification Center Modal */}
-      <Suspense fallback={isNotifOpen ? <HeaderDialogLoading onClose={closeNotifications} /> : null}>
-      {(isNotifOpen || hasOpenedNotifications) && <NotificationCenterModal
-        isOpen={isNotifOpen}
-        onClose={closeNotifications}
-        patients={canPatientFinance ? visiblePatients : EMPTY_RECORDS}
-        appointments={visibleAppointments}
-        labCases={visibleLabCases}
-        onSelectPatient={onSelectPatient}
-        onNavigate={onNavigate}
-      />}
-      </Suspense>
-    </>
-  );
+    <Suspense fallback={overlay === 'search' ? <HeaderDialogLoading onClose={closeOverlay} /> : null}>
+      {(overlay === 'search' || hasOpenedSearch) && <GlobalSearchModal key={accountKey} isOpen={overlay === 'search'} onClose={closeOverlay}
+        patients={visiblePatients} appointments={visibleAppointments} labCases={visibleLabCases} expenses={visibleExpenses}
+        showFinancials={canPatientFinance} showLabCosts={canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
+        onSelectPatient={onSelectPatient} onNavigate={onNavigate} />}
+    </Suspense>
+    <Suspense fallback={overlay === 'notifications' ? <HeaderDialogLoading onClose={closeOverlay} /> : null}>
+      {(overlay === 'notifications' || hasOpenedNotifications) && <NotificationCenterModal key={accountKey} isOpen={overlay === 'notifications'} onClose={closeOverlay}
+        notifications={notifications} readKeys={readKeys} onMarkRead={markRead} onSelectPatient={onSelectPatient} onNavigate={onNavigate} />}
+    </Suspense>
+  </>;
 });
 
 HeaderNavbar.displayName = 'HeaderNavbar';

@@ -1,5 +1,6 @@
 import type { UILabels, UserPermission } from '../types';
 import { DEFAULT_UI_LABELS } from '../data/initialData';
+import { isValidDockAppearance } from './dockAppearance';
 
 export type NavigationSectionKey = 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings';
 export type NavigationKey = 'home' | NavigationSectionKey;
@@ -123,6 +124,7 @@ export function validateContentDraft(input: unknown, baseline?: unknown): Conten
   const value = cloneContentDraft(draft);
   const baselineDraft = baseline === undefined ? undefined : cloneContentDraft(baseline);
   const errors: Record<string, string> = {};
+  if (!isValidDockAppearance(record(record(input).labels).dockAppearance)) errors.dockAppearance = 'اختَر إعدادات صحيحة للشريط العائم.';
   const validateLine = (raw: unknown, key: string, max: number, required: boolean): string => {
     if (typeof raw !== 'string') { errors[key] = 'اكتب نصًا صحيحًا لهذا الحقل.'; return ''; }
     const trimmed = raw.trim();

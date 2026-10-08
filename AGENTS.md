@@ -14,7 +14,8 @@ This application is a local Dental Clinic Management System built with React, Vi
 
 2. **Adaptive Responsive Layout & TV Mode (60-inch Screens)**:
    - Built to adapt dynamically across Mobile, Tablet, Desktop, and Ultra-wide displays.
-   - Features a dedicated **"وضع الشاشات الكبيرة 60 بوصة" (TV Mode)** toggle in the top navigation bar (`HeaderNavbar`), which automatically scales fonts, touch targets, and icons (`.tv-mode`) for seamless visibility from a distance in clinic rooms or waiting area displays.
+   - Preserve the owner's floating bottom navigation. Settings → Content & Layout offers ordering (home pinned), compact/comfortable/large sizes, optional labels, and 3 or 4 direct mobile links; the rest remain in More. Permissions are filtered before splitting. Do not introduce a duplicate top navigation menu.
+   - The top header is for account/search/privacy/notifications/local status. Network availability is not confirmation of a save, backup, or shared sync. Notification acknowledgements are tab-memory state, not a persisted cloud activity log.
 
 3. **Invoices & Receipts Photo Attachment**:
    - Expenses (`SummaryView`) support attaching photos/scans of supply invoices and receipts directly from mobile cameras or file upload.
@@ -28,3 +29,7 @@ This application is a local Dental Clinic Management System built with React, Vi
 
 6. **Touch-First Modal Controls (زر إلغاء وإغلاق لمس لجميع النوافذ)**:
    - All modals, search overlays, popups, and lightboxes feature clear, dedicated "إلغاء وإغلاق" touch buttons, enabling effortless operation on mobile phones, tablets, and 60-inch touchscreens without requiring a physical keyboard or Esc key.
+
+7. **Owner Guide & Local Full Backup**:
+   - Read `CLINIC-OWNER-GUIDE.ar.md` for the owner's local operation, backup, deployment prerequisites, and update/rollback workflow. `firebase.hosting.example.json` is preparation only; no live deployment, Auth, or cloud data setup is implied.
+   - Settings → Import/Export provides a full local JSON download and validated restore preview. Export fresh storage under the clinic lock and reauthorize before downloading; never substitute an Excel summary for a full backup. Legacy passwords are hashed only in the exported copy. Runtime sessions and provider credentials are excluded; the file still contains sensitive medical/financial records and password hashes and is not encrypted.

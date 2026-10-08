@@ -1006,7 +1006,7 @@ export function AppContent() {
     if (kind === 'patient_finance') requireFreshSettingsPermission('view_patient_finance');
     if (kind === 'financial_report') { requireFreshSettingsPermission('view_patient_finance'); requireFreshSettingsPermission('financial_reports'); }
     if (kind === 'full_backup') {
-      ['backup_restore', 'manage_users', 'view_patient_finance', 'financial_reports', 'view_lab_costs', 'view_expenses']
+      ['access_control_panel', 'backup_restore', 'manage_users', 'view_patient_finance', 'financial_reports', 'view_lab_costs', 'view_expenses']
         .forEach(action => requireFreshSettingsPermission(action as RBACAction));
     }
   };
@@ -1018,6 +1018,11 @@ export function AppContent() {
   const handleImportPatients = (imported: Patient[]) => commitDomain(['access_control_panel', 'view_patients', 'add_patient'], latest => {
     const checked = assertClinicBackup({ patients: imported });
     return { ...latest, patients: importPatientRecords(latest.patients, checked.patients!) };
+  });
+
+  const handleGetFullBackupSnapshot = () => withClinicWriteLock(() => {
+    authorizeDataExport('full_backup');
+    return assertClinicBackup(Storage.getBackupDataFresh());
   });
 
   const handleRestoreFullData = (input: unknown) => withClinicWriteLock(async () => {
@@ -1283,6 +1288,7 @@ export function AppContent() {
                 canExportFinancialReports={!isPrivacyMode && canPerformAction(currentUser, 'view_patient_finance') && canPerformAction(currentUser, 'financial_reports')}
                 canManageFullBackup={!isPrivacyMode && ['backup_restore', 'manage_users', 'view_patients', 'view_patient_finance', 'financial_reports', 'view_lab_costs', 'view_expenses'].every(action => canPerformAction(currentUser, action as RBACAction))}
                 onAuthorizeDataExport={authorizeDataExport}
+                onGetFullBackupSnapshot={handleGetFullBackupSnapshot}
                 drugCatalog={drugCatalog}
                 onSaveIdentity={handleSaveIdentity}
                 onSaveContent={handleSaveContent}

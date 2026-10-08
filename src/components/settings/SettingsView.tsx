@@ -36,7 +36,7 @@ function SettingsSectionContent({ label, children }: { label: string; children: 
 
 const settingsSections = [
   { key: 'identity', group: 'appearance', label: 'الهوية والمظهر', description: 'اسم العيادة والشعار والألوان', icon: <Palette className="w-4 h-4 text-emerald-500" /> },
-  { key: 'layout', group: 'appearance', label: 'المحتوى والترتيب', description: 'نصوص الرئيسية وأقسام التنقل', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
+  { key: 'layout', group: 'appearance', label: 'المحتوى والترتيب', description: 'ترتيب الشريط وحجمه ونصوص الرئيسية', icon: <Layout className="w-4 h-4 text-indigo-500" /> },
   { key: 'services', group: 'practice', label: 'الخدمات والأسعار', description: 'الخدمات وأسعار البيع وتكاليف المعامل', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
   { key: 'whatsapp', group: 'practice', label: 'إدارة واتساب', description: 'جهات الاتصال والرسائل والحملات', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
   { key: 'drugs', group: 'practice', label: 'فهرس الأدوية', description: 'فهرس الأدوية المستخدم في الروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
@@ -126,9 +126,10 @@ interface SettingsViewProps {
   canExportFinancialReports?: boolean;
   canManageFullBackup?: boolean;
   onAuthorizeDataExport: (kind: 'patients' | 'patient_finance' | 'financial_report' | 'full_backup') => void;
+  onGetFullBackupSnapshot: () => Promise<unknown>;
   drugCatalog: DrugCatalogItem[];
   onSaveIdentity: (values: ClinicIdentitySettings) => void;
-  onSaveContent: (values: ContentDraft) => void;
+  onSaveContent: (values: ContentDraft) => void | Promise<void>;
   onSaveUsers: (users: User[]) => void | Promise<void>;
   onSaveServiceCatalog: (values: ServiceCatalogValues) => void;
   onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
@@ -180,6 +181,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   canExportFinancialReports = false,
   canManageFullBackup = false,
   onAuthorizeDataExport,
+  onGetFullBackupSnapshot,
   drugCatalog,
   onSaveIdentity,
   onSaveContent,
@@ -366,7 +368,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       await loadCloudBackups();
     } catch (err) {
       console.error('Upload backup error:', err);
-      showToast('تعذر رفع النسخة إلى Firebase. يرجى التأكد من الاتصال بالإنترنت.', 'error');
+      showToast('تعذّر رفع النسخة. راجع المصادقة وقواعد المشروع وحجم النسخة والاتصال؛ لم يتم تأكيد حفظها على Firebase.', 'error');
     } finally {
       setIsUploadingCloud(false);
     }
@@ -569,6 +571,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {activeSubTab === 'firebase' && !canManageFullBackup && <div role="status" className="bg-slate-50 border rounded-2xl p-5 text-sm text-slate-600">النسخة الكاملة تشمل بيانات العيادة والحسابات المالية والمستخدمين. يلزم الوصول الإداري والمالي المناسب والخروج من وضع الخصوصية.</div>}
         {activeSubTab === 'firebase' && canManageFullBackup && (
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-6">
+            <section aria-labelledby="cloud-readiness-title" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-2 text-sm text-amber-950">
+              <h3 id="cloud-readiness-title" className="font-bold">نسخ احتياطي يدوي، وليس مزامنة بين الأجهزة</h3>
+              <p className="leading-relaxed">التشغيل الحالي محلي. يلزم إكمال Firebase Authentication وصلاحيات قاعدة البيانات قبل الاعتماد على النسخ السحابي أو نقل بيانات مرضى حقيقية. لا تفتح قواعد المشروع للجميع لتجاوز خطأ الاتصال.</p>
+              <p className="leading-relaxed">للنسخة المحلية الكاملة افتح «التصدير والاستيراد». رفع الواجهة إلى Firebase Hosting وحده لا ينقل ملفات المرضى أو يفعّل المزامنة.</p>
+            </section>
             {/* Connection Status Banner */}
             <div className="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 text-white rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-md">
               <div className="flex items-center gap-3">
@@ -578,7 +585,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-extrabold text-sm font-tajawal">النسخ الاحتياطية على Firebase</span>
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${cloudStatus === 'verified' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-white/10 text-slate-200 border-white/20'}`}>
                       {isFetchingCloud ? 'جارٍ التحقق' : cloudStatus === 'verified' ? 'قائمة النسخ متاحة' : cloudStatus === 'error' ? 'تعذر التحقق' : 'لم يتم التحقق'}
                     </span>
                   </div>
@@ -660,7 +667,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="p-8 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-center space-y-2">
                   <Server className="w-8 h-8 text-slate-400 mx-auto" />
                   <p className="text-xs font-bold text-slate-700">لا توجد نسخ احتياطية سحابية محفوظة بعد</p>
-                  <p className="text-[11px] text-slate-500">اضغط على زر "رفع نسخة احتياطية الآن" لحفظ كافة بيانات العيادة في Firebase.</p>
+                  <p className="text-[11px] text-slate-500">توفر القائمة لا يثبت وجود مزامنة أو اكتمال حماية المشروع. احتفظ بنسخة محلية كاملة، ولا تعتمد النسخ السحابي قبل إعداد المصادقة والقواعد واختبار الاسترجاع.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -723,12 +730,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {activeSubTab === 'excel' && (
           <SettingsSectionContent label="التصدير والاستيراد">
             <DataTransferManagement
+              key={`${currentUser?.id || 'none'}:${currentUser?.credentialVersion ?? 1}`}
               patients={patients} contacts={contacts} canViewPatients={canViewPatients}
               canImportPatients={canImportPatients} canManageContacts={canManageContacts}
               canExportPatientFinance={canExportPatientFinance} canExportFinancialReports={canExportFinancialReports}
               onImportPatients={onImportPatients} onAuthorizePatientImport={onAuthorizePatientImport}
               onImportContacts={onImportContacts} onAuthorizeContactExport={onAuthorizeContactExport}
               onAuthorizeDataExport={onAuthorizeDataExport} onExportFinancialReport={handleExportFinancialReportCSV}
+              canManageFullBackup={canManageFullBackup} onGetFullBackupSnapshot={onGetFullBackupSnapshot} onRestoreFullData={onRestoreFullData}
             />
           </SettingsSectionContent>
         )}

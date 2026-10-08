@@ -1,18 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 import type { ActiveView, User } from '../types';
-import { DEFAULT_UI_LABELS } from '../data/initialData';
-import { MobileBottomNav } from '../components/navigation/MobileBottomNav';
 import { createSafeSecretaryPermissions } from './userAccounts';
+
+// Render the actual dock; only this Node SSR harness omits browser-owned CSS.
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const built = buildSync({
+  stdin: { resolveDir: root, loader: 'tsx', contents: `
+    import React from 'react';
+    import { renderToStaticMarkup } from 'react-dom/server';
+    import { MobileBottomNav } from './src/components/navigation/MobileBottomNav';
+    import { DEFAULT_UI_LABELS } from './src/data/initialData';
+    export const renderNavigation = (currentUser, activeView = 'home') => renderToStaticMarkup(<MobileBottomNav
+      activeView={activeView} currentUser={currentUser} labels={DEFAULT_UI_LABELS}
+      tileOrder={['patients','appointments','lab','summary','settings']} onNavigate={()=>{}} />);
+  ` }, bundle: true, write: false, format: 'cjs', platform: 'node', packages: 'external', loader: { '.css': 'empty' }, logLevel: 'silent',
+});
+const compiled = { exports: {} as { renderNavigation: (currentUser: User, activeView?: ActiveView) => string } };
+new Function('require', 'module', 'exports', built.outputFiles[0].text)(createRequire(import.meta.url), compiled, compiled.exports);
+const { renderNavigation } = compiled.exports;
 
 const user = (role: User['role'] = 'secretary'): User => ({ id: 'navigation-test', name: 'حساب تجريبي', username: 'test-only', role,
   permissions: { ...createSafeSecretaryPermissions(), patientView: false, appointments: false, lab: false, summary: false, controlPanel: false } });
-const renderNavigation = (currentUser: User, activeView: ActiveView = 'home') => renderToStaticMarkup(React.createElement(MobileBottomNav, {
-  activeView, currentUser, labels: DEFAULT_UI_LABELS,
-  tileOrder: ['patients', 'appointments', 'lab', 'summary', 'settings'], onNavigate: () => {},
-}));
 
 test('contacts appear beside patients in the actual floating dock for legacy saved orders', () => {
   const account = user('admin');

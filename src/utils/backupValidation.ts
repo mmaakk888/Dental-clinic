@@ -1,6 +1,7 @@
 import type { Appointment, ClinicContact, DrugCatalogItem, Expense, Lab, LabCase, MaterialUsage, Patient, ThemeSettings, UILabels, User, WhatsappSettings } from '../types';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
 import { cloneContentDraft } from './clinicContent';
+import { isValidDockAppearance } from './dockAppearance';
 import { normalizeHexColor } from './clinicIdentity';
 import { normalizeServiceName } from './serviceCatalog';
 import { canPerformAction } from './rbac';
@@ -311,6 +312,7 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
         if (!isRecord(data.labels.navigationLabels)) fail('backup.labels.navigationLabels');
         else Object.keys(data.labels.navigationLabels).forEach(key => text(data.labels.navigationLabels, key, 'backup.labels.navigationLabels', { required: true, max: 200 }));
       }
+      if (!isValidDockAppearance(data.labels.dockAppearance)) fail('backup.labels.dockAppearance');
       if (!errors.length) data.labels = cloneContentDraft({ labels: data.labels }).labels;
     }
   }

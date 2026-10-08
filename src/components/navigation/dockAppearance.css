@@ -1,0 +1,22 @@
+/* More specific than base responsive dock rules; comfortable preserves the existing design. */
+.clinic-dock[data-dock-size='compact'] .clinic-dock-item { min-height: 48px; padding-block: 5px; gap: 4px; font-size: 11px; }
+.clinic-dock[data-dock-size='compact'] .clinic-dock-item svg { width: 20px; height: 20px; }
+.clinic-dock[data-dock-size='large'] .clinic-dock-item { min-height: 72px; padding-block: 9px; gap: 6px; font-size: 13px; }
+.clinic-dock[data-dock-size='large'] .clinic-dock-item svg { width: 26px; height: 26px; }
+.clinic-dock[data-show-labels='false'] .clinic-dock-label { display: none; }
+.clinic-dock[data-dock-size] .clinic-dock-item { min-width: 44px; }
+.clinic-dock[data-dock-size] .clinic-dock-label { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+@media (min-width: 768px) {
+  .clinic-dock[data-dock-size='compact'] .clinic-dock-item { min-height: 56px; font-size: 13px; }
+  .clinic-dock[data-dock-size='compact'] .clinic-dock-item svg { width: 22px; height: 22px; }
+  .clinic-dock[data-dock-size='compact'] .clinic-dock-icon { width: 32px; height: 32px; }
+  .clinic-dock[data-dock-size='large'] .clinic-dock-item { min-height: 88px; font-size: 16px; }
+  .clinic-dock[data-dock-size='large'] .clinic-dock-item svg { width: 32px; height: 32px; }
+  .clinic-dock[data-dock-size='large'] .clinic-dock-icon { width: 44px; height: 44px; }
+}
+@media (min-width: 1280px) {
+  .clinic-dock[data-dock-size='large'] .clinic-dock-item { min-height: 76px; font-size: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clinic-dock[data-dock-size] .clinic-dock-item { transition: none; }
+}

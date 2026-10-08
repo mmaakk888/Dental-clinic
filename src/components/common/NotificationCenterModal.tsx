@@ -1,28 +1,15 @@
-import React, { useState, useMemo } from 'react';
-import { Bell, Calendar, DollarSign, Microscope, AlertCircle, CheckCircle, X, ArrowLeft, Clock } from 'lucide-react';
-import { Patient, Appointment, LabCase, ActiveView, NavigationOrigin } from '../../types';
-import { getPatientFinancialSummary } from '../../utils/financials';
+import React, { useState, useEffect } from 'react';
+import { Bell, Calendar, DollarSign, Microscope, CheckCircle, X, ArrowLeft } from 'lucide-react';
+import type { ActiveView, NavigationOrigin } from '../../types';
+import { countUnreadNotifications, type ClinicNotification } from '../../utils/clinicNotifications';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
-
-export interface NotificationItem {
-  id: string;
-  type: 'appointment' | 'finance' | 'lab' | 'system';
-  title: string;
-  message: string;
-  date: string;
-  isRead: boolean;
-  actionPayload?: {
-    patientId?: string;
-    view?: ActiveView;
-  };
-}
 
 interface NotificationCenterModalProps {
   isOpen: boolean;
   onClose: () => void;
-  patients: Patient[];
-  appointments: Appointment[];
-  labCases: LabCase[];
+  notifications: readonly ClinicNotification[];
+  readKeys: ReadonlySet<string>;
+  onMarkRead: (keys: string[]) => void;
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
   onNavigate: (view: ActiveView) => void;
 }
@@ -30,74 +17,20 @@ interface NotificationCenterModalProps {
 export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = ({
   isOpen,
   onClose,
-  patients,
-  appointments,
-  labCases,
+  notifications,
+  readKeys,
+  onMarkRead,
   onSelectPatient,
   onNavigate
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'appointment' | 'finance' | 'lab'>('all');
-  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(50);
   const dialogRef = useAppointmentDialog(isOpen, onClose);
-
-  const now = new Date();
-  const todayStr = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-
-  // Dynamically compute notification items
-  const notifications = useMemo(() => {
-    const list: NotificationItem[] = [];
-    if (!isOpen) return list;
-
-    // 1. Today's appointments
-    const todayAppts = appointments.filter(a => a.date === todayStr);
-    todayAppts.forEach(a => {
-      list.push({
-        id: `notif-appt-${a.id}`,
-        type: 'appointment',
-        title: `موعد اليوم: ${a.patientName}`,
-        message: `الموعد الساعة ${a.time} - ${a.note || 'متابعة'}`,
-        date: 'اليوم',
-        isRead: readIds.has(`notif-appt-${a.id}`),
-        actionPayload: { view: 'appointments' }
-      });
-    });
-
-    // 2. Overdue patient balances (> 0)
-    patients.forEach(p => {
-      const balance = getPatientFinancialSummary(p).totalRemaining;
-
-      if (balance > 500) {
-        list.push({
-          id: `notif-fin-${p.id}`,
-          type: 'finance',
-          title: `رصيد متبقٍ: ${p.name}`,
-          message: `يوجد متبقي مالي بقيمة ${balance.toLocaleString()} ج.م على المريض (ملف #${p.id})`,
-          date: 'مستحق',
-          isRead: readIds.has(`notif-fin-${p.id}`),
-          actionPayload: { patientId: p.id }
-        });
-      }
-    });
-
-    // 3. Lab cases ready or pending delivery
-    labCases.forEach(l => {
-      if (l.status === 'pending') {
-        list.push({
-          id: `notif-lab-${l.id}`,
-          type: 'lab',
-          title: `حالة معمل منتظرة: ${l.patientName}`,
-          message: `حالة (${l.type}) مع معمل "${l.labName}" قيد التجهيز والتسليم`,
-          date: l.date,
-          isRead: readIds.has(`notif-lab-${l.id}`),
-          actionPayload: { view: 'lab' }
-        });
-      }
-    });
-
-    return list;
-  }, [isOpen, patients, appointments, labCases, todayStr, readIds]);
-
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  useEffect(() => { setVisibleCount(50); }, [isOpen, filterType, notifications]);
+  useEffect(() => {
+    if (filterType !== 'all' && !notifications.some(notification => notification.type === filterType)) setFilterType('all');
+  }, [filterType, notifications]);
+  const unreadCount = countUnreadNotifications(notifications, readKeys);
 
   const filteredNotifications = notifications.filter(n => {
     if (filterType === 'all') return true;
@@ -105,12 +38,11 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   });
 
   const handleMarkAllRead = () => {
-    const allIds = new Set(notifications.map(n => n.id));
-    setReadIds(allIds);
+    onMarkRead(notifications.map(notification => notification.readKey));
   };
 
-  const handleItemClick = (notif: NotificationItem) => {
-    setReadIds(prev => new Set([...prev, notif.id]));
+  const handleItemClick = (notif: ClinicNotification) => {
+    onMarkRead([notif.readKey]);
     if (notif.actionPayload?.patientId) {
       onSelectPatient(notif.actionPayload.patientId, 'patients');
       onClose();
@@ -123,7 +55,8 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   if (!isOpen) return null;
 
   return (
-    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-start sm:items-center justify-end p-3 sm:p-4 bg-slate-900/40">
+    <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-start sm:items-center justify-center p-3 sm:p-4 bg-slate-900/40" dir="rtl"
+      onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div
         ref={dialogRef} id="clinic-notifications-dialog" role="dialog" aria-modal="true" aria-labelledby="clinic-notifications-title" tabIndex={-1}
         className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[90dvh]"
@@ -144,7 +77,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                   </span>
                 )}
               </h3>
-              <p className="text-xs text-slate-500">متابعة المواعيد، المتأخرات وحالات المعمل</p>
+              <p className="text-xs text-slate-500">مواعيد تحتاج متابعة، أرصدة متبقية وحالات المعمل</p>
             </div>
           </div>
           <button
@@ -160,43 +93,48 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         <div className="shrink-0 p-3 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5 text-sm font-bold">
             <button
+              type="button" aria-pressed={filterType === 'all'}
               onClick={() => setFilterType('all')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
                 filterType === 'all' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600'
               }`}
             >
               الكل ({notifications.length})
             </button>
             <button
+              type="button" aria-pressed={filterType === 'appointment'}
               onClick={() => setFilterType('appointment')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
                 filterType === 'appointment' ? 'bg-amber-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600'
               }`}
             >
               المواعيد
             </button>
-            <button
+            {notifications.some(notification => notification.type === 'finance') && <button
+              type="button" aria-pressed={filterType === 'finance'}
               onClick={() => setFilterType('finance')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
                 filterType === 'finance' ? 'bg-rose-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600'
               }`}
             >
               المالية
-            </button>
-            <button
+            </button>}
+            {notifications.some(notification => notification.type === 'lab') && <button
+              type="button" aria-pressed={filterType === 'lab'}
               onClick={() => setFilterType('lab')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
                 filterType === 'lab' ? 'bg-purple-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600'
               }`}
             >
               المعمل
-            </button>
+            </button>}
           </div>
 
           {unreadCount > 0 && (
             <button
+              type="button"
               onClick={handleMarkAllRead}
-              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors shrink-0"
+              className="min-h-[44px] px-3 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors shrink-0"
             >
               قراءة الكل
             </button>
@@ -212,7 +150,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               <p className="text-sm text-slate-500">لا توجد عناصر للعرض في هذا القسم.</p>
             </div>
           ) : (
-            filteredNotifications.map(n => {
+            filteredNotifications.slice(0, visibleCount).map(n => {
               let bg = 'bg-slate-50 border-slate-200';
               let icon = <Bell className="w-4 h-4 text-indigo-600" />;
 
@@ -232,7 +170,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                   key={n.id}
                   onClick={() => handleItemClick(n)}
                   className={`w-full text-start p-3.5 rounded-xl border cursor-pointer flex items-start gap-3 relative ${bg} ${
-                    !n.isRead ? 'border-indigo-300' : 'opacity-85'
+                    !readKeys.has(n.readKey) ? 'border-indigo-300' : 'opacity-85'
                   }`}
                 >
                   <div className="p-2 rounded-xl bg-white shadow-xs shrink-0 mt-0.5">
@@ -256,10 +194,15 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               );
             })
           )}
+          {filteredNotifications.length > visibleCount && <button type="button" onClick={() => setVisibleCount(count => count + 50)}
+            className="w-full min-h-[44px] rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700">
+            عرض المزيد ({filteredNotifications.length - visibleCount})
+          </button>}
         </div>
 
         <div className="p-3 bg-slate-50 border-t border-slate-100 text-center text-xs text-slate-500 font-bold">
-          يتم تحديث التنبيهات تلقائياً مع جميع حركات العيادة
+          <span role="status">{unreadCount ? `${unreadCount} تنبيه غير مقروء` : 'كل التنبيهات مقروءة'}</span>
+          <p className="mt-1 font-normal">حالة القراءة لهذا الحساب في التبويب الحالي حتى إعادة التحميل.</p>
         </div>
       </div>
     </div>

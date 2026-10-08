@@ -28,5 +28,16 @@
 .dt-import-details { margin-top: 8px; font-size: 12px; line-height: 1.8; color: #627668; overflow-wrap: anywhere; }
 .dt-import-details summary { min-height: 35px; cursor: pointer; }
 .dt-import-details p { white-space: pre-wrap; }
+.dt-notice-warning { background: #fff7e7; color: #805a22; border: 1px solid #f0ddb7; }
+.dt-backup-preview { display: grid; gap: 16px; min-width: 0; }
+.dt-backup-preview h3 { font-size: 17px; font-weight: 750; }
+.dt-backup-preview p { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.dt-backup-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.dt-backup-counts > div { padding: 11px; border: 1px solid #dfe9e2; border-radius: 12px; background: #f5f9f6; }
+.dt-backup-counts dt { color: #526c5b; font-size: 13px; }
+.dt-backup-counts dd { margin-top: 5px; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.dt-backup-consent { display: flex; align-items: flex-start; gap: 10px; padding: 12px; min-height: 44px; font-size: 14px; line-height: 1.8; border: 1px solid #dfd4bd; border-radius: 12px; cursor: pointer; }
+.dt-backup-consent input { width: 19px; height: 19px; flex-shrink: 0; margin-top: 3px; accent-color: #37724f; }
+.dt-backup-error { color: #923f44; background: #fff1f2; border: 1px solid #ebc9cb; border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
 .data-transfer button:focus-visible, .data-transfer input:focus-visible, .data-transfer select:focus-visible { outline: 3px solid #82b89b; outline-offset: 2px; }
 @media (max-width: 640px) { .dt-section { padding: 15px; gap: 15px; border-radius: 16px; } .dt-header h2 { font-size: 19px; } .dt-header p { font-size: 13px; } .dt-contact-filters { grid-template-columns: minmax(0, 1fr); } .dt-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dt-tabs button { font-size: 13px; } .dt-section-heading > .cc-button { width: 100%; } .dt-actions .cc-button { flex: 1 1 auto; } .dt-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dt-columns label { font-size: 13px; } }

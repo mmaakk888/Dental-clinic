@@ -156,15 +156,10 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
     return list;
   }, [searchResults, category]);
 
-  // Keyboard Navigation Handler
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
-      return;
-    }
-
-    if (activeResultsList.length === 0) return;
+  // Result shortcuts belong to the text input, never to close/filter/result
+  // buttons. Escape and focus trapping are handled by useAppointmentDialog.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing || activeResultsList.length === 0) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -212,7 +207,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
         role="dialog" aria-modal="true" aria-label="البحث الشامل" tabIndex={-1}
         className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden font-tajawal flex flex-col max-h-[92dvh] sm:max-h-[90dvh] dir-rtl"
         onClick={e => e.stopPropagation()}
-        onKeyDown={handleKeyDown}
       >
         {/* Mobile Handle Bar Indicator */}
         <div className="shrink-0 sm:hidden flex justify-center pt-2.5 pb-1">
@@ -228,6 +222,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            aria-label="البحث بالاسم أو رقم الملف أو الهاتف"
             placeholder="بحث بالاسم، رقم الهاتف، رقم الملف، موعد أو معمل..."
             className="min-w-0 w-full bg-transparent text-slate-900 placeholder:text-slate-400 text-base font-bold outline-none"
           />

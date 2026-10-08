@@ -293,6 +293,13 @@ export interface ThemeSettings {
   customFontUrl?: string;
 }
 
+export interface DockAppearance {
+  size: 'compact' | 'comfortable' | 'large';
+  showLabels: boolean;
+  /** Direct mobile links, excluding the More button. Permissions are filtered first. */
+  mobileVisibleCount: 3 | 4;
+}
+
 export interface UILabels {
   homeSubtitle: string;
   welcomeText: string;
@@ -300,6 +307,7 @@ export interface UILabels {
   tabs: Record<string, string>;
   /** Floating navigation labels, separate from legacy patient-file tab labels. */
   navigationLabels?: Partial<Record<'home' | 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings', string>>;
+  dockAppearance?: DockAppearance;
 }
 
 export interface UserPermission {

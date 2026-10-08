@@ -1,0 +1,97 @@
+.clinic-topbar { width: 100%; border-bottom: 1px solid #e2e8f0; background: #fff; color: #0f172a; }
+.clinic-topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 64px; max-width: 1800px; margin: auto; padding: 8px 12px; }
+.clinic-topbar button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.clinic-topbar-account { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; max-width: 440px; flex: 1 1 auto; text-align: right; border-radius: 14px; padding: 4px 6px; border: 1px solid transparent; background: transparent; cursor: pointer; }
+.clinic-topbar-account:hover { background: #f8fafc; border-color: #e2e8f0; }
+.clinic-topbar-avatar { display: flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 11px; color: #fff; background: var(--primary, #4f46e5); font-size: 16px; font-weight: 800; }
+.clinic-topbar-account-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.clinic-topbar-name,.clinic-topbar-meta { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clinic-topbar-name { font-size: 13px; font-weight: 800; }
+.clinic-topbar-meta { font-size: 10px; color: #64748b; }
+.clinic-topbar-chevron { display: none; }
+.clinic-topbar-tools { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.clinic-topbar-tool { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 44px; width: 44px; min-height: 44px; padding: 0; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; color: #475569; cursor: pointer; transition: background-color 140ms ease, border-color 140ms ease; }
+.clinic-topbar-tool:hover { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+.clinic-topbar-tool svg { width: 20px; height: 20px; flex-shrink: 0; }
+.clinic-topbar-tool-label { display: none; }
+.clinic-topbar-status { color: #475569; }
+.clinic-topbar-tool--privacy,.clinic-topbar-tool--warning { border-color: #fcd34d; color: #92400e; background: #fffbeb; }
+.clinic-topbar-network-dot { position: absolute; inset-inline-end: 6px; bottom: 6px; width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; }
+.clinic-topbar-network-dot.is-online { background: #059669; }
+.clinic-topbar-count { position: absolute; top: -5px; inset-inline-end: -4px; display: grid; place-items: center; min-width: 19px; height: 19px; padding: 0 3px; border: 2px solid #fff; border-radius: 20px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 800; line-height: 1; }
+.clinic-topbar :focus-visible,.clinic-topbar-overlay button:focus-visible { outline: 3px solid #818cf8; outline-offset: 3px; }
+.clinic-topbar-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgb(15 23 42 / 42%); }
+.clinic-topbar-sheet { display: flex; flex-direction: column; width: 100%; max-width: 500px; max-height: min(90dvh, var(--clinic-visible-height, 90dvh)); background: #fff; border: 1px solid #e2e8f0; border-radius: 22px; box-shadow: 0 20px 60px rgb(15 23 42 / 18%); overflow: hidden; color: #0f172a; }
+.clinic-topbar-sheet-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
+.clinic-topbar-eyebrow { margin: 0 0 4px; font-size: 11px; color: #64748b; font-weight: 700; }
+.clinic-topbar-sheet-heading h2 { margin: 0; font-size: 19px; font-weight: 800; }
+.clinic-topbar-close { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; color: #475569; cursor: pointer; }
+.clinic-topbar-close svg { width: 20px; height: 20px; }
+.clinic-topbar-sheet-body { overflow-y: auto; min-height: 0; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.clinic-topbar-profile-card { display: flex; gap: 12px; align-items: center; padding: 14px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 16px; min-width: 0; }
+.clinic-topbar-profile-card > div { min-width: 0; overflow-wrap: anywhere; }
+.clinic-topbar-profile-card .clinic-topbar-avatar { flex-basis: 44px; width: 44px; height: 44px; font-size: 20px; }
+.clinic-topbar-profile-card h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.clinic-topbar-profile-card p,.clinic-topbar-profile-card span:not(.clinic-topbar-avatar) { margin: 4px 0 0; font-size: 12px; color: #64748b; }
+.clinic-topbar-profile-card p { text-align: right; }
+.clinic-topbar-menu-action { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px; background: #fff; text-align: start; color: #334155; cursor: pointer; }
+.clinic-topbar-menu-action:hover { background: #f8fafc; }
+.clinic-topbar-menu-action > svg { width: 21px; height: 21px; flex-shrink: 0; color: var(--primary, #4f46e5); }
+.clinic-topbar-menu-action > svg:last-child { margin-inline-start: auto; width: 16px; }
+.clinic-topbar-menu-action span { font-weight: 800; font-size: 14px; min-width: 0; }
+.clinic-topbar-menu-action small { display: block; margin-top: 4px; color: #64748b; font-size: 11px; font-weight: 500; }
+.clinic-topbar-logout,.clinic-topbar-primary,.clinic-topbar-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 800; cursor: pointer; }
+.clinic-topbar-logout { border: 1px solid #fecdd3; background: #fff1f2; color: #be123c; }
+.clinic-topbar-primary { border: 1px solid transparent; background: var(--primary, #4f46e5); color: #fff; }
+.clinic-topbar-secondary { border: 1px solid #cbd5e1; background: #fff; color: #475569; }
+.clinic-topbar-logout svg,.clinic-topbar-primary svg { width: 19px; height: 19px; }
+.clinic-topbar-sheet-footer { padding: 12px 20px; border-top: 1px solid #e2e8f0; background: #f8fafc; flex-shrink: 0; }
+.clinic-topbar-sheet-footer button { width: 100%; }
+.clinic-topbar-note { margin: 0; color: #64748b; font-size: 12px; line-height: 1.9; }
+.clinic-topbar-local-notice { display: flex; align-items: flex-start; gap: 12px; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 14px; border-radius: 14px; }
+.clinic-topbar-local-notice > svg { width: 23px; height: 23px; color: #475569; flex-shrink: 0; margin-top: 2px; }
+.clinic-topbar-local-notice h3 { margin: 0 0 6px; font-size: 15px; font-weight: 800; }
+.clinic-topbar-local-notice p { margin: 0; color: #475569; font-size: 12px; line-height: 1.9; }
+.clinic-topbar-save-warning { margin: 0; border: 1px solid #fcd34d; background: #fffbeb; color: #92400e; border-radius: 12px; padding: 12px; font-size: 12px; line-height: 1.9; }
+.clinic-topbar-status-list { margin: 0; display: flex; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+.clinic-topbar-status-list > div { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
+.clinic-topbar-status-list > div:last-child { border-bottom: 0; }
+.clinic-topbar-status-list dt { display: flex; align-items: center; gap: 7px; font-weight: 800; color: #475569; }
+.clinic-topbar-status-list dt svg { width: 16px; height: 16px; }
+.clinic-topbar-status-list dd { margin: 0; color: #64748b; }
+.clinic-topbar-loading { padding: 24px; gap: 18px; max-width: 320px; text-align: center; font-weight: 700; }
+@media (min-width: 640px) {
+  .clinic-topbar-inner { padding-inline: 24px; gap: 20px; min-height: 72px; }
+  .clinic-topbar-account { gap: 10px; padding: 6px 10px; }
+  .clinic-topbar-avatar { width: 40px; height: 40px; flex-basis: 40px; border-radius: 13px; }
+  .clinic-topbar-name { font-size: 16px; }
+  .clinic-topbar-meta { font-size: 12px; }
+  .clinic-topbar-chevron { display: block; width: 16px; height: 16px; color: #94a3b8; flex-shrink: 0; }
+  .clinic-topbar-tools { gap: 8px; }
+}
+@media (min-width: 1024px) {
+  .clinic-topbar-inner { min-height: 80px; }
+  .clinic-topbar-tool { width: auto; min-width: 48px; min-height: 48px; padding: 0 13px; }
+  .clinic-topbar-tool-label { display: inline; font-size: 13px; font-weight: 800; }
+  .clinic-topbar-tool svg { width: 22px; height: 22px; }
+  .clinic-topbar-bell { width: 48px; padding: 0; }
+  .clinic-topbar-network-dot { width: 7px; height: 7px; }
+}
+@media (max-width: 359px) {
+  .clinic-topbar-inner { padding-inline: 8px; gap: 4px; }
+  .clinic-topbar-account { gap: 5px; padding-inline: 2px; }
+  .clinic-topbar-account .clinic-topbar-avatar { width: 28px; height: 32px; flex-basis: 28px; font-size: 14px; }
+  .clinic-topbar-name { font-size: 12px; }
+  .clinic-topbar-meta { display: none; }
+  .clinic-topbar-tools { gap: 3px; }
+  .clinic-topbar-overlay { padding: 10px; }
+  .clinic-topbar-sheet-body { padding: 14px; }
+}
+@media (max-height: 440px) {
+  .clinic-topbar-sheet { overflow-y: auto; }
+  .clinic-topbar-sheet-body { overflow: visible; }
+}
+body.tv-mode .clinic-topbar-name { font-size: 20px; }
+body.tv-mode .clinic-topbar-meta,body.tv-mode .clinic-topbar-tool-label { font-size: 15px; }
+body.tv-mode .clinic-topbar-tool { min-width: 52px; min-height: 52px; }
+body.tv-mode .clinic-topbar-tool svg { width: 26px; height: 26px; }
