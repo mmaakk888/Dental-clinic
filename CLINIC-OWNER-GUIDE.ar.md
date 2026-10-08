@@ -87,7 +87,21 @@ pnpm start
 
 ## ٥. رفع الموقع إلى Firebase بعد اجتياز مرحلة الأمان فقط
 
-المشروع المسجل في الإعدادات: `zippy-dispatcher-m1ttq`، وقد سبق تأكيد ملكيته. لم يتم التحقق من حساب Google الحالي أو إعدادات المشروع المنشورة في هذه الجولة.
+### ما أُنجز في ٨ أكتوبر ٢٠٢٦
+
+بعد تسجيل المالك دخوله بنفسه، أُنشئ مشروع مستقل باسم **Dental Clinic** ومعرّف `dental-clinic-mmaakk888`، وسُجل تطبيق **Dental Clinic Web**. [فتح المشروع الجديد](https://console.firebase.google.com/project/dental-clinic-mmaakk888/overview).
+
+- فحص إعدادات الفوترة أكد `billingEnabled: false` وعدم وجود حساب فوترة مربوط. لم تُفعّل Blaze أو Storage أو Functions أو مزود مدفوع.
+- فُعّل الدخول بالإيميل وكلمة المرور فقط. فحص الإعدادات أكد أن الدخول المجهول والهاتف معطلان. نوع خدمة Auth الذي أنشأته الأداة هو `IDENTITY_PLATFORM`؛ يعمل على Spark دون ربط فوترة، وحدّه المجاني لدخول الإيميل ٣٠٠٠ مستخدم نشط يوميًا، وليس وعدًا باستخدام غير محدود. [حدود Authentication](https://firebase.google.com/docs/auth/limits).
+- بعد موافقة المالك على بلجيكا، أُنشئت قاعدة `(default)` من نوع Firestore Native / Standard في `europe-west1`. أكد رد Firebase أنها ضمن `freeTier`، مع حماية من حذف القاعدة وPITR معطل؛ هذه الحماية لا تمنع حذف سجلات منفردة ولا تُغني عن النسخ الاحتياطي. منطقة القاعدة لا يمكن تغييرها بعد إنشائها. [مواقع Firestore](https://firebase.google.com/docs/firestore/locations).
+- نُشرت قواعد `firestore.rules` المغلقة على **المشروع الجديد فقط**، ثم قورنت القواعد المنشورة بالنص المحلي ونجحت المطابقة. أعاد طلب قراءة غير موثق لسجل اختبار غير موجود 403، دون كتابة بيانات اختبار.
+- لم يُنشر Hosting، ولم تُنقل بيانات المرضى أو الحسابات المحلية، ولم يُغيّر المشروع القديم `zippy-dispatcher-m1ttq` أو قواعده. ملف `firebase-applet-config.json` ما زال يشير للمشروع القديم؛ **لا تبدله يدويًا لتجاوز مرحلة ربط Auth والصلاحيات والبيانات**.
+
+إنشاء مشروع وقاعدة وتفعيل مزود الدخول لا يعني أن التطبيق اتصل بها. بوابة التشغيل المحلي ما زالت موجودة، والمزامنة وحسابات التطبيق الموثقة وصلاحيات البيانات تحتاج تنفيذًا واختبارًا قبل النشر.
+
+### الخطوة الخاصة بالمالك: إنشاء حساب الدخول
+
+افتح [Authentication ← Users في المشروع الجديد](https://console.firebase.google.com/project/dental-clinic-mmaakk888/authentication/users)، ثم **Add user**. اكتب إيميلك واختر كلمة سر خاصة بالتطبيق لا تقل عن ١٢ حرفًا ومختلفة عن كلمة سر Google، ثم احفظ. لا ترسل كلمة السر أو أكواد Google في المحادثة. يمكنك إبلاغنا بالإتمام؛ نتحقق من هوية الحساب المضاف عبر أدوات المشروع دون قراءة كلمة السر. هذا ينشئ هوية Auth فقط، ولا يمنح صلاحية قراءة بيانات العيادة حتى تجهيز عضوية المالك والقواعد الآمنة.
 
 ### أ. تجهيز الأدوات وتسجيل دخولك
 
@@ -99,7 +113,16 @@ firebase login
 firebase projects:list
 ```
 
-تسجّل الدخول بنفسك في نافذة Google، وتتحقق من ظهور المشروع المقصود. لا ترسل كلمة مرور أو ملف Service Account أو رمز تسجيل الدخول لي. [دليل Firebase CLI](https://firebase.google.com/docs/cli).
+تسجّل الدخول بنفسك في نافذة Google، وتتحقق من ظهور `dental-clinic-mmaakk888`. لا ترسل كلمة مرور أو ملف Service Account أو رمز تسجيل الدخول لي. أُنجز ذلك على هذا اللاب بالفعل باستخدام Firebase CLI 15.32.1؛ لا تحتاج إعادة تسجيل الدخول إلا إذا انتهت الجلسة أو تغير الجهاز. إذا طلبت الأداة تفعيل Gemini أو مشاركة إحصاءات الاستخدام، يمكن اختيار No؛ ليستا شرطًا لتشغيل العيادة. [دليل Firebase CLI](https://firebase.google.com/docs/cli).
+
+ملفا الإعداد منفصلان لتقليل نطاق الأوامر. الأول لمزود الدخول فقط، والثاني لقواعد القاعدة المغلقة فقط؛ لا يتضمن أي منهما Hosting أو Functions. **الأوامر التالية طُبقت بالفعل على المشروع الجديد؛ ليست خطوة مطلوبة من المالك الآن:**
+
+```powershell
+firebase deploy --only auth --config firebase.auth.json --project dental-clinic-mmaakk888
+firebase deploy --only firestore:rules --config firebase.firestore.json --project dental-clinic-mmaakk888
+```
+
+لا تشغّل أمر القواعد لمجرد تحديث التصميم مستقبلًا؛ الملف الحالي يمنع جميع قراءات وكتابات عميل التطبيق، وإعادة نشره بعد اعتماد قواعد الأدوار ستوقف الوصول. لا يوجد مشروع افتراضي جديد في `.firebaserc`؛ استخدم دائمًا `--project` صراحة. [إعداد مزودات Auth عبر CLI](https://firebase.google.com/docs/auth/configure-providers-cli).
 
 ### ب. شرط الانتقال للنشر
 
@@ -108,10 +131,10 @@ firebase projects:list
 ### ج. تجهيز Hosting — مرة واحدة بعد الجاهزية
 
 ```powershell
-firebase init hosting
+firebase init hosting --project dental-clinic-mmaakk888
 ```
 
-اختر Existing project ثم `zippy-dispatcher-m1ttq`؛ اجعل مجلد النشر `dist`، ولا تستبدل `index.html`. لا تفعّل النشر الآلي إلى GitHub الآن. التنقل الحالي داخل حالة التطبيق، لذلك لا يحتاج تحويل كل المسارات إلى `index.html`؛ أعد تقييم ذلك إذا أضفنا روابط صفحات مباشرة لاحقًا.
+اختر Existing project ثم `dental-clinic-mmaakk888`؛ اجعل مجلد النشر `dist`، ولا تستبدل `index.html`. لا تفعّل النشر الآلي إلى GitHub الآن. التنقل الحالي داخل حالة التطبيق، لذلك لا يحتاج تحويل كل المسارات إلى `index.html`؛ أعد تقييم ذلك إذا أضفنا روابط صفحات مباشرة لاحقًا.
 
 يوجد نموذج إعداد **غير مفعّل** باسم `firebase.hosting.example.json`. بعد المراجعة يمكن نسخه إلى `firebase.json` بدل إعداد Hosting الافتراضي. يتضمن `dist` فقط، ومنع رفع المصادر وملفات الخادم والضغط المحلي، وترويسات حماية وسياسة تخزين للأصول ذات البصمة. يحتاج CSP مراجعة جديدة عند ربط تدفق Auth الفعلي. لا يحتوي قواعد Firestore أو Functions، ولا يغيّر قاعدة البيانات.
 
@@ -121,7 +144,7 @@ firebase init hosting
 pnpm test
 pnpm lint
 pnpm build
-firebase deploy --only hosting --project zippy-dispatcher-m1ttq
+firebase deploy --only hosting --project dental-clinic-mmaakk888
 ```
 
 استخدم الرابط الذي يرجعه أمر النشر الناجح، وتحقق من الدخول والصلاحيات والحفظ من جهازين. `--only hosting` ينشر الواجهة وإعداد استضافتها فقط، وليس قواعد البيانات أو الخادم. لا نرفع جذر المشروع أو `build/server.cjs`. [بدء Firebase Hosting](https://firebase.google.com/docs/hosting/quickstart)، [إعدادات Hosting](https://firebase.google.com/docs/hosting/full-config).
@@ -162,10 +185,10 @@ Hosting الثابت لا يشغّل `server.ts` أو واجهات AI/تحليل
 2. بعد موافقتك، ومن نفس مجلد المستودع، شغّل الأمر التالي لتجهيز ربط GitHub إذا كان Hosting مُعدًا بالفعل:
 
    ```powershell
-   firebase init hosting:github
+   firebase init hosting:github --project dental-clinic-mmaakk888
    ```
 
-3. سجّل الدخول بنفسك عند الطلب، واختر المستودع `mmaakk888/Dental-clinic` ومشروع `zippy-dispatcher-m1ttq`. **اختر عدم تفعيل النشر التلقائي للإنتاج عند الدمج حاليًا.** فرع الإنتاج المعتمد عند تفعيله لاحقًا هو `main`، وليس أي فرع تجريبي.
+3. سجّل الدخول بنفسك عند الطلب، واختر المستودع `mmaakk888/Dental-clinic` ومشروع `dental-clinic-mmaakk888`. **اختر عدم تفعيل النشر التلقائي للإنتاج عند الدمج حاليًا.** فرع الإنتاج المعتمد عند تفعيله لاحقًا هو `main`، وليس أي فرع تجريبي.
 4. الأداة تنشئ Service Account للنشر، وتحفظ مفتاحه كـ GitHub Secret، وتجهّز ملفات workflow. هذه تغييرات فعلية في الصلاحيات والمستودع عند تنفيذها؛ لا تنسخ المفتاح إلى الكود أو `.env` متتبع أو المحادثة. نراجع الصلاحيات والملفات الناتجة قبل حفظها. [سلوك أداة الربط الرسمي](https://firebase.google.com/docs/hosting/github-integration).
 5. نضبط workflow على Node.js 22 أو أحدث ونسخة pnpm المحددة في `package.json`، ثم هذه الفحوص بالترتيب، مع توقف النشر عند أي فشل:
 
@@ -176,7 +199,7 @@ Hosting الثابت لا يشغّل `server.ts` أو واجهات AI/تحليل
    pnpm build
    ```
 
-6. خطوة النشر تستخدم Firebase Hosting فقط ومن `dist`؛ لا `firebase deploy` الشامل، ولا نشر قواعد Firestore أو Functions أو ترحيل بيانات ضمن تحديث شكل الواجهة. في النشر اليدوي يكون الأمر `firebase deploy --only hosting --project zippy-dispatcher-m1ttq`؛ في GitHub تستخدم خطوة Hosting المجهّزة أسرار النشر بدل تضمين المفتاح في الأمر.
+6. خطوة النشر تستخدم Firebase Hosting فقط ومن `dist`؛ لا `firebase deploy` الشامل، ولا نشر قواعد Firestore أو Functions أو ترحيل بيانات ضمن تحديث شكل الواجهة. في النشر اليدوي يكون الأمر `firebase deploy --only hosting --project dental-clinic-mmaakk888`؛ في GitHub تستخدم خطوة Hosting المجهّزة أسرار النشر بدل تضمين المفتاح في الأمر.
 7. نراجع ملفات workflow في فرع منفصل، ونعطل أي نشر معاينات PR عام افتراضيًا؛ المستودع الخاص لا يجعل رابط المعاينة خاصًا. نبدأ بتشغيل نشر الإنتاج يدويًا بعد موافقة المالك، أو بموافقة بيئة `production` إذا كانت متاحة لخطة المستودع. لا نفعّل نشر كل push إلى `main` تلقائيًا دون اختيار صريح منك.
 
 بعد اعتماد الربط يصبح مسار التحديث: تعديل الكود في فرع → فحوص ومراجعة → دمج الكود المعتمد إلى `main` → موافقتك على النشر → تشغيل Hosting إلى **نفس الموقع والرابط** → تحقق الدخول والوظائف. GitHub يحتفظ بالكود فقط؛ لا ترفع إليه نسخة JSON للمرضى أو صور الفواتير أو بيانات المتصفح. ربط النشر لا يربط أجهزة العيادة ببعضها ولا يرسل بياناتها إلى Firebase تلقائيًا.
