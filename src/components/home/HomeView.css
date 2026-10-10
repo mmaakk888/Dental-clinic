@@ -1,4 +1,6 @@
-.home-workspace .home-today-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 4px 2px; margin-block-start: 0; color: #475569; }
+.home-workspace { padding-block-start: 0; animation: home-workspace-enter 180ms ease-out; }
+@keyframes home-workspace-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.home-workspace .home-today-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 2px; margin-block-start: 0; color: #475569; }
 .home-today-strip > div { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; }
 .home-today-strip time { font-size: 14px; font-weight: 800; overflow-wrap: anywhere; }
 .home-today-strip svg { width: 18px; height: 18px; color: #64748b; flex-shrink: 0; }
@@ -30,6 +32,15 @@
 .home-workspace .dashboard-card > span:nth-child(4) { grid-column: 1 / -1; margin-top: 6px; font-size: 11px; line-height: 1.7; }
 .home-workspace .dashboard-appointment { min-height: 62px; }
 .home-workspace .dashboard-link { min-height: 44px; }
+.home-schedule-more { margin: 12px 0 0; color: #64748b; font-size: 12px; line-height: 1.8; }
+.home-workspace[data-home-density='compact'] > * + * { margin-block-start: 10px; }
+.home-workspace[data-home-density='compact'] .home-action-grid,
+.home-workspace[data-home-density='compact'] .dashboard-metrics { gap: 7px; }
+.home-workspace[data-home-density='compact'] .home-action-button { min-height: 78px; padding: 10px; gap: 6px; }
+.home-workspace[data-home-density='compact'] .dashboard-card { padding: 10px; }
+.home-workspace[data-home-density='compact'] .dashboard-panel { padding: 12px; }
+.home-workspace[data-home-density='compact'] .dashboard-appointment { min-height: 54px; }
+.home-workspace[data-home-density='compact'] .dashboard-alerts { padding: 10px 12px; }
 @media (min-width: 768px) {
   .home-action-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .home-action-button { padding: 14px; min-height: 100px; }
@@ -45,5 +56,6 @@
   .home-workspace .dashboard-card > span:nth-child(2) { font-size: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .home-workspace { animation: none; }
   .home-action-button { transition: none; }
 }

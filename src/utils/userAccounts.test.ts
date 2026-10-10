@@ -127,17 +127,17 @@ test('doctor and admin have full effective access but role change does not rewri
     const result = validateUserAccountDraft(draft, [manager(), user], user);
     assert.equal(result.valid, true); assert.deepEqual(result.user!.permissions, user.permissions);
     assert.equal(result.user!.permissions.controlPanel, false);
-    assert.equal(result.newPermissionGrants.includes('لوحة التحكم وإدارة الحسابات'), true);
+    assert.equal(result.newPermissionGrants.includes('دخول لوحة التحكم'), true);
   }
 });
 
-test('last usable manager cannot be paused or demoted, role-based and delegated managers count', () => {
+test('last usable manager cannot be paused or demoted; delegated secretary settings do not count as account management', () => {
   const owner = manager();
   assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(owner), isActive: false }, [owner], owner).valid, false);
   assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(owner), role: 'secretary' }, [owner], owner).valid, false);
   const delegated = secretary(); delegated.permissions.controlPanel = true;
-  assert.equal(isUsableControlPanelManager(delegated), true);
-  assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(owner), isActive: false }, [owner, delegated], owner).valid, true);
+  assert.equal(isUsableControlPanelManager(delegated), false);
+  assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(owner), isActive: false }, [owner, delegated], owner).valid, false);
   delegated.isActive = false;
   assert.equal(validateUserAccountDraft({ ...createUserAccountDraft(owner), role: 'secretary' }, [owner, delegated], owner).valid, false);
 });

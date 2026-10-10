@@ -11,6 +11,7 @@ import { getHomeActionAccess } from '../../utils/homeActions';
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
 import { getHomeClockDisplay } from '../../utils/homeClock';
 import { useHomeClock } from '../../hooks/useHomeClock';
+import { getHomeLayout } from '../../utils/homeLayout';
 import './HomeView.css';
 
 interface HomeViewProps {
@@ -71,7 +72,7 @@ const MetricCard: React.FC<{
 };
 
 export const HomeView: React.FC<HomeViewProps> = React.memo(({
-  activeLabCount,
+  activeLabCount, labels,
   onNavigate, currentUser, patients = EMPTY_PATIENTS, appointments = EMPTY_APPOINTMENTS, expenses = EMPTY_EXPENSES,
   isPrivacyMode = false, onSelectPatient, onOpenWalkIn, onOpenDailyReport,
   onOpenScheduleModal, onOpenInvoiceModal, onOpenPayment
@@ -90,6 +91,8 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   const canLab = canAccessView(user, 'lab');
   const canFinance = canAccessView(user, 'summary');
   const actionAccess = getHomeActionAccess(user);
+  const layout = useMemo(() => getHomeLayout(labels), [labels]);
+  const visibleSections = layout.sectionOrder.filter(key => !layout.hiddenSections.includes(key));
   const canViewCollections = canPerformAction(user, 'view_today_collections');
   const canViewRemaining = canPerformAction(user, 'view_remaining_balance');
   const canViewExpenses = canFinance && canPerformAction(user, 'view_expenses');
@@ -143,7 +146,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
   };
 
   return (
-    <div className="dashboard-shell home-workspace" dir="rtl">
+    <div className="dashboard-shell home-workspace" dir="rtl" data-home-density={layout.density}>
       <h1 className="sr-only">لوحة اليوم</h1>
       <section className="home-today-strip" aria-label="تاريخ اليوم والوقت المحلي">
         <div><Calendar aria-hidden="true" /><time dateTime={clockDisplay.day}>{clockDisplay.dateLabel}</time></div>
@@ -189,7 +192,8 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         </section>
       )}
 
-      {actions.length > 0 && <section className="home-actions-panel" aria-labelledby="home-actions-title">
+      {visibleSections.map(key => <React.Fragment key={key}>
+      {key === 'actions' && actions.length > 0 && <section className="home-actions-panel" data-home-section="actions" aria-labelledby="home-actions-title">
         <div className="home-section-heading"><h2 id="home-actions-title">إجراءات اليوم</h2><p>اختصارات حسب صلاحيات حسابك</p></div>
         <div className="home-action-grid">
           {actions.map(action => <button key={action.id} type="button" className={`home-action-button home-action-${action.id}`}
@@ -200,22 +204,22 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         </div>
       </section>}
 
-      <section className="dashboard-metrics" aria-label="ملخص اليوم">
+      {key === 'metrics' && (canAppointments || canViewCollections || canViewRemaining || canLab) && <section className="dashboard-metrics" data-home-section="metrics" aria-label="ملخص اليوم">
         {canAppointments && <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الحضور'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />}
         {canViewCollections && <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note={actionAccess.report ? 'من دفع اليوم والخدمات المسجلة' : 'إجمالي المبالغ المحصّلة اليوم'} icon={<Banknote />} tone="emerald"
           onClick={actionAccess.report && onOpenDailyReport ? onOpenDailyReport : undefined} />}
         {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={canFinance ? () => onNavigate('summary') : undefined} />}
         {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
-      </section>
+      </section>}
 
-        {canAppointments && <section className="dashboard-panel">
+        {key === 'schedule' && canAppointments && <section className="dashboard-panel" data-home-section="schedule">
           <div className="dashboard-panel-header">
             <div><p className="dashboard-eyebrow">مسار اليوم</p><h2 className="dashboard-section-title">جدول اليوم</h2></div>
             <button type="button" className="dashboard-link" onClick={() => onNavigate('appointments')}>عرض الجدول <ChevronLeft aria-hidden="true" /></button>
           </div>
           {stats.dayAppointments.length ? (
             <div className="dashboard-appointment-list">
-              {stats.dayAppointments.slice(0, 6).map(appointment => (
+              {stats.dayAppointments.slice(0, layout.appointmentLimit).map(appointment => (
                 <button key={appointment.id} type="button" onClick={() => {
                   if (canPatients && onSelectPatient && patients.some(patient => patient.id === appointment.patientId)) onSelectPatient(appointment.patientId, 'home');
                   else onNavigate('appointments');
@@ -229,11 +233,12 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
           ) : (
             <div className="dashboard-empty"><CheckCircle2 aria-hidden="true" /><strong>لا توجد مواعيد مسجلة اليوم</strong><span>يمكنك إضافة موعد جديد من جدول المواعيد.</span></div>
           )}
+          {stats.dayAppointments.length > layout.appointmentLimit && <p className="home-schedule-more">يظهر {layout.appointmentLimit.toLocaleString('ar-EG')} من {stats.dayAppointments.length.toLocaleString('ar-EG')} مواعيد اليوم. باقي المواعيد في الجدول الكامل.</p>}
         </section>}
 
 
-      {showAlerts && (
-        <section className="dashboard-alerts">
+      {key === 'followUp' && showAlerts && (
+        <section className="dashboard-alerts" data-home-section="followUp">
           <div className="flex items-center gap-2"><AlertCircle aria-hidden="true" /><strong>تنبيهات تحتاج متابعة</strong></div>
           <div className="dashboard-alert-grid">
             {canAppointments && stats.noShow > 0 && <span>{stats.noShow} موعد لم يحضر صاحبه</span>}
@@ -242,6 +247,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
           </div>
         </section>
       )}
+      </React.Fragment>)}
 
     </div>
   );

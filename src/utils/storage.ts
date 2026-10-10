@@ -9,8 +9,10 @@ import {
 } from '../data/initialData';
 import { cloneContentDraft, normalizeNavigationOrder } from './clinicContent';
 import type { ContentDraft } from './clinicContent';
-import { cloneServiceCatalog } from './serviceCatalog';
+import { cloneServiceCatalog, DEFAULT_EXAMINATION_FEE } from './serviceCatalog';
 import type { ServiceCatalogValues } from './serviceCatalog';
+import { cloneProstheticRouting } from './prostheticRouting';
+import type { ProstheticRoutingSettings } from './prostheticRouting';
 import { isSessionFresh, SESSION_MAX_AGE_MS, REMEMBERED_SESSION_MAX_AGE_MS } from './accessControl';
 
 const KEYS = {
@@ -25,6 +27,9 @@ const KEYS = {
   USERS: 'dental_users_v2',
   SERVICE_TYPES: 'dental_service_types_v2',
   CROWN_PRICES: 'dental_crown_prices_v2',
+  CLINICAL_PRICES: 'dental_clinical_prices_v1',
+  EXAMINATION_FEE: 'dental_examination_fee_v1',
+  PROSTHETIC_ROUTING: 'dental_prosthetic_routing_v1',
   CLINIC_NAME: 'dental_clinic_name_v2',
   CLINIC_LOGO: 'dental_clinic_logo_v2',
   EXPENSES: 'dental_expenses_v2',
@@ -59,12 +64,13 @@ const cacheMap = new Map<string, any>();
 
 export const STORAGE_FAILURE_EVENT = 'dental-storage-failure';
 export const CLINIC_CONTENT_STORAGE_KEYS: readonly string[] = [KEYS.UI_LABELS, KEYS.TILE_ORDER];
-export const SERVICE_CATALOG_STORAGE_KEYS: readonly string[] = [KEYS.SERVICE_TYPES, KEYS.CROWN_PRICES];
+export const SERVICE_CATALOG_STORAGE_KEYS: readonly string[] = [KEYS.SERVICE_TYPES, KEYS.CROWN_PRICES, KEYS.CLINICAL_PRICES, KEYS.EXAMINATION_FEE];
 export const USER_ACCOUNTS_STORAGE_KEY = KEYS.USERS;
 export const DRUG_CATALOG_STORAGE_KEY = KEYS.DRUG_CATALOG;
 export const LABS_STORAGE_KEY = KEYS.LABS;
 export const WHATSAPP_SETTINGS_STORAGE_KEY = KEYS.WHATSAPP_SETTINGS;
 export const PRIVACY_MODE_STORAGE_KEY = KEYS.PRIVACY_MODE;
+export const PROSTHETIC_ROUTING_STORAGE_KEY = KEYS.PROSTHETIC_ROUTING;
 export const CLINIC_DOMAIN_STORAGE_KEYS = [KEYS.PATIENTS, KEYS.APPOINTMENTS, KEYS.LAB_CASES, KEYS.EXPENSES, KEYS.MATERIAL_USAGES, KEYS.CONTACTS] as const;
 
 export interface ClinicDomainData {
@@ -150,12 +156,15 @@ function getServiceCatalog(): ServiceCatalogValues {
   return cloneServiceCatalog({
     serviceTypes: safeGet(KEYS.SERVICE_TYPES, DEFAULT_SERVICE_TYPES, true),
     crownPrices: safeGet(KEYS.CROWN_PRICES, DEFAULT_PATIENT_CROWN_PRICES, true),
+    clinicalPrices: safeGet(KEYS.CLINICAL_PRICES, {}, true),
+    examinationFee: safeGet(KEYS.EXAMINATION_FEE, DEFAULT_EXAMINATION_FEE, true),
   });
 }
 
 function saveServiceCatalog(values: ServiceCatalogValues): void {
   const next = cloneServiceCatalog(values);
-  saveConfirmedSettings([[KEYS.SERVICE_TYPES, next.serviceTypes], [KEYS.CROWN_PRICES, next.crownPrices]],
+  saveConfirmedSettings([[KEYS.SERVICE_TYPES, next.serviceTypes], [KEYS.CROWN_PRICES, next.crownPrices],
+    [KEYS.CLINICAL_PRICES, next.clinicalPrices], [KEYS.EXAMINATION_FEE, next.examinationFee]],
     'تأكد أن المتصفح يسمح بالتخزين ثم أعد المحاولة.');
 }
 
@@ -163,17 +172,21 @@ export interface RestoredCatalogs {
   users?: User[];
   serviceTypes?: string[];
   crownPrices?: Record<string, number>;
+  clinicalPrices?: Record<string, number>;
+  examinationFee?: number;
   drugCatalog?: DrugCatalogItem[];
   labs?: Lab[];
 }
 
 function saveRestoredCatalogs(values: RestoredCatalogs): void {
   const entries: [string, unknown][] = [];
-  if (values.serviceTypes !== undefined || values.crownPrices !== undefined) {
+  if (values.serviceTypes !== undefined || values.crownPrices !== undefined || values.clinicalPrices !== undefined || values.examinationFee !== undefined) {
     const previous = getServiceCatalog();
     const next = cloneServiceCatalog({ serviceTypes: values.serviceTypes ?? previous.serviceTypes,
-      crownPrices: values.crownPrices ?? previous.crownPrices });
-    entries.push([KEYS.SERVICE_TYPES, next.serviceTypes], [KEYS.CROWN_PRICES, next.crownPrices]);
+      crownPrices: values.crownPrices ?? previous.crownPrices, clinicalPrices: values.clinicalPrices ?? previous.clinicalPrices,
+      examinationFee: values.examinationFee ?? previous.examinationFee });
+    entries.push([KEYS.SERVICE_TYPES, next.serviceTypes], [KEYS.CROWN_PRICES, next.crownPrices],
+      [KEYS.CLINICAL_PRICES, next.clinicalPrices], [KEYS.EXAMINATION_FEE, next.examinationFee]);
   }
   if (values.labs !== undefined) entries.push([KEYS.LABS, cloneStoredValue(values.labs)]);
   if (values.drugCatalog !== undefined) entries.push([KEYS.DRUG_CATALOG, cloneStoredValue(values.drugCatalog)]);
@@ -226,8 +239,8 @@ function getDomainData(): ClinicDomainData {
   };
 }
 
-// Explicitly empty the seven operational lists, not the saved account/config
-// keys. Persist [] instead of deleting keys so no fallback can revive records.
+// Explicitly empty seven operational lists and reset their dependent lab routing,
+// not unrelated account/config keys. Persist [] so no fallback can revive records.
 // Call under the clinic lock after fresh full-backup authorization.
 function clearOperationalDataConfirmed(): void {
   saveConfirmedSettings([
@@ -235,6 +248,8 @@ function clearOperationalDataConfirmed(): void {
     [KEYS.APPOINTMENTS, [] as Appointment[]], [KEYS.LABS, [] as Lab[]],
     [KEYS.LAB_CASES, [] as LabCase[]], [KEYS.EXPENSES, [] as Expense[]],
     [KEYS.MATERIAL_USAGES, [] as MaterialUsage[]],
+    // Defaults cannot point to laboratories removed by this explicit reset.
+    [KEYS.PROSTHETIC_ROUTING, cloneProstheticRouting()],
   ], 'لم تكتمل بداية العيادة الفارغة؛ راجع مساحة التخزين ثم أعد المحاولة.');
 }
 
@@ -273,6 +288,8 @@ export const Storage = {
       ['labCases', KEYS.LAB_CASES, [] as LabCase[]], ['expenses', KEYS.EXPENSES, [] as Expense[]],
       ['materialUsages', KEYS.MATERIAL_USAGES, []], ['users', KEYS.USERS, DEFAULT_USERS],
       ['serviceTypes', KEYS.SERVICE_TYPES, DEFAULT_SERVICE_TYPES], ['crownPrices', KEYS.CROWN_PRICES, DEFAULT_PATIENT_CROWN_PRICES],
+      ['clinicalPrices', KEYS.CLINICAL_PRICES, {}], ['examinationFee', KEYS.EXAMINATION_FEE, DEFAULT_EXAMINATION_FEE],
+      ['prostheticRouting', KEYS.PROSTHETIC_ROUTING, cloneProstheticRouting()],
       ['drugCatalog', KEYS.DRUG_CATALOG, DEFAULT_DRUG_CATALOG], ['whatsappSettings', KEYS.WHATSAPP_SETTINGS, DEFAULT_WHATSAPP_SETTINGS],
       ['clinicName', KEYS.CLINIC_NAME, 'عيادة د. مريم علي للأسنان'], ['clinicLogo', KEYS.CLINIC_LOGO, null],
       ['theme', KEYS.THEME, DEFAULT_THEME], ['labels', KEYS.UI_LABELS, DEFAULT_UI_LABELS], ['tileOrder', KEYS.TILE_ORDER, DEFAULT_TILE_ORDER],
@@ -294,6 +311,8 @@ export const Storage = {
       ['contacts', KEYS.CONTACTS],
       ['expenses', KEYS.EXPENSES], ['materialUsages', KEYS.MATERIAL_USAGES], ['users', KEYS.USERS],
       ['serviceTypes', KEYS.SERVICE_TYPES], ['crownPrices', KEYS.CROWN_PRICES], ['drugCatalog', KEYS.DRUG_CATALOG],
+      ['clinicalPrices', KEYS.CLINICAL_PRICES], ['examinationFee', KEYS.EXAMINATION_FEE],
+      ['prostheticRouting', KEYS.PROSTHETIC_ROUTING],
       ['whatsappSettings', KEYS.WHATSAPP_SETTINGS], ['clinicName', KEYS.CLINIC_NAME], ['clinicLogo', KEYS.CLINIC_LOGO],
       ['theme', KEYS.THEME], ['labels', KEYS.UI_LABELS], ['tileOrder', KEYS.TILE_ORDER],
     ];
@@ -309,6 +328,13 @@ export const Storage = {
   }),
   getServiceCatalog,
   saveServiceCatalog,
+  getProstheticRouting: (): ProstheticRoutingSettings => {
+    // Invalid read-only settings fail closed for registration, without replacing
+    // the saved value. Full backup still validates the original persisted data.
+    try { return cloneProstheticRouting(safeGet(KEYS.PROSTHETIC_ROUTING, undefined, true)); }
+    catch { return cloneProstheticRouting(); }
+  },
+  saveProstheticRouting: (values: ProstheticRoutingSettings): void => saveConfirmedSettings([[KEYS.PROSTHETIC_ROUTING, cloneProstheticRouting(values)]], 'راجع التخزين ثم أعد حفظ توجيه التركيبات.'),
   saveRestoredCatalogs,
   getPatients: (): Patient[] => normalizeOriginalDemoPatients(safeGet<Patient[]>(KEYS.PATIENTS, [])),
   savePatients: (patients: Patient[]) => safeSet(KEYS.PATIENTS, patients),

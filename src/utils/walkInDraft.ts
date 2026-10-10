@@ -1,20 +1,41 @@
 import type { Patient, SessionServiceItem } from '../types';
 import { canonicalFileNumber } from './clinicMutations';
+import { getClinicalServicePrice, getServiceGroup, normalizeServiceName } from './serviceCatalog';
+import { getToothLabel, PEDIATRIC_LETTERS, QUADRANTS } from './toothUtils';
+import { getNextPatientFileNo } from './patientRegistration';
+
+export function getWalkInServiceOptions(serviceTypes: readonly string[] = [], clinicalPrices: Record<string, number> = {}) {
+  const seen = new Set<string>();
+  return serviceTypes.filter(name => {
+    const normalized = normalizeServiceName(name);
+    if (!normalized || seen.has(normalized) || getServiceGroup(name) === 'prosthetic') return false;
+    seen.add(normalized); return true;
+  }).map(name => ({ name, price: getClinicalServicePrice(name, { serviceTypes: [...serviceTypes], clinicalPrices, crownPrices: {} }) }));
+}
+
+export function getWalkInToothOptions(kind: 'adult' | 'pediatric') {
+  const identifiers: readonly (string | number)[] = kind === 'pediatric' ? PEDIATRIC_LETTERS : [1, 2, 3, 4, 5, 6, 7, 8];
+  return QUADRANTS.map(quadrant => ({
+    label: quadrant.title,
+    options: identifiers.map(identifier => {
+      const value = `${quadrant.id}${identifier}`;
+      return { value, label: getToothLabel(value) };
+    }),
+  }));
+}
+
+export function walkInExaminationDefault(value: unknown = 100): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 100;
+}
 
 export function nextWalkInFileNumber(patients: readonly Pick<Patient, 'id'>[]): string {
-  let maximum = 100;
-  for (const patient of patients) {
-    const canonical = canonicalFileNumber(patient.id);
-    if (!/^\d+$/.test(canonical)) continue;
-    const value = Number(canonical);
-    if (Number.isSafeInteger(value)) maximum = Math.max(maximum, value);
-  }
-  return Number.isSafeInteger(maximum + 1) ? String(maximum + 1) : '';
+  return getNextPatientFileNo(patients);
 }
 
 export function validateWalkInAmounts(examinationFee: number, services: readonly SessionServiceItem[], paid: number, discount: number): string | null {
   if ([examinationFee, paid, discount, ...services.map(item => item.price)].some(value => !Number.isFinite(value) || value < 0)) return 'أدخل مبالغ صحيحة لا تقل عن صفر.';
   if (services.some(item => !item.name.trim())) return 'اكتب اسم كل خدمة أو احذف السطر الفارغ.';
+  if (services.some(item => item.tooth !== undefined && item.tooth !== null && (typeof item.tooth !== 'string' || !/^(?:ur|ul|lr|ll)(?:[1-8]|[A-E])$/.test(item.tooth)))) return 'اختَر سنًا صحيحًا لكل خدمة، أو اترك تحديد السن فارغًا.';
   const total = examinationFee + services.reduce((sum, item) => sum + item.price, 0);
   if (!Number.isFinite(total) || paid + discount > total + 0.000001) return 'الدفعة والخصم أكبر من إجمالي الزيارة. راجع المبالغ.';
   return null;

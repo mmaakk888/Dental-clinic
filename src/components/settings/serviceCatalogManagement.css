@@ -8,7 +8,7 @@
 .sc-header p { font-size:12px; color:#667e6e; line-height:1.9; margin-top:5px; }
 .sc-status { border:1px solid #d4e2d8; border-radius:10px; padding:8px 11px; background:white; font-size:11px; font-weight:700; color:#466f53; }
 .sc-status[data-dirty='true'] { color:#87662e; border-color:#e6d7b7; background:#fffaf0; }
-.sc-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; min-width:0; background:#eef3ef; border-radius:14px; padding:6px; }
+.sc-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; min-width:0; background:#eef3ef; border-radius:14px; padding:6px; }
 .sc-tabs button { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; min-width:0; min-height:48px; border-radius:10px; font-weight:700; font-size:13px; line-height:1.6; color:#627769; padding:9px; overflow-wrap:anywhere; transition:background .16s ease,color .16s ease; }
 .sc-tabs button[aria-pressed='true'] { background:white; color:#265c44; box-shadow:0 1px 5px #203e3012; }
 .sc-tabs svg { width:19px; height:19px; flex-shrink:0; }
@@ -42,6 +42,12 @@
 .sc-row-info { flex:1; min-width:0; }
 .sc-row-info strong { display:block; font-size:14px; font-weight:700; line-height:1.8; overflow-wrap:anywhere; }
 .sc-row-info small { display:block; margin-top:2px; color:#78887c; font-size:10px; line-height:1.8; }
+.sc-clinical-row { display:grid; grid-template-columns:20px minmax(0,1fr) minmax(120px,170px) auto; }
+.sc-clinical-price { min-width:0; }
+.sc-clinical-price label { display:flex; justify-content:space-between; gap:6px; font-size:11px; color:#627769; font-weight:700; }
+.sc-clinical-price input { width:100%; min-width:0; min-height:44px; margin-top:5px; padding:8px 10px; border:1px solid #d5e0d8; border-radius:9px; font-size:16px; background:#fcfdfc; }
+.sc-clinical-price input[aria-invalid='true'] { border-color:#bd7777; background:#fff5f5; }
+.sc-clinical-price small { display:block; margin-top:4px; color:#7b805e; font-size:10px; line-height:1.8; overflow-wrap:anywhere; }
 .sc-row-actions { display:flex; gap:3px; flex-shrink:0; }
 .sc-icon-button { display:flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:10px; border:1px solid #dfebe2; background:#f7faf8; color:#527560; flex-shrink:0; }
 .sc-icon-button svg { width:18px; height:18px; }
@@ -89,6 +95,6 @@ html[data-clinic-compact-viewport] .sc-dialog-body { overflow-y:visible; }
 .sc-discard h3 { font-weight:800; }
 @media(max-width:599px) { .sc-header,.sc-section-card { padding:14px; border-radius:17px; } .sc-header { gap:9px; } .sc-header h2 { font-size:18px; } .sc-header p { font-size:11px; } .sc-heading-icon { width:38px; height:38px; } .sc-status { font-size:10px; padding:7px; } .sc-tabs button { gap:5px; font-size:11px; padding:8px 4px; } .sc-tabs button > span { display:none; } .sc-row { padding:8px 6px; gap:6px; } .sc-row-number { width:14px; } .sc-row-info strong { font-size:13px; } .sc-row-actions { gap:3px; } .sc-protected { padding:4px; } .sc-price-row { grid-template-columns:minmax(0,1fr); padding:13px; gap:11px; } .sc-price-field { width:100%; } .sc-save-bar { padding:12px; } .sc-save-bar .sc-actions { width:100%; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .sc-actions .sc-button { min-width:0; font-size:11px; padding-inline:7px; } .sc-dialog-header,.sc-dialog-body { padding:16px; } .sc-dialog-footer { padding:13px 16px; } }
 @media(max-height:519px) { .sc-dialog-header { padding:10px 15px; } .sc-dialog-body { padding:13px 15px; } .sc-dialog-footer { padding:10px 15px; } }
-@media(max-width:599px) { .sc-tabs button { flex-direction:column; min-height:66px; gap:4px; } }
+@media(max-width:599px) { .sc-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); } .sc-tabs button { flex-direction:column; min-height:66px; gap:4px; } .sc-clinical-row { grid-template-columns:14px minmax(0,1fr) auto; } .sc-clinical-price { grid-column:2 / -1; grid-row:2; padding-bottom:3px; } .sc-clinical-row .sc-row-actions { grid-column:3; grid-row:1; } }
 @media(prefers-reduced-motion:reduce) { .sc-manager button { transition:none; } }
 .sc-manager[data-section='labs'] > .sc-header { display:none; }

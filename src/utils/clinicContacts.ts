@@ -85,6 +85,52 @@ export function findPatientsByPhone(patients: readonly Patient[], phone: string)
   return patients.filter(patient => normalizeContactPhone(patient.mobile) === normalized);
 }
 
+export type ContactPatientFile = Pick<Patient, 'id' | 'name'>;
+export interface ClinicContactDirectoryRow {
+  readonly id: string;
+  readonly name: string;
+  readonly mobile: string;
+  readonly contact?: ClinicContact;
+  readonly matches: readonly ContactPatientFile[];
+  readonly search: readonly ContactSearchEntry[];
+}
+
+/** Derived communication directory only: no patient-to-contact writes, merging
+ * or consent changes. Shared canonical family numbers retain all file names. */
+export function buildClinicContactDirectory(contacts: readonly ClinicContact[], patients: readonly Pick<Patient, 'id' | 'name' | 'mobile'>[]): ClinicContactDirectoryRow[] {
+  const files = new Map<string, ContactPatientFile[]>();
+  for (const patient of patients) {
+    const phone = normalizeContactPhone(patient.mobile);
+    if (!phone) continue;
+    const matches = files.get(phone) || [];
+    matches.push({ id: patient.id, name: patient.name });
+    files.set(phone, matches);
+  }
+  const represented = new Set<string>();
+  const rows: ClinicContactDirectoryRow[] = contacts.map(contact => {
+    const phone = normalizeContactPhone(contact.mobile), matches = files.get(phone) || [];
+    if (phone) represented.add(phone);
+    return { id: `contact:${contact.id}`, name: contact.name, mobile: contact.mobile, contact, matches,
+      search: [createContactSearchEntry(contact), ...matches.map(file => createContactSearchEntry({ name: file.name, mobile: contact.mobile }))] };
+  });
+  for (const patient of patients) {
+    if (!patient.mobile.trim()) continue;
+    const phone = normalizeContactPhone(patient.mobile);
+    if (phone && represented.has(phone)) continue;
+    if (phone) represented.add(phone);
+    // Keep a malformed legacy number visible for correction, but do not link
+    // it to other records by partial digits or infer a canonical family group.
+    const matches = phone ? files.get(phone)! : [{ id: patient.id, name: patient.name }];
+    rows.push({ id: phone ? `patient-phone:${phone}` : `patient:${patient.id}`, name: patient.name, mobile: patient.mobile, matches,
+      search: matches.map(file => createContactSearchEntry({ name: file.name, mobile: patient.mobile })) });
+  }
+  return rows;
+}
+
+export function clinicDirectoryRowMatchesSearch(row: ClinicContactDirectoryRow, query: ReturnType<typeof prepareContactSearchQuery>): boolean {
+  return row.search.some(entry => indexedContactMatchesSearch(entry, query));
+}
+
 export function clinicContactValidationError(input: unknown): string | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return 'بيانات جهة الاتصال غير صالحة.';
   const contact = input as ClinicContact;

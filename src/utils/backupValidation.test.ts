@@ -51,6 +51,25 @@ test('whole backup validation accepts shipped legacy fixtures without repricing 
   assert.deepEqual(value.labels, input.labels);
 });
 
+test('clinical prices and examination defaults are optional backup settings, not historical visit migration', () => {
+  const input = { clinicalPrices: { 'حشو': 350, 'تنظيف': 0 }, examinationFee: 0, crownPrices: { PFM: 1200, 'نوع مخصص': 2500 } };
+  const result = assertClinicBackup(input);
+  assert.deepEqual(result, input);
+  result.clinicalPrices!['حشو'] = 999;
+  assert.equal(input.clinicalPrices['حشو'], 350);
+  const legacy = assertClinicBackup({ crownPrices: { PFM: 1200 } });
+  assert.equal('clinicalPrices' in legacy, false); assert.equal('examinationFee' in legacy, false);
+  for (const clinicalPrices of [[], null, 'bad', { 'حشو': -1 }, { 'حشو': '350' }, { 'حشو': 1, 'حَشو': 2 }, { '': 100 }]) assert.equal(validateClinicBackup({ clinicalPrices }).valid, false);
+  for (const examinationFee of [-1, null, '100', NaN, Infinity, 100.123]) assert.equal(validateClinicBackup({ examinationFee }).valid, false);
+});
+
+test('service-specific tooth backup binding accepts only exact permanent or primary quadrant notation', () => {
+  const patient = { id: '401', name: 'مريض اختبار', age: 30, mobile: '', sessions: [{ id: 'session-test', type: 'حشو', date: '2026-10-10', amount: 100, paid: 0, services: [{ id: 'service-test', name: 'حشو', price: 100 }] }], payments: [] };
+  assert.equal(validateClinicBackup({ patients: [patient] }).valid, true);
+  for (const tooth of [null, 'ur1', 'll8', 'ulA', 'lrE']) assert.equal(validateClinicBackup({ patients: [{ ...patient, sessions: [{ ...patient.sessions[0], services: [{ ...patient.sessions[0].services[0], tooth }] }] }] }).valid, true);
+  for (const tooth of ['ur0', 'ur9', 'UR1', 'primaryurA', 'urA ', 'ur1junk', 'ur\n1', 1, [], {}]) assert.equal(validateClinicBackup({ patients: [{ ...patient, sessions: [{ ...patient.sessions[0], services: [{ ...patient.sessions[0].services[0], tooth }] }] }] }).valid, false, String(tooth));
+});
+
 test('whole backup validation rejects null/malformed nested records and duplicate stable IDs', () => {
   const mutations: ((backup: any) => void)[] = [
     data => { data.labs[0].services = null; }, data => { data.patients[0].sessions = null; },
@@ -153,4 +172,21 @@ test('receipt and invoice item schemas reject corrupt nested totals, nonfinite d
   assert.equal(validateClinicBackup(invoice).valid, true); invoice.expenses[0].items[0].quantity = 0; assert.equal(validateClinicBackup(invoice).valid, false);
   const schedule: any = fixtures(); schedule.users[0].accessSchedule = { enabled:true,days:[],startTime:'09:00',endTime:'17:00',timezone:'Africa/Cairo' };
   assert.equal(validateClinicBackup(schedule).valid, false);
+});
+
+test('prosthetic routing round-trips and partial legacy imports cannot orphan retained lab/material links', () => {
+  const labs = [{ id: 'synthetic-route-lab', name: 'معمل مصطنع', services: [{ id: 'synthetic-route-service', name: 'زيركون', category: 'fixed' as const, price: 300, unitLabel: 'كراون' }] }];
+  const prostheticRouting = { defaultLabs: { fixed: labs[0].id }, overrides: [{ kind: 'fixed' as const, material: 'زيركون', labId: labs[0].id, labServiceId: labs[0].services[0].id }] };
+  const crownPrices = { 'زيركون': 1500 };
+  const input = { labs, crownPrices, prostheticRouting };
+  const value = assertClinicBackup(input);
+  assert.deepEqual(value.prostheticRouting, prostheticRouting);
+  assert.notEqual(value.prostheticRouting!.overrides[0], prostheticRouting.overrides[0]);
+  const context = { labs, crownPrices, prostheticRouting };
+  assert.equal(validateClinicBackup({ labs: [] }, context).valid, false);
+  assert.equal(validateClinicBackup({ crownPrices: {} }, context).valid, false);
+  assert.equal(validateClinicBackup({ labs: [{ ...labs[0], services: [] }] }, context).valid, false);
+  const legacy = assertClinicBackup({ clinicName: 'عيادة مصطنعة' }, context);
+  assert.equal('prostheticRouting' in legacy, false, 'omitted legacy sections remain omitted rather than being copied into the imported draft');
+  assert.equal(validateClinicBackup({ labs: [], crownPrices: {}, prostheticRouting: { defaultLabs: {}, overrides: [] } }, context).valid, true);
 });

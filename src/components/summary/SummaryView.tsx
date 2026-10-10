@@ -9,6 +9,7 @@ import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from '../../utils/expenseUtils';
+import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
 import './SummaryView.css';
 
 type SummaryTab = 'overview' | 'expenses' | 'analytics';
@@ -27,6 +28,8 @@ interface SummaryViewProps {
   expenses: Expense[];
   materialUsages: MaterialUsage[];
   isPrivacyMode?: boolean;
+  canExportData?: boolean;
+  onAuthorizeDataExport?: () => void;
   capabilities?: { viewExpenses?: boolean; viewProfits?: boolean; financialReports?: boolean };
   isOpenAddExpenseModal?: boolean;
   onCloseAddExpenseModal?: () => void;
@@ -49,6 +52,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   expenses,
   materialUsages,
   isPrivacyMode = false,
+  canExportData = false,
+  onAuthorizeDataExport,
   capabilities,
   isOpenAddExpenseModal = false,
   onCloseAddExpenseModal,
@@ -65,6 +70,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const canViewProfits = capabilities?.viewProfits !== false;
   const canViewReports = capabilities?.financialReports !== false;
   const canViewAnalytics = canViewExpenses && canViewReports;
+  const canDownloadImages = canExportData && canViewExpenses && !isPrivacyMode && Boolean(onAuthorizeDataExport);
 
   const [activeTab, setActiveTab] = useState<SummaryTab>('overview');
   const switcherAnchorRef = useRef<HTMLDivElement>(null);
@@ -997,15 +1003,19 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
             </div>
 
             <div className="flex flex-wrap gap-2 items-center justify-between pt-2 text-xs">
-              <a
-                href={activeInvoiceLightbox.imageUrl}
-                download={`فاتورة_${activeInvoiceLightbox.title}_${activeInvoiceLightbox.date}.png`}
-                target="_blank"
-                rel="noreferrer"
+              {canDownloadImages && <button
+                type="button"
+                onClick={() => {
+                  try {
+                    downloadAuthorizedImage(activeInvoiceLightbox.imageUrl, `فاتورة_${activeInvoiceLightbox.title}_${activeInvoiceLightbox.date}.png`, canDownloadImages, onAuthorizeDataExport);
+                  } catch {
+                    showToast('تعذّر تنزيل الصورة؛ راجع صلاحية الحساب والجلسة.', 'error');
+                  }
+                }}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer transition-colors shadow-xs"
               >
-                تحميل الصورة / فتح بنفذة جديدة ↗
-              </a>
+                تنزيل صورة الفاتورة
+              </button>}
               <button
                 type="button"
                 onClick={() => setActiveInvoiceLightbox(null)}
@@ -1040,6 +1050,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
         expense={viewingExpenseDetail}
         onClose={() => setViewingExpenseDetail(null)}
         isPrivacyMode={isPrivacyMode}
+        canExportData={canDownloadImages}
+        onAuthorizeDataExport={onAuthorizeDataExport}
         onEdit={(exp) => {
           setViewingExpenseDetail(null);
           handleOpenEditExpense(exp);

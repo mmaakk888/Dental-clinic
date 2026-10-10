@@ -21,6 +21,9 @@ export function mergeLabCaseWorkflowUpdate(current: LabCase, incoming: LabCase):
   if (!current || !incoming || current.id !== incoming.id) {
     throw new Error('معرّف حالة المعمل لا يطابق الحالة المطلوب تحديثها.');
   }
+  if (current.creationFingerprint && current.linkedSessionId !== incoming.linkedSessionId) {
+    throw new Error('هذه التركيبة مرتبطة تلقائيًا بجلسة المريض؛ لا يمكن فصلها أو نقلها إلى جلسة أخرى.');
+  }
   return { ...cloneWorkflowSnapshot(current), status: incoming.status, linkedSessionId: incoming.linkedSessionId };
 }
 

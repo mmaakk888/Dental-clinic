@@ -1,6 +1,7 @@
 import type { UILabels, UserPermission } from '../types';
 import { DEFAULT_UI_LABELS } from '../data/initialData';
 import { isValidDockAppearance } from './dockAppearance';
+import { isValidHomeLayout } from './homeLayout';
 
 export type NavigationSectionKey = 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings';
 export type NavigationKey = 'home' | NavigationSectionKey;
@@ -125,6 +126,7 @@ export function validateContentDraft(input: unknown, baseline?: unknown): Conten
   const baselineDraft = baseline === undefined ? undefined : cloneContentDraft(baseline);
   const errors: Record<string, string> = {};
   if (!isValidDockAppearance(record(record(input).labels).dockAppearance)) errors.dockAppearance = 'اختَر إعدادات صحيحة للشريط العائم.';
+  if (!isValidHomeLayout(record(record(input).labels).homeLayout)) errors.homeLayout = 'راجع ترتيب الرئيسية وخيارات عرضها قبل الحفظ.';
   const validateLine = (raw: unknown, key: string, max: number, required: boolean): string => {
     if (typeof raw !== 'string') { errors[key] = 'اكتب نصًا صحيحًا لهذا الحقل.'; return ''; }
     const trimmed = raw.trim();

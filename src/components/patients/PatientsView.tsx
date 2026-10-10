@@ -21,7 +21,7 @@ import {
   SlidersHorizontal,
   ChevronDown
 } from 'lucide-react';
-import { Patient, NavigationOrigin, Appointment, LabCase, User } from '../../types';
+import { Patient, NavigationOrigin, Appointment, LabCase, User, ClinicContact } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { canPerformAction } from '../../utils/rbac';
@@ -30,6 +30,7 @@ import { getPatientFinancialSummary } from '../../utils/financials';
 import { cleanEgyptianPhone, getWhatsAppUrl as buildWhatsAppUrl } from '../../utils/whatsappUtils';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import { createPatientDirectoryIndex, normalizeDirectoryDigits, searchPatientDirectory, type PatientDirectorySort } from '../../utils/patientDirectory';
+import { createPatientRegistrationIndex, findPatientRegistrationMatches, getNextPatientFileNo } from '../../utils/patientRegistration';
 import './patientDirectory.css';
 
 const clinicDateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -37,15 +38,17 @@ const clinicToday = () => clinicDateFormatter.format(new Date());
 const normalizeDigits = normalizeDirectoryDigits;
 const emptyAppointments: Appointment[] = [];
 const emptyLabCases: LabCase[] = [];
+const emptyContacts: ClinicContact[] = [];
 
 interface PatientsViewProps {
   patients: Patient[];
+  contacts?: ClinicContact[];
   appointments?: Appointment[];
   labCases?: LabCase[];
   isPrivacyMode?: boolean;
   currentUser?: User | null;
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
-  onSavePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string) => void | Promise<void>;
+  onSavePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string) => string | void | Promise<string | void>;
   onDeletePatient: (patientId: string) => void | Promise<void>;
   onSaveAppointment?: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
   onBackToHome: () => void;
@@ -79,6 +82,7 @@ const highlightText = (text: string, query: string) => {
 
 export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   patients,
+  contacts = emptyContacts,
   appointments = emptyAppointments,
   labCases = emptyLabCases,
   isPrivacyMode = true,
@@ -142,22 +146,13 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [allergy, setAllergy] = useState('');
   const [showMedicalField, setShowMedicalField] = useState(false);
   const [notes, setNotes] = useState('');
-
-  // Auto suggest next file number
-  const getNextFileNo = () => {
-    let maximum: number | undefined;
-    for (const patient of patients) {
-      const id = normalizeDigits(patient.id);
-      if (!/^\d+$/.test(id)) continue;
-      const number = Number.parseInt(id, 10);
-      if (maximum === undefined || number > maximum) maximum = number;
-    }
-    return maximum === undefined ? '101' : (maximum + 1).toString();
-  };
+  const registrationIndex = useMemo(() => createPatientRegistrationIndex(patients, contacts), [patients, contacts]);
+  const registrationWarnings = useMemo(() => isModalOpen ? findPatientRegistrationMatches(registrationIndex,
+    { name, mobile }, { excludePatientId: editingPatient?.id }) : [], [isModalOpen, registrationIndex, name, mobile, editingPatient?.id]);
 
   const handleOpenAddModal = () => {
     setEditingPatient(null);
-    setFileNo(getNextFileNo());
+    setFileNo(getNextPatientFileNo(patients));
     setName('');
     setMobile('');
     setAge('');
@@ -218,7 +213,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
     const todayStr = clinicToday();
 
-    void run(async () => { await onSavePatient({
+    void run(async () => { const actualFileNo = await onSavePatient({
       id: savedFileNo,
       name: name.trim(),
       mobile: savedMobile,
@@ -231,7 +226,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
     setIsModalOpen(false);
     showToast(editingPatient ? 'تم تحديث بيانات الحالة بنجاح' : 'تم حفظ الحالة والدخول للملف مباشرة', 'success');
-    onSelectPatient(savedFileNo, 'patients');
+    onSelectPatient(typeof actualFileNo === 'string' ? actualFileNo : savedFileNo, 'patients');
     });
   };
 
@@ -767,18 +762,18 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    رقم الملف الورقي <span className="text-rose-500">*</span>
+                    رقم الملف {editingPatient ? 'الحالي' : 'التلقائي'} <span className="text-rose-500">*</span>
                   </label>
                   <input
                     id="input-fileNo"
                     type="text"
-                    readOnly={Boolean(editingPatient)}
+                    readOnly
                     inputMode="numeric"
                     value={fileNo}
-                    onChange={e => setFileNo(e.target.value)}
                     placeholder="مثال: 106"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-purple-600 focus:bg-white"
                   />
+                  {!editingPatient && <p className="patient-file-number-hint">يتحدد تلقائيًا بعد آخر رقم ملف؛ يُراجع الرقم مرة أخرى عند الحفظ.</p>}
                 </div>
 
                 <div>
@@ -840,6 +835,16 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
                   />
                 </div>
               </div>
+
+              {registrationWarnings.length > 0 && <section className="patient-registration-warnings" role="status" aria-label="مراجعة أسماء وأرقام موجودة">
+                <h3>راجع السجلات الموجودة قبل حفظ الملف</h3>
+                <p>تطابق الرقم أو تشابه الاسم تنبيه فقط؛ قد تستخدم الأسرة رقمًا واحدًا. لا يتم دمج أو تعديل أي سجل تلقائيًا.</p>
+                <ul>{registrationWarnings.map(match => <li key={`${match.source}:${match.id}`}>
+                  <div><strong dir="auto">{match.name}</strong><span>{match.source === 'patient' ? <>ملف <bdi>#{match.fileNo}</bdi></> : 'جهة اتصال محفوظة'}</span><small>{match.reason === 'name' ? 'اسم مشابه · راجع الهوية' : match.reason === 'phone-and-name' ? 'نفس رقم الموبايل واسم مشابه' : 'نفس رقم الموبايل'}</small></div>
+                  {match.source === 'patient' && <button type="button" disabled={saving} onClick={() => askConfirm({ title: `فتح الملف #${match.fileNo}؟`, message: 'سيُفتح الملف الموجود بدل متابعة هذه المسودة. لم يُحفظ ملف جديد أو تُدمج بيانات.', confirmLabel: 'فتح الملف الموجود', tone: 'warning', onConfirm: () => { setIsModalOpen(false); onSelectPatient(match.id, 'patients'); } })}>فتح الملف</button>}
+                </li>)}</ul>
+                <small>يمكنك الاستمرار وحفظ ملف مستقل بعد مراجعة الاسم والرقم.</small>
+              </section>}
 
               <div className="optional-medical-field">
                 <button type="button" onClick={() => setShowMedicalField(value => !value)} aria-expanded={showMedicalField} aria-controls="patient-optional-medical-field" className="optional-medical-trigger">

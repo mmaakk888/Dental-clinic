@@ -164,3 +164,67 @@ test('general payments appear in the selected day drill-down as cash', () => {
   assert.equal(report.rows[0].patientName, 'مريض اختبار');
   assert.equal(report.rows[0].proceduresText, 'دفعة سابقة');
 });
+
+test('report balance agrees with the current patient ledger including unallocated general receipts', () => {
+  const record = makePatient({ sessions: [makeSession({ amount: 100, discount: 0, paid: 20, paymentsLog: [
+    { id: 'session-receipt', amount: 20, date: '2026-09-20', createdAt: '2026-09-20T10:00:00Z' }
+  ] })], payments: [{ id: 'independent', amount: 40, date: '2026-09-21', createdAt: '2026-09-21T10:00:00Z' }] });
+  const report = calculateDailyCollections([record], () => true);
+  assert.equal(report.rows.length, 2);
+  assert.equal(report.totalIncomeCollected, 60);
+  assert.equal(report.totalOutstandingRemain, 40);
+  assert.deepEqual(report.rows.map(row => row.remainAmount), [40, 40]);
+  // A report of the later general receipt alone still exposes the SAME current
+  // file balance, without pretending that cash was applied to a specific tooth.
+  const later = calculateDailyCollections([record], day => day === '2026-09-21');
+  assert.equal(later.totalOutstandingRemain, 40);
+  assert.equal(later.rows[0].remainAmount, 40);
+});
+
+test('several visits and receipts count a current file debt only once, with no other files added', () => {
+  const record = makePatient({ sessions: [makeSession({ amount: 100, paid: 0, paymentsLog: [] }),
+    makeSession({ id: 'second-session', amount: 100, paid: 0, paymentsLog: [] })], payments: [
+    { id: 'general', amount: 50, date: '2026-09-20', createdAt: '2026-09-20T10:00:00Z' }
+  ] });
+  const excluded = makePatient({ id: 'other-file', sessions: [makeSession({ date: '2025-01-01', paid: 0, paymentsLog: [] })] });
+  const report = calculateDailyCollections([record, excluded], day => day === '2026-09-20');
+  assert.equal(report.rows.length, 3);
+  assert.equal(report.totalOutstandingRemain, 150);
+  assert.equal(report.visitedPatientsCount, 1);
+  assert.ok(report.rows.every(row => row.remainAmount === 150));
+});
+
+test('historical service labels cannot corrupt keyed revenue totals through object prototype names', () => {
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    const record = makePatient({ sessions: [makeSession({ amount: 20, paid: 20, examinationFee: 0,
+      services: [{ id: 'historical-label', name, price: 20 }], paymentsLog: [] })] });
+    const report = calculateDailyCollections([record], () => true);
+    assert.equal(report.procedureFeesCollectedByName[name], 20);
+    assert.equal(Object.values(report.procedureFeesCollectedByName).reduce((sum, amount) => sum + amount, 0), 20);
+  }
+});
+
+test('historical incomplete service breakdowns preserve all actual cash with an explicit unallocated category', () => {
+  const record = makePatient({ sessions: [makeSession({ amount: 500, paid: 400, time: undefined, paymentsLog: [],
+    services: [{ id: 'known-line', name: 'خدمة قديمة مسجلة', price: 100 }] })] });
+  const report = calculateDailyCollections([record], () => true);
+  assert.equal(report.totalIncomeCollected, 400);
+  assert.equal(report.procedureFeesCollectedByName['خدمة قديمة مسجلة'], 100);
+  assert.equal(report.procedureFeesCollectedByName['تحصيل غير موزع على خدمة'], 300);
+  assert.equal(Object.values(report.procedureFeesCollectedByName).reduce((sum, amount) => sum + amount, 0), report.totalIncomeCollected);
+  assert.equal(report.rows[0].servicesBreakdown.reduce((sum, item) => sum + item.paid, 0), report.rows[0].paidAmount);
+  assert.equal(report.rows[0].time, '—');
+});
+
+test('disjoint date filters allocate installments at their real position rather than skipping intervening receipts', () => {
+  const record = makePatient({ sessions: [makeSession({ amount: 300, examinationFee: 100,
+    services: [{ id: 'first-treatment', name: 'الخدمة الأولى', price: 100 }, { id: 'second-treatment', name: 'الخدمة الثانية', price: 100 }],
+    paymentsLog: [{ id: 'r1', date: '2026-09-20', amount: 100 }, { id: 'r2', date: '2026-09-21', amount: 100 }, { id: 'r3', date: '2026-09-22', amount: 100 }]
+  })] });
+  const report = calculateDailyCollections([record], day => day !== '2026-09-21');
+  assert.equal(report.totalIncomeCollected, 200);
+  assert.equal(report.examFeesCollected, 100);
+  assert.equal(report.procedureFeesCollectedByName['الخدمة الأولى'], 0);
+  assert.equal(report.procedureFeesCollectedByName['الخدمة الثانية'], 100);
+  assert.equal(Object.values(report.procedureFeesCollectedByName).reduce((sum, amount) => sum + amount, 0), 200);
+});

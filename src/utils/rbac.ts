@@ -25,6 +25,8 @@ export type RBACAction =
   | 'access_control_panel'
   | 'manage_users'
   | 'backup_restore'
+  | 'data_import'
+  | 'data_export'
   | 'print_prescription';
 
 /**
@@ -168,9 +170,14 @@ export function canPerformAction(user: User | null, action: RBACAction): boolean
       return perms.managePrices !== undefined ? perms.managePrices === true : perms.controlPanel === true;
     case 'financial_reports':
       return perms.financialReports !== undefined ? perms.financialReports === true : perms.summary === true;
-    case 'access_control_panel':
     case 'manage_users':
     case 'backup_restore':
+    case 'data_import':
+    case 'data_export':
+      // Fixed role policy: even a fully delegated secretary cannot transfer
+      // clinic data or promote an account to bypass the transfer restriction.
+      return false;
+    case 'access_control_panel':
       return perms.controlPanel === true;
     case 'print_prescription':
       return perms.patientView === true;

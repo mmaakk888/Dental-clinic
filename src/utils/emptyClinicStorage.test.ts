@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Storage, STORAGE_FAILURE_EVENT } from './storage';
+import { Storage, STORAGE_FAILURE_EVENT, PROSTHETIC_ROUTING_STORAGE_KEY } from './storage';
 import type { Appointment, ClinicContact, Expense, Lab, LabCase, MaterialUsage, Patient } from '../types';
 
 const local = new Map<string, string>();
@@ -82,7 +82,7 @@ test('changing operational defaults does not delete or replace existing saved re
   assert.deepEqual(local, before, 'reads never perform an implicit demo purge');
 });
 
-test('explicit empty clinic writes exactly seven arrays and preserves every other key/session', () => {
+test('explicit empty clinic writes seven arrays, clears dependent lab routing and preserves other config/session', () => {
   resetSyntheticStorage();
   Storage.saveBackupConfirmed(syntheticSnapshot());
   const preserved = {
@@ -109,13 +109,14 @@ test('explicit empty clinic writes exactly seven arrays and preserves every othe
   });
   try {
     Storage.clearOperationalDataConfirmed();
-    assert.deepEqual(writes, operationalKeys);
+    assert.deepEqual(writes, [...operationalKeys, PROSTHETIC_ROUTING_STORAGE_KEY]);
     assert.deepEqual(removals, []);
     for (const key of operationalKeys) assert.equal(local.get(key), '[]', key);
     for (const [key, value] of before) {
       if (!operationalKeys.includes(key as typeof operationalKeys[number])) assert.equal(local.get(key), value, key);
     }
-    assert.equal(local.size, before.size);
+    assert.deepEqual(Storage.getProstheticRouting(), { defaultLabs: {}, overrides: [] });
+    assert.equal(local.size, new Set([...before.keys(), PROSTHETIC_ROUTING_STORAGE_KEY]).size);
     assert.deepEqual(session, beforeSession);
     for (const value of Object.values(readOperationalLists())) assert.deepEqual(value, []);
     assert.deepEqual(Storage.getLabsFresh(), []);
@@ -123,13 +124,34 @@ test('explicit empty clinic writes exactly seven arrays and preserves every othe
   } finally { installAdapter(); }
 });
 
-test('explicit clear of missing lists persists empty arrays without creating account/config keys', () => {
+test('explicit clear of missing lists persists empty arrays and empty routing without creating account/catalog keys', () => {
   resetSyntheticStorage();
   Storage.clearOperationalDataConfirmed();
-  assert.deepEqual([...local.keys()], operationalKeys);
-  for (const value of local.values()) assert.equal(value, '[]');
+  assert.deepEqual([...local.keys()], [...operationalKeys, PROSTHETIC_ROUTING_STORAGE_KEY]);
+  for (const key of operationalKeys) assert.equal(local.get(key), '[]');
+  assert.deepEqual(Storage.getProstheticRouting(), { defaultLabs: {}, overrides: [] });
   assert.equal(session.size, 0);
   assert.deepEqual(Storage.getBackupDataFresh().patients, []);
+});
+
+test('empty clinic clears pointers to deleted labs and rolls back routing together with all lists on failed confirmation', () => {
+  resetSyntheticStorage();
+  Storage.saveBackupConfirmed(syntheticSnapshot());
+  Storage.saveProstheticRouting({ defaultLabs: { fixed: 'synthetic-lab' }, overrides: [] });
+  const before = new Map(local);
+  let failOnce = true;
+  installAdapter({ ...adapter(local), setItem(key, value) {
+    local.set(key, value);
+    if (key === PROSTHETIC_ROUTING_STORAGE_KEY && failOnce) { failOnce = false; throw new Error('synthetic quota'); }
+  } });
+  try {
+    assert.throws(() => Storage.clearOperationalDataConfirmed(), /لم تُحفظ/);
+    assert.deepEqual(local, before);
+    assert.equal(Storage.getProstheticRouting().defaultLabs.fixed, 'synthetic-lab');
+  } finally { installAdapter(); }
+  Storage.clearOperationalDataConfirmed();
+  assert.deepEqual(Storage.getProstheticRouting(), { defaultLabs: {}, overrides: [] });
+  assert.deepEqual(Storage.getBackupDataFresh().prostheticRouting, { defaultLabs: {}, overrides: [] });
 });
 
 test('a thrown write at any operational key rolls back earlier writes and leaves caches/session intact', () => {

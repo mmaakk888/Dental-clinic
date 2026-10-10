@@ -2,22 +2,27 @@ import type { Appointment, ClinicContact, DrugCatalogItem, Expense, Lab, LabCase
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
 import { cloneContentDraft } from './clinicContent';
 import { isValidDockAppearance } from './dockAppearance';
+import { isValidHomeLayout } from './homeLayout';
 import { normalizeHexColor } from './clinicIdentity';
-import { normalizeServiceName } from './serviceCatalog';
+import { normalizeServiceName, parseCatalogPrice, validateServiceName } from './serviceCatalog';
 import { canPerformAction } from './rbac';
 import { validateAccountSchedule } from './userAccounts';
 import { clinicContactValidationError, normalizeContactPhone } from './clinicContacts';
 import { canonicalFileNumber } from './clinicMutations';
+import { validateProstheticRouting } from './prostheticRouting';
+import type { ProstheticRoutingSettings } from './prostheticRouting';
 
 export interface ValidatedClinicBackup {
   patients?: Patient[]; appointments?: Appointment[]; labs?: Lab[]; labCases?: LabCase[];
   contacts?: ClinicContact[];
   expenses?: Expense[]; materialUsages?: MaterialUsage[]; users?: User[];
   serviceTypes?: string[]; crownPrices?: Record<string, number>; drugCatalog?: DrugCatalogItem[];
+  clinicalPrices?: Record<string, number>; examinationFee?: number;
+  prostheticRouting?: ProstheticRoutingSettings;
   whatsappSettings?: WhatsappSettings; clinicName?: string; clinicLogo?: string | null;
   theme?: ThemeSettings; labels?: UILabels; tileOrder?: string[];
 }
-export interface BackupValidationContext { patients?: Patient[]; labs?: Lab[]; labCases?: LabCase[]; appointments?: Appointment[] }
+export interface BackupValidationContext { patients?: Patient[]; labs?: Lab[]; labCases?: LabCase[]; appointments?: Appointment[]; prostheticRouting?: ProstheticRoutingSettings; crownPrices?: Record<string, number> }
 export type BackupValidationResult = { valid: true; value: ValidatedClinicBackup; errors: [] }
   | { valid: false; value: null; errors: string[] };
 
@@ -28,7 +33,7 @@ const MAX_MONEY = 1_000_000_000;
 type RecordValue = Record<string, any>;
 const isRecord = (value: unknown): value is RecordValue => value !== null && typeof value === 'object' && !Array.isArray(value)
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-const knownSections = ['patients', 'contacts', 'appointments', 'labs', 'labCases', 'expenses', 'materialUsages', 'users', 'serviceTypes', 'crownPrices', 'drugCatalog', 'whatsappSettings', 'clinicName', 'clinicLogo', 'theme', 'labels', 'tileOrder'] as const;
+const knownSections = ['patients', 'contacts', 'appointments', 'labs', 'labCases', 'expenses', 'materialUsages', 'users', 'serviceTypes', 'crownPrices', 'clinicalPrices', 'examinationFee', 'prostheticRouting', 'drugCatalog', 'whatsappSettings', 'clinicName', 'clinicLogo', 'theme', 'labels', 'tileOrder'] as const;
 
 /** Validate the entire input before the caller performs any state or storage writes.
  * Missing legacy sections stay absent; safe optional defaults do not invent charges.
@@ -157,6 +162,16 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
       number(session, 'amount', sessionPath, { required: true }); number(session, 'paid', sessionPath, { defaultValue: 0 });
       number(session, 'remain', sessionPath, { defaultValue: Math.max(0, session.amount - (session.discount || 0) - session.paid) });
       money(session, ['discount', 'examinationFee', 'treatmentFee'], sessionPath);
+      if (session.prosthetic !== undefined) {
+        if (!isRecord(session.prosthetic)) fail(`${sessionPath}.prosthetic`);
+        else {
+          choice(session.prosthetic, 'kind', `${sessionPath}.prosthetic`, ['fixed', 'removable'], true);
+          text(session.prosthetic, 'material', `${sessionPath}.prosthetic`, { required: true, max: 160 });
+          number(session.prosthetic, 'units', `${sessionPath}.prosthetic`, { required: true, min: 1, max: 100 });
+          if (!Number.isInteger(session.prosthetic.units)) fail(`${sessionPath}.prosthetic.units`);
+          number(session.prosthetic, 'unitPrice', `${sessionPath}.prosthetic`, { required: true });
+        }
+      }
       if (typeof session.discount === 'number' && session.discount > session.amount) fail(`${sessionPath}.discount`);
       date(session, 'date', sessionPath, true); date(session, 'payDate', sessionPath);
       strings(session, ['toothNum', 'toothLabel', 'chiefComplaint', 'diagnosis', 'procedurePerformed', 'prescriptionNotes', 'visitNotes', 'doctorName', 'time'], sessionPath);
@@ -166,6 +181,8 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
       list(session, 'paymentsLog', sessionPath, receipt, { defaults: true });
       list(session, 'services', sessionPath, (service, servicePath) => {
         text(service, 'name', servicePath, { required: true, max: 200 }); number(service, 'price', servicePath, { required: true }); money(service, ['paid', 'discount'], servicePath);
+        if (service.tooth !== undefined && service.tooth !== null
+          && (typeof service.tooth !== 'string' || !/^(ur|ul|lr|ll)([1-8]|[A-E])$/.test(service.tooth))) fail(`${servicePath}.tooth`);
       });
     }, { defaults: true });
     list(row, 'payments', path, receipt, { defaults: true });
@@ -211,6 +228,9 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
   list(data, 'labCases', 'backup', (row, path) => {
     ['labId', 'patientId', 'fileNo', 'labName', 'patientName', 'type', 'subType', 'unitLabel'].forEach(key => text(row, key, path, { required: true, max: 200 }));
     text(row, 'linkedSessionId', path, { max: 200 }); number(row, 'units', path, { required: true, min: .000001, max: 10_000 });
+    text(row, 'labServiceId', path, { max: 200 }); text(row, 'creationFingerprint', path, { max: 6000 });
+    if (row.teethIds !== undefined && (!Array.isArray(row.teethIds) || row.teethIds.length > 32 || new Set(row.teethIds).size !== row.teethIds.length
+      || row.teethIds.some((id: unknown) => typeof id !== 'string' || !/^(ur|ul|lr|ll)([1-8]|[A-E])$/.test(id)))) fail(`${path}.teethIds`);
     ['labTotal', 'labPaid', 'patientTotal', 'patientPaid'].forEach(key => number(row, key, path, { required: true }));
     date(row, 'date', path, true); date(row, 'deliveryExpectedDate', path); text(row, 'note', path);
     choice(row, 'status', path, ['pending', 'ready', 'delivered', 'delayed', 'completed'], true); list(row, 'paymentsLog', path, receipt);
@@ -286,6 +306,19 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     if (!isRecord(data.crownPrices) || Object.keys(data.crownPrices).length > 1000) fail('backup.crownPrices');
     else Object.keys(data.crownPrices).forEach(key => { if (!key.trim() || key.length > 200) fail('backup.crownPrices'); number(data.crownPrices, key, 'backup.crownPrices', { required: true }); });
   }
+  if (data.clinicalPrices !== undefined) {
+    if (!isRecord(data.clinicalPrices) || Object.keys(data.clinicalPrices).length > 1000) fail('backup.clinicalPrices');
+    else Object.entries(data.clinicalPrices).forEach(([key, price], index) => {
+      if (!validateServiceName(key, Object.keys(data.clinicalPrices), index).valid || typeof price !== 'number' || !parseCatalogPrice(price).valid) fail(`backup.clinicalPrices.${key}`);
+    });
+  }
+  if (data.examinationFee !== undefined && (typeof data.examinationFee !== 'number' || !parseCatalogPrice(data.examinationFee).valid)) fail('backup.examinationFee');
+  const effectiveRouting = data.prostheticRouting !== undefined ? data.prostheticRouting : context.prostheticRouting;
+  const effectiveMaterials = data.crownPrices ?? context.crownPrices;
+  if (effectiveRouting !== undefined) {
+    try { validateProstheticRouting(effectiveRouting, data.labs ?? context.labs, effectiveMaterials ? Object.keys(effectiveMaterials) : undefined); }
+    catch { fail('backup.prostheticRouting', 'راجع المعامل الافتراضية وروابط خدمات التركيبات'); }
+  }
   if (data.clinicName !== undefined) text(data, 'clinicName', 'backup', { required: true, max: 100, line: true });
   image(data, 'clinicLogo', 'backup', true);
   if (data.theme !== undefined) {
@@ -313,6 +346,7 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
         else Object.keys(data.labels.navigationLabels).forEach(key => text(data.labels.navigationLabels, key, 'backup.labels.navigationLabels', { required: true, max: 200 }));
       }
       if (!isValidDockAppearance(data.labels.dockAppearance)) fail('backup.labels.dockAppearance');
+      if (!isValidHomeLayout(data.labels.homeLayout)) fail('backup.labels.homeLayout');
       if (!errors.length) data.labels = cloneContentDraft({ labels: data.labels }).labels;
     }
   }

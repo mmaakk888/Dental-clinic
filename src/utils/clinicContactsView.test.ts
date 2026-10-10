@@ -97,7 +97,7 @@ test('import dialog starts with file guidance and a disabled confirmation, not i
 
 test('transfer management groups patient/contact tools and describes summary export accurately without writes on render', () => {
   let operations = 0;
-  const markup = renderTransfer({ ...baseProps, canViewPatients: true, canImportPatients: true, canManageContacts: true, canExportPatientFinance: false, canExportFinancialReports: true,
+  const markup = renderTransfer({ ...baseProps, canTransferData: true, canViewPatients: true, canImportPatients: true, canManageContacts: true, canExportPatientFinance: false, canExportFinancialReports: true,
     onImportPatients: async () => { operations++; }, onImportContacts: async () => { operations++; }, onAuthorizeDataExport: () => { operations++; }, onAuthorizePatientImport: () => { operations++; }, onAuthorizeContactExport: () => { operations++; }, onExportFinancialReport: () => { operations++; } });
   assert.match(markup, /التصدير والاستيراد/); assert.match(markup, /ملفات المرضى/); assert.match(markup, /جهات الاتصال/); assert.match(markup, /التقارير المالية/);
   assert.match(markup, /استيراد ملفات المرضى/); assert.match(markup, /ليس نسخة احتياطية قابلة لاستعادة الجلسات والإيصالات/);
@@ -105,7 +105,14 @@ test('transfer management groups patient/contact tools and describes summary exp
 });
 
 test('patient imports are hidden without add permission and all transfer tools hidden without patient view permission', () => {
-  const props = { ...baseProps, canViewPatients: true, canImportPatients: false, canManageContacts: false, canExportPatientFinance: false, canExportFinancialReports: false };
+  const props = { ...baseProps, canTransferData: true, canViewPatients: true, canImportPatients: false, canManageContacts: false, canExportPatientFinance: false, canExportFinancialReports: false };
   assert.doesNotMatch(renderTransfer(props), /استيراد ملفات المرضى|التقارير المالية/);
   const denied = renderTransfer({ ...props, canViewPatients: false }); assert.doesNotMatch(denied, /تنزيل Excel|تنزيل CSV|استيراد ملفات المرضى/); assert.match(denied, /صلاحية عرض المرضى/);
+});
+
+test('data transfer view defaults denied despite all delegated flags, with no patient details or operations on render', () => {
+  const markup = renderTransfer({ ...baseProps, canViewPatients: true, canImportPatients: true, canManageContacts: true,
+    canExportPatientFinance: true, canExportFinancialReports: true, canManageFullBackup: true });
+  assert.match(markup, /للطبيب أو المدير فقط/);
+  assert.doesNotMatch(markup, /تنزيل Excel|تنزيل CSV|استيراد ملفات المرضى|type="file"|جهة اتصال تجريبية|PRIVATE_CLINICAL_NOTE/);
 });

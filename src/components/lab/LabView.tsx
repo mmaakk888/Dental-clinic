@@ -3,11 +3,15 @@ import { Microscope, ArrowRight, Plus, Phone, MapPin, DollarSign, Edit3, Trash2,
 import { Lab, LabCase, Patient } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
-import { allocateLabPayment, getLabCaseFinancials } from '../../utils/labFinancials';
+import { allocateLabPayment, getLabCaseFinancials, labMoneyCents } from '../../utils/labFinancials';
 import { BalanceProgressMeter, VisualFinancialCard } from '../common/FinancialBadge';
 import { cloneLab } from '../../utils/labPricing';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useConfirmedAction } from '../common/useConfirmedAction';
+import { ProstheticOrderForm } from '../ProstheticOrderForm';
+import type { ProstheticOrderInput } from '../../utils/prostheticWorkflow';
+import { getServiceGroup } from '../../utils/serviceCatalog';
+import { LabPaymentHistory } from './LabPaymentHistory';
 import './labView.css';
 
 interface LabViewProps {
@@ -15,6 +19,9 @@ interface LabViewProps {
   labCases: LabCase[];
   patients: Patient[];
   crownPrices: Record<string, number>;
+  examinationFee?: number;
+  onSaveProstheticOrder?: (input: ProstheticOrderInput) => void | Promise<void>;
+  canRegisterPayment?: boolean;
   onSaveLab: (lab: Omit<Lab, 'id'> & { id?: string }, baseline?: Lab) => void | Promise<void>;
   onDeleteLab: (labId: string) => void | Promise<void>;
   onSaveLabCase: (caseData: Omit<LabCase, 'id'>) => void | Promise<void>;
@@ -32,6 +39,9 @@ export const LabView: React.FC<LabViewProps> = ({
   labCases,
   patients,
   crownPrices,
+  examinationFee,
+  onSaveProstheticOrder,
+  canRegisterPayment = false,
   onSaveLab,
   onDeleteLab,
   onSaveLabCase,
@@ -61,11 +71,12 @@ export const LabView: React.FC<LabViewProps> = ({
 
   // Modals
   const [isLabModalOpen, setIsLabModalOpen] = useState(false);
+  const [isProstheticOpen, setIsProstheticOpen] = useState(false);
   const [isCaseModalOpen, setIsCaseModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
   React.useEffect(() => {
-    const isAnyModalOpen = isLabModalOpen || isCaseModalOpen || isPaymentModalOpen;
+    const isAnyModalOpen = isLabModalOpen || isCaseModalOpen || isPaymentModalOpen || isProstheticOpen;
     if (isAnyModalOpen) {
       document.body.classList.add('modal-open');
     } else {
@@ -74,7 +85,7 @@ export const LabView: React.FC<LabViewProps> = ({
     return () => {
       document.body.classList.remove('modal-open');
     };
-  }, [isLabModalOpen, isCaseModalOpen, isPaymentModalOpen]);
+  }, [isLabModalOpen, isCaseModalOpen, isPaymentModalOpen, isProstheticOpen]);
   
   const [editingLab, setEditingLab] = useState<Lab | null>(null);
   const [selectedCaseForPayment, setSelectedCaseForPayment] = useState<LabCase | null>(null);
@@ -124,7 +135,23 @@ export const LabView: React.FC<LabViewProps> = ({
   // Payment Form State
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
 
+  React.useEffect(() => {
+    if (!canViewFinancials) {
+      setIsPaymentModalOpen(false); setIsLabModalOpen(false); setIsCaseModalOpen(false);
+      setSelectedCaseForPayment(null); setPaymentAmount(''); setBulkAmount('');
+    }
+  }, [canViewFinancials]);
+
   const selectedLab = labs.find(l => l.id === selectedLabId);
+  // Keep only identity from the opened card; another tab/payment may have
+  // replaced its financial snapshot while this dialog is open.
+  const selectedPaymentCase = labCases.find(item => item.id === selectedCaseForPayment?.id);
+  const selectedPaymentRemaining = selectedPaymentCase ? Math.max(0, Math.round((selectedPaymentCase.labTotal - selectedPaymentCase.labPaid) * 100) / 100) : 0;
+  const openPaymentHistory = (item: LabCase) => {
+    setSelectedCaseForPayment(item);
+    setPaymentAmount('');
+    setIsPaymentModalOpen(true);
+  };
 
   const handleOpenAddLabModal = () => {
     setEditingLab(null);
@@ -184,7 +211,7 @@ export const LabView: React.FC<LabViewProps> = ({
   };
 
   const handleOpenAddCaseModal = () => {
-    if (!selectedLab) return;
+    if (!selectedLab || !canViewFinancials) return;
     if (!patients.length || !selectedLab.services.length) {
       showToast(!patients.length ? 'أضف ملف المريض أولًا قبل تسجيل حالة معمل' : 'حدّد خدمات المعمل وتكلفتها أولًا من قسم أسعار المعامل', 'warning');
       return;
@@ -202,7 +229,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const handleSaveLabCase = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedLab || saving) return;
+    if (!selectedLab || saving || !canViewFinancials) return;
 
     const targetPatient = patients.find(p => p.id === casePatientId);
     if (!targetPatient) {
@@ -217,7 +244,7 @@ export const LabView: React.FC<LabViewProps> = ({
     }
 
     const units = typeof caseUnits === 'number' ? caseUnits : 0;
-    if (!Number.isInteger(units) || units < 1) {
+    if (!Number.isInteger(units) || units < 1 || units > 100) {
       showToast('أدخل عدد وحدات صحيحًا أكبر من صفر', 'warning');
       return;
     }
@@ -231,12 +258,11 @@ export const LabView: React.FC<LabViewProps> = ({
       return;
     }
     const linkedSession = targetPatient.sessions.find(session => session.id === caseSessionId);
-    if (caseSessionId && !linkedSession) {
+    if (!linkedSession || (!linkedSession.prosthetic && getServiceGroup(linkedSession.type) !== 'prosthetic')) {
       showToast('الخدمة المحددة غير موجودة في ملف المريض، اختر الخدمة مرة أخرى', 'warning');
       return;
     }
-    const patientUnitPrice = crownPrices[targetService.name] ?? 0;
-    const patientTotal = linkedSession ? Math.max(0, linkedSession.amount - (linkedSession.discount || 0)) : patientUnitPrice * units;
+    const patientTotal = Math.max(0, linkedSession.amount - (linkedSession.discount || 0));
     if (!Number.isFinite(labTotal) || !Number.isFinite(patientTotal) || patientTotal < 0) {
       showToast('راجع أسعار الخدمة وعدد الوحدات قبل الحفظ', 'warning');
       return;
@@ -248,12 +274,13 @@ export const LabView: React.FC<LabViewProps> = ({
 
     await confirmSave(() => onSaveLabCase({
       linkedSessionId: caseSessionId || undefined,
+      labServiceId: targetService.id,
       labId: selectedLab.id,
       labName: selectedLab.name,
       patientId: targetPatient.id,
       patientName: targetPatient.name,
       fileNo: targetPatient.id,
-      type: targetService.category === 'fixed' ? 'تركيبات - ثابتة' : 'تركيبات - أخرى',
+      type: targetService.category === 'fixed' ? 'ثابت' : 'متحرك',
       subType: targetService.name,
       units,
       unitLabel: targetService.unitLabel,
@@ -277,13 +304,18 @@ export const LabView: React.FC<LabViewProps> = ({
     if (!selectedCaseForPayment) return;
 
     const amt = typeof paymentAmount === 'number' ? paymentAmount : 0;
-    if (!Number.isFinite(amt) || amt <= 0) {
+    let amountCents = 0;
+    try { amountCents = labMoneyCents(amt); } catch {
+      validationFail('labPaymentModal', 'input-lab-payment', 'أدخل مبلغًا صحيحًا بمنزلتين عشريتين على الأكثر.');
+      return;
+    }
+    if (amountCents <= 0) {
       validationFail('labPaymentModal', 'input-lab-payment', 'يرجى إدخال مبلغ دفع صحيح للمعمل');
       return;
     }
 
     const currentCase = labCases.find(item => item.id === selectedCaseForPayment.id);
-    if (!currentCase || amt > Math.max(0, currentCase.labTotal - currentCase.labPaid)) {
+    if (!currentCase || amt > Math.max(0, Math.round((currentCase.labTotal - currentCase.labPaid) * 100) / 100)) {
       showToast('المبلغ أكبر من المتبقي للمعمل أو غير صحيح', 'warning');
       return;
     }
@@ -348,21 +380,25 @@ export const LabView: React.FC<LabViewProps> = ({
     return <details className="lab-reservation w-full rounded-xl border border-teal-200 bg-teal-50 text-xs"><summary>التحصيل والمحجوز لهذه الحالة</summary><div className="p-3 pt-0 space-y-2">
       <label className="block font-bold">الخدمة المرتبطة بحساب المريض</label>
       <select className="w-full min-h-11 rounded-lg border border-slate-200 bg-white px-2" value={item.linkedSessionId || ''}
-        disabled={!onUpdateLabCase || saving}
+        disabled={!onUpdateLabCase || saving || !!item.creationFingerprint}
         onChange={e => {
           const nextId = e.target.value || undefined;
           void confirmSave(() => onUpdateLabCase?.({ ...item, linkedSessionId: nextId }));
         }}>
         <option value="">اختر الخدمة لحساب المحجوز</option>
-        {(patient?.sessions || []).filter(s => s.id === item.linkedSessionId || !labCases.some(c => c.patientId === item.patientId && c.linkedSessionId === s.id)).map(s =>
+        {(patient?.sessions || []).filter(s => s.id === item.linkedSessionId || ((s.prosthetic || getServiceGroup(s.type) === 'prosthetic') && !labCases.some(c => c.patientId === item.patientId && c.linkedSessionId === s.id))).map(s =>
           <option key={s.id} value={s.id}>{s.type} — {s.date} — {s.toothLabel || 'عام'}</option>)}
       </select>
+      {item.creationFingerprint && <p>ارتباط تلقائي ثابت بملف المريض؛ دفعاته تُسجّل داخل نفس الجلسة.</p>}
       {financial.linked ? <div className="grid grid-cols-2 gap-2">
+        {financial.patientTotal !== null && <><span>إجمالي هذه الخدمة: <strong>{financial.patientTotal.toLocaleString()} ج.م</strong></span><span>متبقي هذه الخدمة قبل الدفعات العامة: <strong>{Math.max(0, Math.round((financial.patientTotal - financial.collected) * 100) / 100).toLocaleString()} ج.م</strong></span></>}
+        {financial.patientFileRemaining !== null && <span>المتبقي بإجمالي ملف المريض: <strong>{financial.patientFileRemaining.toLocaleString()} ج.م</strong></span>}
         <span>المحصل للخدمة: <strong>{financial.collected.toLocaleString()} ج.م</strong></span>
         <span>محجوز للمعمل: <strong>{financial.reserved.toLocaleString()} ج.م</strong></span>
         <span>متبقي للمعمل: <strong>{financial.remaining.toLocaleString()} ج.م</strong></span>
         <span>المتاح بعد تكلفة المعمل: <strong>{financial.availableToClinic.toLocaleString()} ج.م</strong></span>
       </div> : <p className="text-amber-800">لم تُربط الخدمة بعد؛ لا يُحسب مبلغ محجوز لهذه الحالة.</p>}
+      {financial.linked && <p className="text-slate-500">الدفعات العامة تُحسب في إجمالي الملف، ولا نوزّعها تلقائيًا على هذه الخدمة أو نحجزها للمعمل.</p>}
     </div></details>;
   };
 
@@ -373,6 +409,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
   return (
     <div aria-busy={saving} className="lab-view space-y-4 max-w-7xl mx-auto py-2">
+      {isProstheticOpen && onSaveProstheticOrder && <ProstheticOrderForm patients={patients} crownPrices={crownPrices} examinationFee={examinationFee} canRegisterPayment={canRegisterPayment} onSave={onSaveProstheticOrder} onClose={() => setIsProstheticOpen(false)} />}
       {saving && <p role="status" className="rounded-xl bg-teal-50 p-3 text-sm text-teal-900">جارٍ تأكيد الحفظ…</p>}
       {/* View Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
@@ -394,7 +431,8 @@ export const LabView: React.FC<LabViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onSaveProstheticOrder && <button type="button" onClick={() => setIsProstheticOpen(true)} className="lab-pricing-shortcut"><Plus aria-hidden="true" className="h-4 w-4" />تركيبة جديدة</button>}
           {canManagePrices && canViewFinancials && onManageLabPrices && <button
             type="button" onClick={() => onManageLabPrices(selectedLabId || undefined)}
             className="lab-pricing-shortcut"
@@ -484,13 +522,13 @@ export const LabView: React.FC<LabViewProps> = ({
                 </div>
               </div>
 
-              <button
+              {canViewFinancials && <button
                 type="button"
                 onClick={handleOpenAddCaseModal}
                 className="px-5 py-2.5 rounded-xl bg-[#0f3d3e] hover:bg-[#1b5e5a] text-white text-xs font-bold shadow-md transition-all cursor-pointer"
               >
-                + إضافة حالة لهذا المعمل
-              </button>
+                ربط جلسة تركيبة سابقة
+              </button>}
             </div>
 
             {/* Financial Stats Bar with Visual Progress Meter for this Lab */}
@@ -522,12 +560,9 @@ export const LabView: React.FC<LabViewProps> = ({
                 await confirmSave(() => onBulkPayment(selectedLab.id, amount), () => { setBulkAmount(''); showToast('تم تسجيل الدفعة المجمعة', 'success'); });
               }});
             }}>تسجيل الدفعة المجمعة</button>
-            <details className="text-sm"><summary className="cursor-pointer font-bold">سجل المدفوعات للحالات</summary>
-              {currentLabCases.flatMap(c => (c.paymentsLog || []).map(p => <div key={`${c.id}-${p.id}`} className="border-b py-2">{p.date} · {c.patientName} · {p.amount.toLocaleString()} ج.م · {p.note || 'دفعة للمعمل'}</div>))}
-              <p className="text-xs text-slate-500 mt-2">الدفعات القديمة التي حُفظت كإجمالي فقط لا تملك تفاصيل إيصالات.</p>
-            </details>
             </div>
           </details>}
+          {canViewFinancials && <LabPaymentHistory key={selectedLab.id} cases={currentLabCases} currentMonth={todayStr.slice(0, 7)} title={`دفعات معمل ${selectedLab.name}`} showCaseDetails collapsible />}
           <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3">
             <h3 className="text-sm font-bold text-[#0f3d3e] font-tajawal">
               {canViewFinancials ? 'كتالوج خدمات وأسعار المعمل المعتمدة' : 'خدمات المعمل المعتمدة'}
@@ -558,7 +593,7 @@ export const LabView: React.FC<LabViewProps> = ({
                   const remain = c.labTotal - c.labPaid;
 
                   return (
-                    <div key={c.id} className="p-4 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs">
+                    <div key={c.id} className="lab-dedicated-case p-4 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs">
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-mono font-bold bg-slate-100 text-[#0f3d3e] px-2 py-0.5 rounded-md">
@@ -573,7 +608,7 @@ export const LabView: React.FC<LabViewProps> = ({
                         {renderReservation(c)}
                       </div>
 
-                      {canViewFinancials && <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-4">
+                      {canViewFinancials && <div className="lab-case-payment-controls flex flex-col sm:flex-row items-start sm:items-center justify-between md:justify-end gap-4">
                         {/* Compact Balance Progress Bar */}
                         <div className="w-full sm:w-64">
                           <BalanceProgressMeter
@@ -585,14 +620,11 @@ export const LabView: React.FC<LabViewProps> = ({
                           />
                         </div>
 
+                        <button type="button" className="lab-payment-history-button" onClick={() => openPaymentHistory(c)}>سجل دفعات المعمل</button>
                         {remain > 0 && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setSelectedCaseForPayment(c);
-                              setPaymentAmount(remain);
-                              setIsPaymentModalOpen(true);
-                            }}
+                            onClick={() => openPaymentHistory(c)}
                             className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer transition-all shadow-xs shrink-0 flex items-center gap-1"
                           >
                             <span>+ تسديد للمعمل</span>
@@ -774,7 +806,6 @@ export const LabView: React.FC<LabViewProps> = ({
                 const remain = c.labTotal - c.labPaid;
                 const isFullyPaid = c.labPaid >= c.labTotal;
                 const isPartiallyPaid = c.labPaid > 0 && c.labPaid < c.labTotal;
-                const profit = c.patientTotal - c.labTotal;
 
                 return (
                   <div
@@ -842,7 +873,7 @@ export const LabView: React.FC<LabViewProps> = ({
                         />
                       </div>
 
-                      <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                      <div className="lab-case-payment-controls md:col-span-4 flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                         {/* Financial Status Badge */}
                         <span className={`px-2.5 py-1 rounded-xl text-xs font-bold border ${
                           isFullyPaid
@@ -854,14 +885,11 @@ export const LabView: React.FC<LabViewProps> = ({
                           {isFullyPaid ? '🟢 مدفوع بالكامل' : isPartiallyPaid ? '🟡 مدفوع جزئياً' : '🔴 غير مدفوع'}
                         </span>
 
+                        <button type="button" className="lab-payment-history-button" onClick={() => openPaymentHistory(c)}>سجل دفعات المعمل</button>
                         {remain > 0 && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setSelectedCaseForPayment(c);
-                              setPaymentAmount(remain);
-                              setIsPaymentModalOpen(true);
-                            }}
+                            onClick={() => openPaymentHistory(c)}
                             className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer flex items-center gap-1"
                           >
                             <span>+ تسديد للمعمل</span>
@@ -969,7 +997,7 @@ export const LabView: React.FC<LabViewProps> = ({
           <div id="caseModal" ref={caseDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-case-modal-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 id="lab-case-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
-                إضافة حالة جديدة لمعمل ({selectedLab.name})
+                ربط جلسة سابقة بمعمل ({selectedLab.name})
               </h2>
               <button aria-label="إغلاق إضافة الحالة" onClick={() => { if (!saving) setIsCaseModalOpen(false); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
@@ -979,8 +1007,8 @@ export const LabView: React.FC<LabViewProps> = ({
             <form onSubmit={handleSaveLabCase} aria-busy={saving} className="space-y-4"><fieldset disabled={saving} className="contents">
               <label className="block text-xs font-bold">الخدمة المسجلة في ملف المريض
                 <select value={caseSessionId} onChange={e => setCaseSessionId(e.target.value)} className="w-full border rounded-xl p-3 mt-1">
-                  <option value="">ربط الخدمة لاحقاً</option>
-                  {(patients.find(p => p.id === casePatientId)?.sessions || []).filter(s => !labCases.some(c => c.patientId === casePatientId && c.linkedSessionId === s.id)).map(s => <option key={s.id} value={s.id}>{s.type} — {s.date} — {s.toothLabel || 'عام'}</option>)}
+                  <option value="">اختر جلسة تركيبة مسجلة</option>
+                  {(patients.find(p => p.id === casePatientId)?.sessions || []).filter(s => (s.prosthetic || getServiceGroup(s.type) === 'prosthetic') && !labCases.some(c => c.patientId === casePatientId && c.linkedSessionId === s.id)).map(s => <option key={s.id} value={s.id}>{s.type} — {s.date} — {s.toothLabel || 'عام'}</option>)}
                 </select>
                 <span className="block mt-1 font-normal text-slate-500">الربط يتابع الدفعات الموجودة ولا يضيف تكلفة جديدة للمريض.</span>
               </label>
@@ -1079,21 +1107,23 @@ export const LabView: React.FC<LabViewProps> = ({
       )}
 
       {/* Modal: Pay Lab */}
-      {isPaymentModalOpen && selectedCaseForPayment && canViewFinancials && (
+      {isPaymentModalOpen && selectedPaymentCase && canViewFinancials && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
           <div id="labPaymentModal" ref={paymentDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-payment-modal-title" tabIndex={-1} className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 id="lab-payment-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
-                تسديد دفعة للمعمل
+                سجل الحالة وتسديد المعمل
               </h2>
               <button aria-label="إغلاق تسديد الدفعة" onClick={() => { if (!saving) setIsPaymentModalOpen(false); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSaveLabPayment} aria-busy={saving} className="space-y-4"><fieldset disabled={saving} className="contents">
+            <div className="lab-payment-case-context"><strong>{selectedPaymentCase.patientName} <bdi>#{selectedPaymentCase.fileNo}</bdi></strong><span>{selectedPaymentCase.subType} · {selectedPaymentCase.units} {selectedPaymentCase.unitLabel}</span><span>المعمل: {selectedPaymentCase.labName}</span></div>
+            <LabPaymentHistory key={selectedPaymentCase.id} cases={[selectedPaymentCase]} currentMonth={todayStr.slice(0, 7)} title="دفعات المعمل لهذه الحالة" />
+            {selectedPaymentRemaining > 0 ? <form onSubmit={handleSaveLabPayment} aria-busy={saving} className="space-y-4"><fieldset disabled={saving} className="contents">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label htmlFor="input-lab-payment" className="block text-xs font-bold text-slate-700 mb-1">
                   المبلغ المسدد للمعمل (ج.م)
                 </label>
                 <input
@@ -1102,6 +1132,7 @@ export const LabView: React.FC<LabViewProps> = ({
                   min="0.01"
                   step="0.01"
                   required
+                  max={selectedPaymentRemaining}
                   value={paymentAmount}
                   onChange={e => setPaymentAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
                   placeholder="أكتب المبلغ"
@@ -1124,7 +1155,7 @@ export const LabView: React.FC<LabViewProps> = ({
                   تأكيد الدفع
                 </button>
               </div>
-            </fieldset></form>
+            </fieldset></form> : <p className="lab-payment-complete">تم سداد تكلفة المعمل لهذه الحالة بالكامل.</p>}
           </div>
         </div>
       )}

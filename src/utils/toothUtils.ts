@@ -29,7 +29,7 @@ export function getQuadrantTitle(quad: ToothQuadrant): string {
 }
 
 export function parseCompositeToothId(compositeId: string): ToothInfo | null {
-  if (!compositeId || compositeId.length < 3) return null;
+  if (typeof compositeId !== 'string' || !/^(ur|ul|lr|ll)([1-8]|[A-E])$/.test(compositeId)) return null;
   const quad = compositeId.substring(0, 2) as ToothQuadrant;
   const rest = compositeId.substring(2).toUpperCase();
 
@@ -66,7 +66,7 @@ export function calculateToothBridgeRange(startCompositeId: string, endComposite
   const startP = parseCompositeToothId(startCompositeId);
   const endP = parseCompositeToothId(endCompositeId);
 
-  if (!startP || !endP || startP.quadrant !== endP.quadrant) {
+  if (!startP || !endP || startP.quadrant !== endP.quadrant || startP.isPediatric !== endP.isPediatric) {
     return { teethIds: [startCompositeId], count: 1 };
   }
 
@@ -76,7 +76,7 @@ export function calculateToothBridgeRange(startCompositeId: string, endComposite
 
   const teethIds: string[] = [];
   for (let n = minNum; n <= maxNum; n++) {
-    teethIds.push(`${quad}${n}`);
+    teethIds.push(`${quad}${startP.isPediatric ? PEDIATRIC_LETTERS[n - 1] : n}`);
   }
 
   return { teethIds, count: teethIds.length };
@@ -92,13 +92,20 @@ export interface ToothStatusResult {
   sessionCount: number;
 }
 
+export function sessionIncludesTooth(session: Session, compositeId: string): boolean {
+  return session.tooth === compositeId || Boolean(session.teethIds?.includes(compositeId))
+    || Boolean(session.services?.some(service => service.tooth === compositeId));
+}
+
+/** A mixed visit must not paint every tooth with the visit's combined procedures. */
+export function getSessionToothProcedure(session: Session, compositeId: string): string {
+  const items = session.services?.filter(service => service.tooth === compositeId);
+  return items?.length ? items.map(item => item.name).join(' + ') : session.type;
+}
+
 export function getToothStatusForPatient(patientSessions: Session[], compositeId: string): ToothStatusResult {
   // Find all sessions involving this tooth composite ID
-  const matchingSessions = patientSessions.filter(s => {
-    if (s.tooth === compositeId) return true;
-    if (s.teethIds && s.teethIds.includes(compositeId)) return true;
-    return false;
-  });
+  const matchingSessions = patientSessions.filter(s => sessionIncludesTooth(s, compositeId));
 
   if (matchingSessions.length === 0) {
     return { status: 'normal', hasHistory: false, sessionCount: 0 };
@@ -109,7 +116,8 @@ export function getToothStatusForPatient(patientSessions: Session[], compositeId
   const lastSession = sorted[0];
 
   let status: ToothStatusType = 'normal';
-  const typeLower = lastSession.type.toLowerCase();
+  const lastSessionType = getSessionToothProcedure(lastSession, compositeId);
+  const typeLower = lastSessionType.toLowerCase();
 
   if (typeLower.includes('تركيب') || typeLower.includes('طربوش') || typeLower.includes('جسر') || typeLower.includes('زيركون') || typeLower.includes('pfm')) {
     status = 'crown';
@@ -119,14 +127,12 @@ export function getToothStatusForPatient(patientSessions: Session[], compositeId
     status = 'filled';
   } else if (typeLower.includes('خلع') || typeLower.includes('مفقود')) {
     status = 'extracted';
-  } else {
-    status = 'filled'; // Default for other procedures
   }
 
   return {
     status,
     hasHistory: true,
-    lastSessionType: lastSession.type,
+    lastSessionType,
     lastDate: lastSession.date,
     sessionCount: matchingSessions.length
   };

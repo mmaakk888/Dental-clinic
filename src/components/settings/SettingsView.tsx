@@ -14,6 +14,7 @@ import { serializeClinicCsv } from '../../utils/csvExport';
 import { retainVisitedSettingsSection } from './settingsSectionState';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { assertClinicBackup } from '../../utils/backupValidation';
+import { canPerformAction } from '../../utils/rbac';
 import { EmptyClinicCard } from './EmptyClinicCard';
 import './settingsNavigation.css';
 
@@ -48,7 +49,6 @@ const settingsSections = [
   { key: 'system', group: 'data', label: 'عرض النظام والتأمين', description: 'إعدادات النظام والعمليات الحساسة', icon: <Server className="w-4 h-4 text-purple-600" /> },
 ] as const;
 type SettingsSectionKey = typeof settingsSections[number]['key'];
-const isSettingsSection = (value: string | undefined): value is SettingsSectionKey => settingsSections.some(section => section.key === value);
 const settingsSectionGroups = [
   { key: 'appearance', label: 'مظهر العيادة' },
   { key: 'practice', label: 'الخدمات والتواصل' },
@@ -56,8 +56,9 @@ const settingsSectionGroups = [
   { key: 'data', label: 'البيانات والنظام' },
 ] as const;
 
-function SettingsSectionPicker({ activeSection, onSelect, onClose }: {
+function SettingsSectionPicker({ activeSection, sections, onSelect, onClose }: {
   activeSection: SettingsSectionKey;
+  sections: ReadonlyArray<(typeof settingsSections)[number]>;
   onSelect: (section: SettingsSectionKey) => void;
   onClose: () => void;
 }) {
@@ -70,11 +71,11 @@ function SettingsSectionPicker({ activeSection, onSelect, onClose }: {
           <button type="button" onClick={onClose} aria-label="إغلاق أقسام الإعدادات" className="settings-picker-close"><X aria-hidden="true" /></button>
         </div>
         <div className="settings-picker-groups">
-          {settingsSectionGroups.map(group => (
+          {settingsSectionGroups.filter(group => sections.some(section => section.group === group.key)).map(group => (
             <section key={group.key} aria-label={group.label} className="settings-picker-group">
               <h3>{group.label}</h3>
               <div className="settings-picker-options">
-                {settingsSections.filter(section => section.group === group.key).map(section => {
+                {sections.filter(section => section.group === group.key).map(section => {
                   const isActive = section.key === activeSection;
                   return <button key={section.key} type="button" className="settings-picker-option" aria-current={isActive ? 'page' : undefined}
                     data-dialog-autofocus={isActive ? true : undefined} onClick={() => onSelect(section.key)}>
@@ -104,6 +105,10 @@ interface SettingsViewProps {
   currentUser: User | null;
   serviceTypes: string[];
   crownPrices: Record<string, number>;
+  clinicalPrices?: Record<string, number>;
+  examinationFee?: number;
+  prostheticRouting?: import('../../utils/prostheticRouting').ProstheticRoutingSettings;
+  onSaveProstheticRouting?: (value: import('../../utils/prostheticRouting').ProstheticRoutingSettings, baseline: import('../../utils/prostheticRouting').ProstheticRoutingSettings) => void | Promise<void>;
   canManagePrices: boolean;
   canViewLabCosts: boolean;
   canManageLabPrices: boolean;
@@ -132,7 +137,7 @@ interface SettingsViewProps {
   onSaveIdentity: (values: ClinicIdentitySettings) => void;
   onSaveContent: (values: ContentDraft) => void | Promise<void>;
   onSaveUsers: (users: User[]) => void | Promise<void>;
-  onSaveServiceCatalog: (values: ServiceCatalogValues) => void;
+  onSaveServiceCatalog: (values: ServiceCatalogValues) => void | Promise<void>;
   onSaveLabPricing: (labId: string, services: LabService[], baseline: Lab) => void | Promise<void>;
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   onSaveContact: (contact: ClinicContact, original?: ClinicContact) => void | Promise<void>;
@@ -159,6 +164,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   currentUser,
   serviceTypes,
   crownPrices,
+  clinicalPrices,
+  examinationFee,
+  prostheticRouting,
+  onSaveProstheticRouting,
   canManagePrices,
   canViewLabCosts,
   canManageLabPrices,
@@ -180,7 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   canViewPatientFinance = false,
   canExportPatientFinance = false,
   canExportFinancialReports = false,
-  canManageFullBackup = false,
+  canManageFullBackup: fullBackupRequested = false,
   onAuthorizeDataExport,
   onGetFullBackupSnapshot,
   drugCatalog,
@@ -202,27 +211,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onBackToHome
 }: SettingsViewProps) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
+  const canDataTransfer = canPerformAction(currentUser, 'data_import') && canPerformAction(currentUser, 'data_export');
+  const canManageUsers = canPerformAction(currentUser, 'manage_users');
+  const canManageFullBackup = fullBackupRequested && canDataTransfer;
+  const allowedSettingsSections = settingsSections.filter(section =>
+    section.key === 'users' ? canManageUsers
+      : ['excel', 'firebase', 'system'].includes(section.key) ? canDataTransfer : true);
+  const isAllowedSection = (value: string | undefined): value is SettingsSectionKey => allowedSettingsSections.some(section => section.key === value);
 
   const [activeSubTab, setActiveSubTab] = useState<SettingsSectionKey>(
-    isSettingsSection(externalSubTab) ? externalSubTab : 'identity'
+    isAllowedSection(externalSubTab) ? externalSubTab : 'identity'
   );
   const [visitedSections, setVisitedSections] = useState<ReadonlySet<SettingsSectionKey>>(() => new Set([
-    isSettingsSection(externalSubTab) ? externalSubTab : 'identity'
+    isAllowedSection(externalSubTab) ? externalSubTab : 'identity'
   ]));
   const selectedSettingsContent = useRef<HTMLDivElement>(null);
   const mobileSettingsAnchor = useRef<HTMLDivElement>(null);
   const mobileSettingsToolbar = useRef<HTMLDivElement>(null);
   const [isSettingsPickerOpen, setIsSettingsPickerOpen] = useState(false);
   const [settingsToolbarLayout, setSettingsToolbarLayout] = useState({ pinned: false, left: 0, width: 0, height: 0 });
-  const activeSettingsSection = settingsSections.find(section => section.key === activeSubTab)!;
+  const activeSettingsSection = allowedSettingsSections.find(section => section.key === activeSubTab) || allowedSettingsSections[0];
 
   useEffect(() => {
     if (externalSubTab) {
-      const section = isSettingsSection(externalSubTab) ? externalSubTab : 'identity';
+      const section = isAllowedSection(externalSubTab) ? externalSubTab : 'identity';
       setActiveSubTab(section);
       setVisitedSections(previous => retainVisitedSettingsSection(previous, section));
     }
-  }, [externalSubTab]);
+  }, [externalSubTab, canDataTransfer, canManageUsers]);
+
+  useEffect(() => {
+    if (!isAllowedSection(activeSubTab)) { setActiveSubTab('identity'); setIsSettingsPickerOpen(false); }
+  }, [activeSubTab, canDataTransfer, canManageUsers]);
 
   useEffect(() => {
     // App's overflow container prevents a regular sticky child from following
@@ -256,6 +276,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, []);
 
   const handleSelectSubTab = (tab: SettingsSectionKey) => {
+    if (!isAllowedSection(tab)) return;
     setVisitedSections(previous => retainVisitedSettingsSection(previous, tab));
     setActiveSubTab(tab);
     setIsSettingsPickerOpen(false);
@@ -353,6 +374,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         users,
         serviceTypes,
         crownPrices,
+        clinicalPrices,
+        examinationFee,
         whatsappSettings,
         drugCatalog,
         clinicName,
@@ -474,12 +497,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 أقسام لوحة التحكم
               </span>
               <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-extrabold">
-                10 أقسام
+                {allowedSettingsSections.length} أقسام
               </span>
             </div>
 
             <div className="space-y-1">
-              {settingsSections.map(st => {
+              {allowedSettingsSections.map(st => {
                 const isActive = activeSubTab === st.key;
                 return (
                   <button
@@ -539,7 +562,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>}
         {visitedSections.has('services') && <div hidden={activeSubTab !== 'services'}>
           <SettingsSectionContent label="الخدمات والأسعار">
-            <ServiceCatalogManagement serviceTypes={serviceTypes} crownPrices={crownPrices} canManagePrices={canManagePrices} onSaveServiceCatalog={onSaveServiceCatalog}
+            <ServiceCatalogManagement serviceTypes={serviceTypes} crownPrices={crownPrices} clinicalPrices={clinicalPrices} examinationFee={examinationFee} canManagePrices={canManagePrices} onSaveServiceCatalog={onSaveServiceCatalog}
+              prostheticRouting={prostheticRouting} onSaveProstheticRouting={onSaveProstheticRouting}
               labs={labs} canViewLabCosts={canViewLabCosts} canManageLabPrices={canManageLabPrices} onSaveLabPricing={onSaveLabPricing} initialPricingLabId={initialPricingLabId} />
           </SettingsSectionContent>
         </div>}
@@ -548,7 +572,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <DrugCatalogManagement drugCatalog={drugCatalog} onSaveDrugCatalog={onSaveDrugCatalog} />
           </SettingsSectionContent>
         </div>}
-        {visitedSections.has('users') && <div hidden={activeSubTab !== 'users'}>
+        {canManageUsers && visitedSections.has('users') && <div hidden={activeSubTab !== 'users'}>
           <SettingsSectionContent label="المستخدمون والصلاحيات">
             <UserAccountsManagement users={users} currentUser={currentUser} onSaveUsers={onSaveUsers} />
           </SettingsSectionContent>
@@ -723,14 +747,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* Audit Log SubTab */}
         {activeSubTab === 'audit' && (
           <SettingsSectionContent label="سجل النشاطات">
-            <AuditTrailView />
+            <AuditTrailView canExport={canDataTransfer && canManageFullBackup} onAuthorizeExport={() => onAuthorizeDataExport('full_backup')} />
           </SettingsSectionContent>
         )}
 
         {/* Patient/contact transfers are grouped here, never in the directory. */}
-        {activeSubTab === 'excel' && (
+        {activeSubTab === 'excel' && canDataTransfer && (
           <SettingsSectionContent label="التصدير والاستيراد">
             <DataTransferManagement
+              canTransferData={canDataTransfer}
               key={`${currentUser?.id || 'none'}:${currentUser?.credentialVersion ?? 1}`}
               patients={patients} contacts={contacts} canViewPatients={canViewPatients}
               canImportPatients={canImportPatients} canManageContacts={canManageContacts}
@@ -752,7 +777,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {isSettingsPickerOpen && <SettingsSectionPicker activeSection={activeSubTab} onSelect={handleSelectSubTab} onClose={() => setIsSettingsPickerOpen(false)} />}
+      {isSettingsPickerOpen && <SettingsSectionPicker activeSection={activeSubTab} sections={allowedSettingsSections} onSelect={handleSelectSubTab} onClose={() => setIsSettingsPickerOpen(false)} />}
 
     </div>
   );

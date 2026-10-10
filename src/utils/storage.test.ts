@@ -5,6 +5,7 @@ import { LabCase, User } from '../types';
 import { INITIAL_PATIENTS } from '../data/initialData';
 import { DEFAULT_THEME, DEFAULT_UI_LABELS } from '../data/initialData';
 import { normalizeNavigationOrder } from './clinicContent';
+import { cloneServiceCatalog } from './serviceCatalog';
 
 const local = new Map<string, string>();
 const session = new Map<string, string>();
@@ -543,7 +544,7 @@ test('content saves report silent rollback failure without publishing partially 
   }
 });
 
-const makeServiceCatalog = () => ({ serviceTypes: ['حشو', 'تركيبات - ثابتة', 'تركيبات - متحركة'], crownPrices: { PFM: 1200, 'نوع مخصص': 0 } });
+const makeServiceCatalog = () => cloneServiceCatalog({ serviceTypes: ['حشو', 'تركيبات - ثابتة', 'تركيبات - متحركة'], crownPrices: { PFM: 1200, 'نوع مخصص': 0 } });
 const makeDrugCatalog = () => [{ id: 'test-drug', name: 'اسم محفوظ للاختبار', category: 'تصنيف اختبار', defaultDosage: 'نص محفوظ', defaultDuration: 'مدة محفوظة', metadata: { labels: ['قديم'] } }];
 const makeAccountList = () => [{ id: 'test-manager', username: 'test-manager', name: 'مدير اختبار', role: 'admin', permissions: { controlPanel: true }, accessSchedule: { enabled: false, days: [0, 1], startTime: '09:00', endTime: '17:00' }, metadata: { tags: ['قديم'] } }] as unknown as (User & { metadata: { tags: string[] } })[];
 const makeLabs = () => [{ id: 'test-lab', name: 'معمل اختبار', phone: '01012345678', services: [
@@ -657,7 +658,7 @@ test('service catalog saves confirm both legacy keys and isolate drafts without 
   const untouched = new Map(local);
   const draft = makeServiceCatalog();
   Storage.saveServiceCatalog(draft);
-  assert.deepEqual(SERVICE_CATALOG_STORAGE_KEYS, ['dental_service_types_v2', 'dental_crown_prices_v2']);
+  assert.deepEqual(SERVICE_CATALOG_STORAGE_KEYS, ['dental_service_types_v2', 'dental_crown_prices_v2', 'dental_clinical_prices_v1', 'dental_examination_fee_v1']);
   assert.deepEqual(JSON.parse(local.get('dental_service_types_v2')!), draft.serviceTypes);
   assert.deepEqual(JSON.parse(local.get('dental_crown_prices_v2')!), draft.crownPrices);
   for (const [key, value] of untouched) assert.equal(local.get(key), value);
@@ -667,6 +668,41 @@ test('service catalog saves confirm both legacy keys and isolate drafts without 
   assert.equal(Storage.getCrownPrices().PFM, 1200);
   assert.equal(Storage.getCrownPrices()['نوع مخصص'], 0);
   Storage.resetAll();
+});
+
+test('clinical prices and zero exam fee persist separately, observe fresh changes, and join full backups', () => {
+  Storage.resetAll();
+  assert.equal(Storage.getServiceCatalog().examinationFee, 100);
+  assert.equal(local.has('dental_examination_fee_v1'), false, 'reading defaults never writes settings');
+  const configured = { ...makeServiceCatalog(), clinicalPrices: { 'حشو': 350 }, examinationFee: 0 };
+  Storage.saveServiceCatalog(configured);
+  assert.deepEqual(Storage.getServiceCatalog(), configured);
+  const snapshot = Storage.getBackupDataFresh();
+  assert.deepEqual(snapshot.clinicalPrices, { 'حشو': 350 }); assert.equal(snapshot.examinationFee, 0);
+  local.set('dental_clinical_prices_v1', JSON.stringify({ 'حشو': 450 }));
+  local.set('dental_examination_fee_v1', '150');
+  assert.deepEqual(Storage.getServiceCatalog().clinicalPrices, { 'حشو': 450 }); assert.equal(Storage.getServiceCatalog().examinationFee, 150);
+  Storage.saveRestoredCatalogs({ crownPrices: { PFM: 2000 } });
+  assert.deepEqual(Storage.getServiceCatalog().clinicalPrices, { 'حشو': 450 }); assert.equal(Storage.getServiceCatalog().examinationFee, 150);
+  Storage.saveBackupConfirmed({ clinicalPrices: { 'حشو': 500 }, examinationFee: 0 });
+  assert.deepEqual(Storage.getServiceCatalog().clinicalPrices, { 'حشو': 500 }); assert.equal(Storage.getServiceCatalog().examinationFee, 0);
+  Storage.resetAll();
+});
+
+test('fourth catalog key failure rolls back service names, crown prices and clinical defaults together', () => {
+  Storage.resetAll();
+  const original = { ...makeServiceCatalog(), clinicalPrices: { 'حشو': 350 }, examinationFee: 0 };
+  Storage.saveServiceCatalog(original);
+  const before = new Map(local);
+  let failed = false;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...adapter(local), setItem: (key: string, value: string) => {
+    if (key === 'dental_examination_fee_v1' && !failed) { failed = true; throw new Error('synthetic quota failure'); }
+    local.set(key, value);
+  } } });
+  try {
+    assert.throws(() => Storage.saveServiceCatalog({ serviceTypes: ['تنظيف'], crownPrices: { PFM: 2500 }, clinicalPrices: { 'تنظيف': 200 }, examinationFee: 100 }), /لم تُحفظ/);
+    assert.deepEqual(local, before); assert.deepEqual(Storage.getServiceCatalog(), original);
+  } finally { Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: adapter(local) }); Storage.resetAll(); }
 });
 
 test('fresh service catalogs observe external pairs without writes and return independent malformed price drafts', () => {
@@ -826,7 +862,7 @@ test('legacy backup catalog restores retain absent crown prices and persist impo
   Storage.savePatients([]);
   const patientBefore = local.get('dental_patients_v2');
   Storage.saveRestoredCatalogs({ serviceTypes: ['خدمة مستوردة'], drugCatalog: makeDrugCatalog(), users: makeAccountList() });
-  assert.deepEqual(Storage.getServiceCatalog(), { serviceTypes: ['خدمة مستوردة'], crownPrices: original.crownPrices });
+  assert.deepEqual(Storage.getServiceCatalog(), { serviceTypes: ['خدمة مستوردة'], crownPrices: original.crownPrices, clinicalPrices: { 'حشو': 0, 'خدمة مستوردة': 0 }, examinationFee: 100 });
   assert.deepEqual(JSON.parse(local.get('dental_drug_catalog_v2')!), makeDrugCatalog());
   assert.deepEqual(JSON.parse(local.get('dental_users_v2')!), makeAccountList());
   assert.deepEqual(Storage.getLabsFresh(), makeLabs(), 'legacy backups without labs retain existing supplier prices');

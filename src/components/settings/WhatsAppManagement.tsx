@@ -184,7 +184,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
   </aside>;
 
   return <section className="wa-management" dir="rtl" aria-labelledby="wa-management-title">
-    <header className="wa-management-header"><div className="wa-section-identity"><span className="wa-section-symbol"><MessageCircle size={23} /></span><div><h2 id="wa-management-title">إدارة واتساب</h2><p>جهات اتصالك ورسائلك وحملاتك في مكان واحد.</p></div></div><span className="wa-mode-badge"><ExternalLink size={14} /> الوضع الحالي: فتح يدوي</span></header>
+    <header className="wa-management-header"><div className="wa-section-identity"><span className="wa-section-symbol"><MessageCircle size={23} /></span><div><h2 id="wa-management-title">إدارة واتساب</h2><p>أرقام المرضى وجهات الاتصال ورسائلك وحملاتك في مكان واحد.</p></div></div><span className="wa-mode-badge"><ExternalLink size={14} /> الوضع الحالي: فتح يدوي</span></header>
     <nav className="wa-section-navigation wa-five-sections" aria-label="أقسام إدارة واتساب">{[
       { key: 'templates' as const, title: 'مكتبة الرسائل', icon: FileText }, { key: 'individual' as const, title: 'رسالة فردية', icon: Send }, { key: 'contacts' as const, title: 'جهات الاتصال', icon: ContactRound }, { key: 'campaigns' as const, title: 'الحملات', icon: Megaphone }, { key: 'connection' as const, title: 'الربط المستقبلي', icon: Plug },
     ].map(item => <button key={item.key} type="button" aria-pressed={section === item.key} onClick={() => setSection(item.key)}><item.icon size={18} /><span>{item.title}</span></button>)}</nav>
@@ -223,7 +223,7 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
         </div></div>
     </div>
 
-    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} /></div>
+    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} onOpenCampaigns={() => setSection('campaigns')} /></div>
     <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} contacts={contacts} settings={draft} clinicName={clinicName} onAuthorizeSend={onAuthorizeSend} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
     <div hidden={section !== 'connection'} className="wa-panel wa-section-content"><div className="wa-panel-heading"><div><h3>الربط والقدرات المستقبلية</h3><p>الوضع اليدوي يعمل الآن. الخيارات الآلية تحتاج خدمة خلفية موثوقة قبل تفعيلها.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div><div className="wa-capability-grid">{[
       { title: 'تذكيرات المواعيد', detail: 'جدولة التذكير للمرضى بعد ربط خدمة الإرسال والتحقق من الموافقات.' }, { title: 'حملات مجدولة', detail: 'إرسال منظم مع حد للرسائل وإلغاء الحملة؛ غير متاح في الوضع اليدوي.' }, { title: 'تتبع الرسائل', detail: 'حالات الإرسال والتسليم من ردود الخدمة الفعلية، لا من مجرد فتح واتساب.' }, { title: 'وسائط مرفقة', detail: 'إرسال الصور والمرفقات عبر الخدمة بعد إعداد آمن، ومراجعة المستلم.' },

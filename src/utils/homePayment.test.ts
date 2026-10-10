@@ -32,3 +32,10 @@ test('home payment uses active receipt logs instead of stale paid values', () =>
   assert.equal(paymentSessionRemaining(withVoidedReceipt), 90);
   assert.equal(paymentSessionRemaining({ ...session, amount: NaN, discount: -20 }), 0);
 });
+
+test('home and patient-file collection agree on legitimate cent-valued final receipts', () => {
+  const decimal = { ...session, amount: 0.3, discount: 0, paid: 0.1, paymentsLog: [{ id: 'decimal', amount: 0.1, date: '2026-10-10' }] };
+  const record = { ...patient, sessions: [decimal] };
+  assert.deepEqual(validateHomePayment(record, decimal.id, 0.2), { valid: true, maximum: 0.2 });
+  assert.equal(validateHomePayment(record, decimal.id, 0.21).valid, false);
+});

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, ZoomIn, ZoomOut, RotateCw, Maximize2, Download, Receipt, Building2, Phone, MapPin, Calendar, CreditCard, DollarSign, AlertTriangle, ShieldCheck, Clock, FileText, CheckCircle2, ChevronRight } from 'lucide-react';
 import { Expense, ExpenseItem } from '../../types';
 import { getExpensePaymentSummary } from '../../utils/expenseUtils';
+import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
 
 interface ExpenseDetailModalProps {
   expense: Expense | null;
@@ -9,6 +11,8 @@ interface ExpenseDetailModalProps {
   onClose: () => void;
   onEdit?: (expense: Expense) => void;
   isPrivacyMode?: boolean;
+  canExportData?: boolean;
+  onAuthorizeDataExport?: () => void;
 }
 
 export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
@@ -17,7 +21,11 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   onClose,
   onEdit,
   isPrivacyMode = false,
+  canExportData = false,
+  onAuthorizeDataExport,
 }) => {
+  const { showToast } = useToastAndConfirm();
+  const canDownloadImage = canExportData && !isPrivacyMode && Boolean(onAuthorizeDataExport);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
@@ -76,12 +84,11 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
 
   const handleDownloadImage = () => {
     if (!expense.invoiceImageUrl) return;
-    const a = document.createElement('a');
-    a.href = expense.invoiceImageUrl;
-    a.download = `Invoice_${expense.invoiceNumber || expense.id}_${expense.supplierName || 'Supplier'}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+      downloadAuthorizedImage(expense.invoiceImageUrl, `Invoice_${expense.invoiceNumber || expense.id}_${expense.supplierName || 'Supplier'}.png`, canDownloadImage, onAuthorizeDataExport);
+    } catch {
+      showToast('تعذّر تنزيل الصورة؛ راجع صلاحية الحساب والجلسة.', 'error');
+    }
   };
 
   const maskMoney = (val?: number) => {
@@ -250,9 +257,9 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
                   <button type="button" onClick={() => setIsFullscreenImage(true)} className="p-1.5 hover:bg-white rounded-lg text-indigo-600 transition cursor-pointer" title="ملء الشاشة">
                     <Maximize2 className="w-4 h-4" />
                   </button>
-                  <button type="button" onClick={handleDownloadImage} className="p-1.5 hover:bg-white rounded-lg text-emerald-600 transition cursor-pointer" title="تنزيل الصورة">
+                  {canDownloadImage && <button type="button" onClick={handleDownloadImage} className="p-1.5 hover:bg-white rounded-lg text-emerald-600 transition cursor-pointer" title="تنزيل الصورة">
                     <Download className="w-4 h-4" />
-                  </button>
+                  </button>}
                 </div>
               </div>
 
@@ -390,9 +397,9 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
           <div className="shrink-0 flex items-center justify-between gap-3 text-white pb-3 border-b border-slate-800">
             <h4 className="min-w-0 break-words text-sm font-bold">{expense.supplierName || 'صورة الفاتورة الأصلية'}</h4>
             <div className="shrink-0 flex items-center gap-2">
-              <button type="button" onClick={handleDownloadImage} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer" title="تنزيل">
+              {canDownloadImage && <button type="button" onClick={handleDownloadImage} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition cursor-pointer" title="تنزيل">
                 <Download className="w-4 h-4" />
-              </button>
+              </button>}
               <button type="button" onClick={() => setIsFullscreenImage(false)} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition cursor-pointer" title="إغلاق">
                 <X className="w-5 h-5" />
               </button>

@@ -1,0 +1,55 @@
+.prosthetic-routing { display: grid; gap: 14px; min-width: 0; color: #334155; direction: rtl; }
+.prosthetic-routing * { box-sizing: border-box; }
+.prosthetic-routing svg { width: 18px; height: 18px; flex: 0 0 auto; }
+.prosthetic-routing button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 9px 13px; border-radius: 11px; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+.prosthetic-routing button:disabled { cursor: default; opacity: .5; }
+.prosthetic-routing button:focus-visible, .prosthetic-routing select:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.prosthetic-routing .pr-heading { display: flex; align-items: center; gap: 11px; min-width: 0; flex-wrap: wrap; }
+.prosthetic-routing .pr-heading > div { flex: 1 1 200px; min-width: 0; }
+.prosthetic-routing .pr-heading h3 { font-size: 18px; font-weight: 850; color: #0f172a; line-height: 1.6; margin: 0; }
+.prosthetic-routing .pr-heading p { margin: 3px 0 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.prosthetic-routing .pr-heading-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 auto; border: 1px solid #dbeafe; border-radius: 13px; background: #eff6ff; color: #2563eb; }
+.prosthetic-routing .pr-private { display: inline-flex; align-items: center; gap: 5px; color: #64748b; font-size: 12px; white-space: nowrap; }
+.prosthetic-routing .pr-private svg { width: 14px; height: 14px; }
+.prosthetic-routing .pr-rule { display: flex; gap: 9px; align-items: flex-start; padding: 11px 13px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; color: #1e40af; }
+.prosthetic-routing .pr-rule svg { margin-top: 3px; }
+.prosthetic-routing .pr-rule p, .prosthetic-routing .pr-message p { margin: 0; }
+.prosthetic-routing .pr-rule p, .prosthetic-routing .pr-hint, .prosthetic-routing .pr-empty, .prosthetic-routing .pr-message, .prosthetic-routing .pr-inline-warning { font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
+.prosthetic-routing .pr-section { min-width: 0; border: 1px solid #e2e8f0; padding: 13px 15px 15px; border-radius: 15px; background: #fff; }
+.prosthetic-routing .pr-section legend { padding: 0 6px; font-size: 15px; font-weight: 800; color: #0f172a; }
+.prosthetic-routing .pr-section legend span { font-size: 12px; font-weight: 500; color: #64748b; margin-inline-start: 5px; }
+.prosthetic-routing .pr-hint { margin: 0 0 12px; color: #64748b; }
+.prosthetic-routing .pr-matching { border-top: 1px solid #f1f5f9; margin: 12px 0 0; padding-top: 10px; }
+.prosthetic-routing .pr-defaults, .prosthetic-routing .pr-override-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+.prosthetic-routing .pr-field { display: grid; gap: 5px; align-content: start; min-width: 0; }
+.prosthetic-routing .pr-field label { font-size: 13px; font-weight: 750; line-height: 1.7; }
+.prosthetic-routing select { display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 44px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #0f172a; padding: 9px 10px; font: inherit; font-size: 16px; text-overflow: ellipsis; }
+.prosthetic-routing select:disabled { background: #f8fafc; color: #64748b; }
+.prosthetic-routing .pr-empty { margin: 0 0 12px; padding: 12px; border: 1px dashed #cbd5e1; border-radius: 11px; background: #f8fafc; color: #64748b; }
+.prosthetic-routing .pr-overrides { display: grid; gap: 11px; }
+.prosthetic-routing .pr-override { min-width: 0; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; background: #fcfdff; }
+.prosthetic-routing .pr-override-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.prosthetic-routing .pr-override h4 { margin: 0; font-size: 13px; font-weight: 800; }
+.prosthetic-routing .pr-remove { color: #b91c1c; border: 1px solid #fee2e2; background: #fff; }
+.prosthetic-routing .pr-cost { display: flex; align-items: baseline; gap: 4px 7px; flex-wrap: wrap; margin: 11px 0 0; padding-top: 9px; border-top: 1px solid #e2e8f0; font-size: 12px; line-height: 1.8; }
+.prosthetic-routing .pr-cost strong { color: #334155; }
+.prosthetic-routing .pr-cost span { flex-basis: 100%; color: #64748b; }
+.prosthetic-routing .pr-inline-warning { margin: 9px 0 0; color: #92400e; }
+.prosthetic-routing .pr-add { border: 1px solid #bfdbfe; background: #eff6ff; color: #1d4ed8; margin-top: 11px; }
+.prosthetic-routing .pr-message { margin: 0; padding: 11px 13px; border: 1px solid; border-radius: 12px; }
+.prosthetic-routing .pr-error { border-color: #fecaca; color: #991b1b; background: #fef2f2; }
+.prosthetic-routing .pr-warning { display: grid; justify-items: start; gap: 8px; border-color: #fde68a; color: #92400e; background: #fffbeb; }
+.prosthetic-routing .pr-warning button { color: #92400e; border: 1px solid #fcd34d; background: #fff; }
+.prosthetic-routing .pr-success { display: flex; align-items: center; gap: 8px; border-color: #a7f3d0; color: #065f46; background: #ecfdf5; }
+.prosthetic-routing .pr-save-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 12px; border: 1px solid #e2e8f0; border-radius: 13px; background: #f8fafc; }
+.prosthetic-routing .pr-save-bar p { margin: 0; font-size: 12px; line-height: 1.7; color: #64748b; }
+.prosthetic-routing .pr-save-bar > div { display: flex; gap: 8px; }
+.prosthetic-routing .pr-reset { border: 1px solid #cbd5e1; background: #fff; color: #475569; }
+.prosthetic-routing .pr-save { border: 1px solid #1d4ed8; background: #2563eb; color: #fff; }
+@media (max-width: 559px) {
+  .prosthetic-routing .pr-section { padding: 11px; }
+  .prosthetic-routing .pr-defaults, .prosthetic-routing .pr-override-fields { grid-template-columns: minmax(0, 1fr); }
+  .prosthetic-routing .pr-save-bar { align-items: stretch; }
+  .prosthetic-routing .pr-save-bar > div { width: 100%; }
+  .prosthetic-routing .pr-save-bar > div > button { flex: 1; }
+}

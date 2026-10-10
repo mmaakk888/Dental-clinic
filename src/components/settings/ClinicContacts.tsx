@@ -1,8 +1,8 @@
 import React, { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, BookUser, ChevronLeft, ChevronRight, FileCheck2, Megaphone, Pencil, Phone, Plus, Save, Search, Trash2, UserRound, X } from 'lucide-react';
 import type { ClinicContact, Patient } from '../../types';
-import { createContactSearchEntry, createPhoneDirectoryIndex, findRecordsByPhone, indexedContactMatchesSearch,
-  normalizeContactPhone, prepareContactSearchQuery, type PhoneDirectoryIndex } from '../../utils/clinicContacts';
+import { buildClinicContactDirectory, clinicDirectoryRowMatchesSearch, createPhoneDirectoryIndex, findRecordsByPhone,
+  normalizeContactPhone, prepareContactSearchQuery, type ContactPatientFile, type PhoneDirectoryIndex } from '../../utils/clinicContacts';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
@@ -22,13 +22,13 @@ type ContactFilter = 'all' | 'without-file' | 'with-file';
 const PAGE_SIZE = 25;
 const nameCollator = new Intl.Collator('ar-EG', { sensitivity: 'base', numeric: true });
 
-function MatchingFiles({ matches, onOpenPatient }: { matches: readonly Patient[]; onOpenPatient?: (patientId: string) => void }) {
+function MatchingFiles({ matches, onOpenPatient }: { matches: readonly ContactPatientFile[]; onOpenPatient?: (patientId: string) => void }) {
   return <div className="cc-matching-files">{matches.map(patient => onOpenPatient
     ? <button type="button" className="cc-file-link" key={patient.id} onClick={() => onOpenPatient(patient.id)}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span><ChevronLeft aria-hidden="true" /></button>
     : <span className="cc-file-label" key={patient.id}><FileCheck2 aria-hidden="true" /><span>ملف #{patient.id} · {patient.name}</span></span>)}</div>;
 }
 
-function ContactName({ name, matches }: { name: string; matches: readonly Patient[] }) {
+function ContactName({ name, matches }: { name: string; matches: readonly ContactPatientFile[] }) {
   return <div className="cc-contact-name"><h3 dir="auto">{name}</h3>{matches.length > 0 && <div className="cc-name-file-badges" aria-label="أرقام الملفات المسجلة بنفس الموبايل">{matches.map(patient => <span key={patient.id}><FileCheck2 aria-hidden="true" />ملف #{patient.id}</span>)}</div>}</div>;
 }
 
@@ -115,16 +115,24 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   const [page, setPage] = useState(0);
   const [editor, setEditor] = useState<{ original?: ClinicContact } | null>(null);
   const patientPhoneIndex: PhoneDirectoryIndex<Patient> = useMemo(() => createPhoneDirectoryIndex(patients), [patients]);
-  const rows = useMemo(() => contacts.map(contact => ({ contact, search: createContactSearchEntry(contact), matches: findRecordsByPhone(patientPhoneIndex, contact.mobile) })).sort((left, right) => nameCollator.compare(left.contact.name, right.contact.name)), [contacts, patientPhoneIndex]);
-  const filtered = useMemo(() => {
+  const rows = useMemo(() => buildClinicContactDirectory(contacts, patients).sort((left, right) => nameCollator.compare(left.name, right.name)), [contacts, patients]);
+  const searched = useMemo(() => {
     const preparedQuery = prepareContactSearchQuery(deferredQuery);
-    return rows.filter(({ search, matches }) => indexedContactMatchesSearch(search, preparedQuery) && (filter === 'all' || (filter === 'with-file' ? matches.length > 0 : matches.length === 0)));
-  }, [rows, deferredQuery, filter]);
+    return rows.filter(row => clinicDirectoryRowMatchesSearch(row, preparedQuery));
+  }, [rows, deferredQuery]);
+  const withFileRows = useMemo(() => searched.filter(row => row.matches.length > 0), [searched]);
+  const withoutFileRows = useMemo(() => searched.filter(row => row.matches.length === 0), [searched]);
+  // Group first, then paginate. A family number is one phone row, with every
+  // matching file retained; these categories never merge or create records.
+  const filtered = filter === 'with-file' ? withFileRows : filter === 'without-file' ? withoutFileRows : [...withFileRows, ...withoutFileRows];
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
   const queryMatches = findRecordsByPhone(patientPhoneIndex, query);
-  const withFiles = useMemo(() => rows.reduce((count, row) => count + (row.matches.length ? 1 : 0), 0), [rows]);
+  const groups = [
+    { key: 'with-file', label: 'أرقام لها ملفات', total: withFileRows.length, rows: visible.filter(row => row.matches.length > 0) },
+    { key: 'without-file', label: 'أرقام بدون ملفات', total: withoutFileRows.length, rows: visible.filter(row => row.matches.length === 0) },
+  ];
   useEffect(() => { setPage(0); }, [deferredQuery, filter]);
   useEffect(() => { if (!canManageContacts) setEditor(null); }, [canManageContacts]);
   const resetFilters = () => { setQuery(''); setFilter('all'); setPage(0); };
@@ -134,13 +142,22 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   };
 
   return <section className="clinic-contacts" dir="rtl" aria-labelledby={`${id}-title`}>
-    <header className="cc-header"><div><span className="cc-eyebrow">دليل التواصل</span><h2 id={`${id}-title`}>جهات الاتصال</h2><p>اجمع الأسماء والأرقام اللي من غير ملف، وابحث فيها واستخدمها في الحملات.</p></div>{(canManageContacts || onOpenCampaigns) && <div className="cc-header-actions">{onOpenCampaigns && <button type="button" className="cc-button" onClick={onOpenCampaigns}><Megaphone aria-hidden="true" />تجهيز حملة</button>}{canManageContacts && <button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => setEditor({})}><Plus aria-hidden="true" />إضافة جهة اتصال</button>}</div>}</header>
-    <div className="cc-scope-note"><BookUser aria-hidden="true" /><p>القائمة دي منفصلة عن ملفات المرضى. لو الرقم له ملف بالفعل هنوضّحه، من غير دمج أو إنشاء ملف تلقائي.</p></div>
+    <header className="cc-header"><div><span className="cc-eyebrow">دليل التواصل</span><h2 id={`${id}-title`}>جهات الاتصال</h2><p>كل أرقام المرضى وجهات الاتصال في مكان واحد، مع أرقام الملفات المرتبطة بها.</p></div>{(canManageContacts || onOpenCampaigns) && <div className="cc-header-actions">{onOpenCampaigns && <button type="button" className="cc-button" onClick={onOpenCampaigns}><Megaphone aria-hidden="true" />تجهيز حملة</button>}{canManageContacts && <button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => setEditor({})}><Plus aria-hidden="true" />إضافة جهة اتصال</button>}</div>}</header>
+    <div className="cc-scope-note"><BookUser aria-hidden="true" /><p>أرقام ملفات المرضى تظهر هنا تلقائيًا للعرض فقط. جهات الاتصال المستقلة تظل منفصلة؛ تطابق رقم الأسرة لا يدمج الملفات أو يسجّل موافقة على الحملات.</p></div>
     <section className="cc-directory" aria-label="دليل جهات الاتصال" aria-busy={query !== deferredQuery}>
-      <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => setQuery(event.target.value)} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => setQuery('')}><X aria-hidden="true" /></button></div></div><div className="cc-filter"><label htmlFor={`${id}-filter`}>عرض</label><select id={`${id}-filter`} value={filter} onChange={event => setFilter(event.target.value as ContactFilter)}><option value="all">كل جهات الاتصال ({contacts.length})</option><option value="without-file">بدون ملف مطابق ({contacts.length - withFiles})</option><option value="with-file">رقم له ملف ({withFiles})</option></select></div></div>
+      <div className="cc-toolbar"><div className="cc-search"><label htmlFor={`${id}-search`}>البحث بالاسم أو الموبايل</label><div><Search aria-hidden="true" /><input id={`${id}-search`} type="search" dir="auto" placeholder="اكتب اسمًا أو رقمًا…" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /><button type="button" className="cc-icon-button" aria-label="مسح البحث في جهات الاتصال" disabled={!query} onClick={() => { setQuery(''); setPage(0); }}><X aria-hidden="true" /></button></div></div></div>
+      <div className="cc-sections" role="group" aria-label="تصنيف أرقام التواصل">
+        {([
+          { key: 'all', label: 'الكل', count: searched.length, description: 'دليل موحد' },
+          { key: 'with-file', label: 'لهم ملفات', count: withFileRows.length, description: 'مع أرقام الملفات' },
+          { key: 'without-file', label: 'بدون ملفات', count: withoutFileRows.length, description: 'جهات اتصال فقط' },
+        ] as const).map(section => <button key={section.key} type="button" aria-pressed={filter === section.key} aria-controls={`${id}-results`} onClick={() => { setFilter(section.key); setPage(0); }}><span>{section.label}<bdi>{section.count}</bdi></span><small>{section.description}</small></button>)}
+      </div>
       {queryMatches.length > 0 && <div className="cc-search-match" role="status"><div className="cc-inline-heading"><FileCheck2 aria-hidden="true" /><strong>الرقم اللي بتبحث عنه له ملف بالفعل</strong></div><MatchingFiles matches={queryMatches} onOpenPatient={onOpenPatient} /><p>تطابق الرقم لا يثبت هوية الشخص؛ بعض الأسر بتستخدم رقمًا واحدًا.</p></div>}
-      <div className="cc-results"><p role="status">{query || filter !== 'all' ? `عرض ${filtered.length} من ${contacts.length} جهة اتصال` : `${contacts.length} جهة اتصال`}<span> · مرتبة بالاسم</span></p>{(query || filter !== 'all') && <button type="button" className="cc-button cc-button-quiet" onClick={resetFilters}>عرض الكل</button>}</div>
-      {visible.length > 0 ? <div className="cc-list">{visible.map(({ contact, matches }) => <article className="cc-contact" key={contact.id}><div className="cc-contact-main"><span className="cc-avatar" aria-hidden="true"><UserRound /></span><div className="cc-contact-details"><ContactName name={contact.name} matches={matches} /><div className="cc-contact-meta"><span className="cc-phone"><Phone aria-hidden="true" /><bdi dir="ltr">{contact.mobile}</bdi></span><span className={`cc-status${matches.length ? ' cc-status-matched' : ''}`}>{matches.length ? 'رقم له ملف' : 'جهة اتصال فقط'}</span></div>{contact.notes && <details className="cc-note-details"><summary>ملاحظة محفوظة</summary><p className="cc-contact-notes" dir="auto">{contact.notes}</p></details>}</div>{canManageContacts && <div className="cc-contact-actions"><button type="button" className="cc-icon-button" aria-label={`تعديل جهة الاتصال ${contact.name}`} title="تعديل" disabled={saving} onClick={() => setEditor({ original: { ...contact } })}><Pencil aria-hidden="true" /></button><button type="button" className="cc-icon-button cc-delete" aria-label={`حذف جهة الاتصال ${contact.name}`} title="حذف جهة الاتصال فقط" disabled={saving} onClick={() => remove(contact)}><Trash2 aria-hidden="true" /></button></div>}</div>{matches.length > 0 && <div className="cc-contact-files"><MatchingFiles matches={matches} onOpenPatient={onOpenPatient} /><small>تطابق رقم فقط · بدون دمج تلقائي</small></div>}</article>)}</div> : <div className="cc-empty"><BookUser aria-hidden="true" /><h3>{contacts.length ? 'مفيش جهات اتصال مطابقة' : canManageContacts ? 'ابدأ بقائمة الأسماء والأرقام' : 'لم تُضف جهات اتصال بعد'}</h3><p>{contacts.length ? 'جرّب اسمًا أو رقمًا آخر، أو اعرض القائمة كلها.' : canManageContacts ? 'أضف الأشخاص اللي عندك أرقامهم من غير فتح ملفات علاج لهم. هتلاقيهم بعد كده ضمن جمهور الحملات.' : 'جهات الاتصال المحفوظة هتظهر هنا للبحث ومراجعة الأرقام المرتبطة بملفات.'}</p>{(contacts.length > 0 || canManageContacts) && <button type="button" className="cc-button" onClick={contacts.length ? resetFilters : () => setEditor({})}>{contacts.length ? 'عرض الكل' : 'إضافة أول جهة اتصال'}</button>}</div>}
+      <div className="cc-results"><p role="status">{query || filter !== 'all' ? `عرض ${filtered.length} من ${rows.length} رقم تواصل` : `${rows.length} رقم تواصل`}<span> · مرتبة بالاسم داخل كل قسم{query && ' · أعداد الأقسام حسب البحث'}</span></p>{(query || filter !== 'all') && <button type="button" className="cc-button cc-button-quiet" onClick={resetFilters}>عرض الكل</button>}</div>
+      <div id={`${id}-results`}>
+      {visible.length > 0 ? <div className="cc-groups">{groups.filter(group => group.rows.length > 0).map(group => <section key={group.key} className="cc-group" aria-labelledby={`${id}-${group.key}`}><header className="cc-group-heading"><h3 id={`${id}-${group.key}`}>{group.label}</h3><span><bdi>{group.total}</bdi> رقم{group.rows.length < group.total && <> · <bdi>{group.rows.length}</bdi> في هذه الصفحة</>}</span></header><div className="cc-list">{group.rows.map(({ id: rowId, contact, name, mobile, matches }) => <article className="cc-contact" key={rowId} data-contact-source={contact ? 'contact' : 'patient'}><div className="cc-contact-main"><span className="cc-avatar" aria-hidden="true"><UserRound /></span><div className="cc-contact-details"><ContactName name={name} matches={matches} /><div className="cc-contact-meta"><span className="cc-phone"><Phone aria-hidden="true" /><bdi dir="ltr">{mobile}</bdi></span><span className={`cc-status${matches.length ? ' cc-status-matched' : ''}`}>{!contact ? 'من ملفات المرضى' : matches.length ? 'رقم له ملف' : 'جهة اتصال فقط'}</span></div>{contact?.notes && <details className="cc-note-details"><summary>ملاحظة محفوظة</summary><p className="cc-contact-notes" dir="auto">{contact.notes}</p></details>}</div>{canManageContacts && contact && <div className="cc-contact-actions"><button type="button" className="cc-icon-button" aria-label={`تعديل جهة الاتصال ${contact.name}`} title="تعديل" disabled={saving} onClick={() => setEditor({ original: { ...contact } })}><Pencil aria-hidden="true" /></button><button type="button" className="cc-icon-button cc-delete" aria-label={`حذف جهة الاتصال ${contact.name}`} title="حذف جهة الاتصال فقط" disabled={saving} onClick={() => remove(contact)}><Trash2 aria-hidden="true" /></button></div>}</div>{matches.length > 0 && <div className="cc-contact-files"><MatchingFiles matches={matches} onOpenPatient={onOpenPatient} /><small>{contact ? 'تطابق رقم فقط · بدون دمج تلقائي' : 'الرقم من ملف المريض · تعديل بياناته من الملف'}</small></div>}</article>)}</div></section>)}</div> : <div className="cc-empty"><BookUser aria-hidden="true" /><h3>{rows.length ? filter === 'with-file' ? 'لا توجد أرقام لها ملفات ضمن الاختيار' : filter === 'without-file' ? 'لا توجد أرقام بدون ملفات ضمن الاختيار' : 'مفيش أرقام مطابقة' : canManageContacts ? 'ابدأ بقائمة الأسماء والأرقام' : 'لا توجد أرقام تواصل بعد'}</h3><p>{rows.length ? 'جرّب اسمًا أو رقمًا آخر، أو اعرض القائمة كلها.' : canManageContacts ? 'أضف جهة اتصال مستقلة، أو سجّل هاتفًا في ملف مريض ليظهر هنا تلقائيًا.' : 'أرقام المرضى وجهات الاتصال المحفوظة هتظهر هنا مع الملفات المرتبطة بها.'}</p>{(rows.length > 0 || canManageContacts) && <button type="button" className="cc-button" onClick={rows.length ? resetFilters : () => setEditor({})}>{rows.length ? 'عرض الكل' : 'إضافة أول جهة اتصال'}</button>}</div>}
+      </div>
       {pages > 1 && <nav className="cc-pagination" aria-label="صفحات جهات الاتصال"><button type="button" className="cc-button" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronRight aria-hidden="true" />السابق</button><span aria-live="polite">{currentPage + 1} / {pages}</span><button type="button" className="cc-button" disabled={currentPage === pages - 1} onClick={() => setPage(value => Math.min(pages - 1, value + 1))}>التالي<ChevronLeft aria-hidden="true" /></button></nav>}
     </section>
     <p className="cc-footer-note">الحملات بتجمع جهات الاتصال والمرضى بدون تكرار نفس الرقم، وبشرط وجود موافقة مسجّلة على رسائل الحملات.</p>

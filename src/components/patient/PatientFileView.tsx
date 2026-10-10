@@ -6,6 +6,8 @@ import {
 import { ToothChart } from './ToothChart';
 import { WhatsAppComposer } from './WhatsAppComposer';
 import { PrescriptionAndInstructionsView } from './PrescriptionAndInstructionsView';
+import { ProstheticOrderForm } from '../ProstheticOrderForm';
+import type { ProstheticOrderInput } from '../../utils/prostheticWorkflow';
 import {
   ArrowRight, Phone, MessageCircle, Edit3, Trash2, Plus,
   ChevronDown, ChevronUp, DollarSign, Microscope, Calendar, CheckCircle,
@@ -16,16 +18,20 @@ import {
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import {
-  parseCompositeToothId, getToothLabel, calculateToothBridgeRange,
-  getToothStatusForPatient
+  parseCompositeToothId, getToothLabel,
+  getToothStatusForPatient, sessionIncludesTooth, getSessionToothProcedure
 } from '../../utils/toothUtils';
-import { BalanceProgressMeter, CompactBalanceBadge } from '../common/FinancialBadge';
-import { buildAppointmentReminderText, cleanEgyptianPhone, getWhatsAppUrl as formatWhatsAppUrl } from '../../utils/whatsappUtils';
+import { BalanceProgressMeter } from '../common/FinancialBadge';
+import { PatientFinancialOverview } from './PatientFinancialOverview';
+import { DEFAULT_EXAMINATION_FEE, getClinicalServicePrice, getServiceGroup, parseCatalogPrice } from '../../utils/serviceCatalog';
+import { buildAppointmentReminderText, cleanEgyptianPhone } from '../../utils/whatsappUtils';
+import { normalizeContactPhone } from '../../utils/clinicContacts';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
 import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
 import { getPatientCollectionPresentation, getPatientSessionReceiptLimit } from '../../utils/patientCollection';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import '../patients/patientDirectory.css';
+import './patientFile.css';
 
 const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const sessionBalance = (session: Session) => Math.max(0, session.amount - (session.discount || 0) - getSessionCollected(session));
@@ -38,6 +44,7 @@ export interface PatientFileCapabilities {
   rx?: boolean;
   whatsapp?: boolean;
   viewRemainingBalance?: boolean;
+  exportData?: boolean;
 }
 
 interface PatientFileViewProps {
@@ -47,6 +54,8 @@ interface PatientFileViewProps {
   serviceTypes: string[];
   labs: Lab[];
   crownPrices: Record<string, number>;
+  clinicalPrices?: Record<string, number>;
+  examinationFee?: number;
   isPrivacyMode?: boolean;
   capabilities?: PatientFileCapabilities;
   clinicName?: string;
@@ -54,6 +63,7 @@ interface PatientFileViewProps {
   clinicLogo?: string | null;
   drugCatalog?: DrugCatalogItem[];
   onSaveSession: (patientId: string, session: Omit<Session, 'id'>) => void | Promise<void>;
+  onSaveProstheticOrder?: (input: ProstheticOrderInput) => void | Promise<void>;
   onAddPaymentInstallment: (patientId: string, sessionId: string, installment: { amount: number; date: string }) => void | Promise<void>;
   onUpdatePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, baseline?: Patient) => void | Promise<void>;
   onDeletePatient: (patientId: string) => void | Promise<void>;
@@ -61,21 +71,9 @@ interface PatientFileViewProps {
   onUpdateApptStatus?: (apptId: string, status: AppointmentStatus) => void | Promise<void>;
   onDeleteAppointment?: (apptId: string) => void | Promise<void>;
   onAuthorizeWhatsappSend?: (request: { isCampaign: boolean; requiresFinance: boolean }) => void;
+  onAuthorizePrint?: () => void;
   onBack: () => void;
 }
-
-// Quick Services Catalog Preset
-const QUICK_SERVICES = [
-  { id: 'consultation', name: 'كشف ومتابعة', price: 200, type: 'كشف ومتابعة', icon: '🩺' },
-  { id: 'filling', name: 'حشو ليزر', price: 600, type: 'حشو ليزر', icon: '🦷' },
-  { id: 'endo', name: 'علاج عصب', price: 1200, type: 'علاج عصب', icon: '🧵' },
-  { id: 'crown', name: 'تركيبة / طربوش', price: 2200, type: 'تركيبات - ثابتة', icon: '👑' },
-  { id: 'extraction', name: 'خلع سن', price: 400, type: 'خلع سن', icon: '🦷' },
-  { id: 'scaling', name: 'تنظيف وتلميع', price: 500, type: 'تنظيف جير', icon: '🪥' },
-  { id: 'xray', name: 'أشعة تشخيصية', price: 150, type: 'أشعة تشخيصية', icon: '📸' },
-  { id: 'followup', name: 'متابعة دورية', price: 100, type: 'جلسة متابعة', icon: '🔄' },
-  { id: 'other', name: 'خدمة أخرى', price: 0, type: 'أخرى', icon: '➕' }
-];
 
 export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   patient,
@@ -84,6 +82,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   serviceTypes,
   labs,
   crownPrices,
+  clinicalPrices = {},
+  examinationFee = DEFAULT_EXAMINATION_FEE,
   isPrivacyMode = false,
   capabilities,
   clinicName = 'عيادة الأسنان',
@@ -91,6 +91,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   clinicLogo = null,
   drugCatalog = [],
   onSaveSession,
+  onSaveProstheticOrder,
   onAddPaymentInstallment,
   onUpdatePatient,
   onDeletePatient,
@@ -98,6 +99,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   onUpdateApptStatus,
   onDeleteAppointment,
   onAuthorizeWhatsappSend,
+  onAuthorizePrint,
   onBack
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
@@ -109,6 +111,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const canUseWhatsApp = capabilities?.whatsapp === true;
   const canViewRemainingBalance = capabilities?.viewRemainingBalance === true;
   const canRevealRemainingBalance = canViewRemainingBalance && !isPrivacyMode;
+  const contactPhone = normalizeContactPhone(patient.mobile || '');
+  const telephoneNumber = contactPhone ? (contactPhone.startsWith('20') ? `0${contactPhone.slice(2)}` : `+${contactPhone}`) : '';
 
   // Primary Active Tab State
   const [activeTab, setActiveTab] = useState<'chart' | 'sessions' | 'appointments' | 'finance' | 'prescription' | 'info'>('chart');
@@ -117,9 +121,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [selectedToothId, setSelectedToothId] = useState<string | null>(null);
 
   // Secondary UI Controls
-  const [isMoreTabsSheetOpen, setIsMoreTabsSheetOpen] = useState(false);
   const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
-  const [showFinancialDetails, setShowFinancialDetails] = useState(false);
+  const [showFinancialDetails, setShowFinancialDetails] = useState(true);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   // Financial Calculations
@@ -127,8 +130,6 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const totalRequired = Math.max(0, financialSummary.totalRequired - financialSummary.totalDiscounts);
   const totalPaid = financialSummary.totalCollected;
   const totalRemain = financialSummary.totalRemaining;
-
-  const paidPercentage = totalRequired > 0 ? Math.min(100, Math.round((totalPaid / totalRequired) * 100)) : 100;
 
   const maskMoney = (amount: number) => {
     if (isPrivacyMode) return '*** ج.م';
@@ -161,6 +162,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       if (s.teethIds && Array.isArray(s.teethIds)) {
         s.teethIds.forEach(id => toothSet.add(id));
       }
+      s.services?.forEach(service => { if (service.tooth) toothSet.add(service.tooth); });
     });
     return toothSet.size;
   }, [patient.sessions]);
@@ -186,11 +188,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   // Selected Tooth Sessions & Financials
   const selectedToothSessions = useMemo(() => {
     if (!selectedToothId) return [];
-    return patient.sessions.filter(s => {
-      if (s.tooth === selectedToothId) return true;
-      if (s.teethIds && s.teethIds.includes(selectedToothId)) return true;
-      return false;
-    });
+    return patient.sessions.filter(s => sessionIncludesTooth(s, selectedToothId));
   }, [selectedToothId, patient.sessions]);
 
   const selectedToothFinancials = useMemo(() => {
@@ -207,6 +205,13 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
   // Modal States
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
+  const [isProstheticOpen, setIsProstheticOpen] = useState(false);
+  const [prostheticTooth, setProstheticTooth] = useState<string | null>(null);
+  const openProstheticOrder = (tooth: string | null = null) => {
+    if (!canEditPatients || !onSaveProstheticOrder) return;
+    setToothSheetId(null); setIsServiceModalOpen(false);
+    setProstheticTooth(tooth); setIsProstheticOpen(true);
+  };
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isApptModalOpen, setIsApptModalOpen] = useState(false);
   const [isEditPatientModalOpen, setIsEditPatientModalOpen] = useState(false);
@@ -293,7 +298,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [apptNotes, setApptNotes] = useState<string>('');
 
   useEffect(() => {
-    const isAnyModalOpen = isServiceModalOpen || isPaymentModalOpen || isApptModalOpen || isEditPatientModalOpen || !!toothSheetId || isMoreTabsSheetOpen;
+    const isAnyModalOpen = isServiceModalOpen || isProstheticOpen || isPaymentModalOpen || isApptModalOpen || isEditPatientModalOpen || !!toothSheetId;
     if (isAnyModalOpen) {
       document.body.classList.add('modal-open');
     } else {
@@ -302,7 +307,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     return () => {
       document.body.classList.remove('modal-open');
     };
-  }, [isServiceModalOpen, isPaymentModalOpen, isApptModalOpen, isEditPatientModalOpen, toothSheetId, isMoreTabsSheetOpen]);
+  }, [isServiceModalOpen, isProstheticOpen, isPaymentModalOpen, isApptModalOpen, isEditPatientModalOpen, toothSheetId]);
 
   const handleOpenAddApptModal = (apptToEdit?: Appointment) => {
     if (!canManageAppointments) return;
@@ -371,18 +376,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   };
 
   // Service Form State
-  const [serviceType, setServiceType] = useState(serviceTypes[0] || 'حشو ليزر');
-
-  // Bridge Range fields for Fixed Crowns
-  const [bridgeEndToothNum, setBridgeEndToothNum] = useState<number>(1);
-  const [labId, setLabId] = useState<string>(labs[0]?.id || '');
-  const [crownType, setCrownType] = useState<string>('زيركون');
+  const clinicalServices = serviceTypes.filter(name => getServiceGroup(name) === 'clinical');
+  const firstService = clinicalServices[0] || '';
+  const configuredExamFee = parseCatalogPrice(examinationFee).valid ? examinationFee : DEFAULT_EXAMINATION_FEE;
+  const getDefaultPrice = (name: string) => getClinicalServicePrice(name, { serviceTypes, crownPrices, clinicalPrices });
+  const [serviceType, setServiceType] = useState(firstService);
 
   const [manualAmount, setManualAmount] = useState<number | ''>('');
   const [paidNow, setPaidNow] = useState<number | ''>('');
   const [serviceDate, setServiceDate] = useState<string>(clinicToday());
   const [includeExaminationFee, setIncludeExaminationFee] = useState(false);
-  const [examinationFeeAmount, setExaminationFeeAmount] = useState<number | ''>(200);
+  const [examinationFeeAmount, setExaminationFeeAmount] = useState<number | ''>(configuredExamFee);
   const [treatmentStage, setTreatmentStage] = useState<NonNullable<Session['treatmentStage']>>('single');
   const [rootCanalStatus, setRootCanalStatus] = useState<NonNullable<Session['rootCanalStatus']>>('access_cleaning');
   const [serviceNotes, setServiceNotes] = useState('');
@@ -406,18 +410,16 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     if (!canEditPatients) return;
     setToothSheetId(compositeToothId);
     setSelectedToothId(compositeToothId);
-    setServiceType('حشو ليزر');
-    setManualAmount(600);
+    setServiceType(firstService);
+    setManualAmount(getDefaultPrice(firstService) || '');
     setPaidNow('');
     setServiceDate(clinicToday());
     setIncludeExaminationFee(false);
-    setExaminationFeeAmount(200);
+    setExaminationFeeAmount(configuredExamFee);
     setTreatmentStage('single');
     setRootCanalStatus('access_cleaning');
     setServiceNotes('');
 
-    const parsed = parseCompositeToothId(compositeToothId);
-    if (parsed) setBridgeEndToothNum(parsed.number);
   };
 
   // Standard modal opener
@@ -428,12 +430,12 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       return;
     }
     setSelectedToothId(null);
-    setServiceType(serviceTypes[0] || 'حشو ليزر');
-    setManualAmount('');
+    setServiceType(firstService);
+    setManualAmount(getDefaultPrice(firstService) || '');
     setPaidNow('');
     setServiceDate(clinicToday());
     setIncludeExaminationFee(false);
-    setExaminationFeeAmount(200);
+    setExaminationFeeAmount(configuredExamFee);
     setTreatmentStage('single');
     setRootCanalStatus('access_cleaning');
     setServiceNotes('');
@@ -452,31 +454,15 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     setIsPaymentModalOpen(true);
   };
 
-  // Fixed Crown Price & Teeth Range Calculation
-  let calculatedCrownsCount = 1;
-  let calculatedTeethIds: string[] = [];
-  if (selectedToothId) {
-    const { teethIds, count } = calculateToothBridgeRange(
-      selectedToothId,
-      `${selectedToothId.substring(0, 2)}${bridgeEndToothNum}`
-    );
-    calculatedTeethIds = teethIds;
-    calculatedCrownsCount = count;
-  }
-
-  const crownUnitPrice = crownPrices[crownType] ?? 2200;
-  const autoCrownsTotal = calculatedCrownsCount * crownUnitPrice;
-
   const handleSaveService = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEditPatients) return;
-
-    let treatmentCost = 0;
-    if (serviceType === 'تركيبات - ثابتة' && selectedToothId) {
-      treatmentCost = typeof manualAmount === 'number' ? manualAmount : autoCrownsTotal;
-    } else {
-      treatmentCost = typeof manualAmount === 'number' ? manualAmount : 0;
+    if (!clinicalServices.includes(serviceType)) {
+      validationFail(toothSheetId ? 'toothServiceModal' : 'serviceModal', 'input-service-type', 'اختر خدمة موجودة في فهرس العيادة.');
+      return;
     }
+
+    const treatmentCost = typeof manualAmount === 'number' ? manualAmount : 0;
 
     const examFee = includeExaminationFee && typeof examinationFeeAmount === 'number'
       ? Math.max(0, examinationFeeAmount)
@@ -512,7 +498,6 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     const newSession: Omit<Session, 'id'> = {
       type: serviceType,
       tooth: selectedToothId || undefined,
-      teethIds: serviceType === 'تركيبات - ثابتة' && selectedToothId ? calculatedTeethIds : undefined,
       toothLabel: selectedToothId ? getToothLabel(selectedToothId) : 'خدمة عامة',
       amount: totalCost,
       paid: paidVal,
@@ -522,7 +507,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       paymentsLog: paidVal > 0 ? [{ id: crypto.randomUUID(), amount: paidVal, date: serviceDate, paymentMethod: 'cash', createdAt: new Date().toISOString() }] : [],
       examinationFee: examFee,
       treatmentFee: treatmentCost,
-      services: treatmentCost > 0 ? [{ id: crypto.randomUUID(), name: serviceType, price: treatmentCost }] : [],
+      services: treatmentCost > 0 ? [{ id: crypto.randomUUID(), name: serviceType, price: treatmentCost, ...(selectedToothId ? { tooth: selectedToothId } : {}) }] : [],
       procedurePerformed: serviceType,
       visitNotes: serviceNotes.trim() || undefined,
       treatmentStage,
@@ -595,9 +580,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
     });
   };
 
-  const getWhatsAppUrl = () => {
-    const defaultText = `مرحباً ${patient.name}، نتمنى لك دوام الصحة والعافية. عيادة ${clinicName}.`;
-    return formatWhatsAppUrl(patient.mobile, defaultText);
+  const openPatientChat = () => {
+    if (!canUseWhatsApp || !contactPhone) return;
+    try {
+      if (!onAuthorizeWhatsappSend) throw new Error('تعذّر التحقق من صلاحية فتح واتساب. افتح الملف من جديد.');
+      onAuthorizeWhatsappSend({ isCampaign: false, requiresFinance: false });
+      // Chat only: no clinical text, campaign consent or delivery confirmation
+      // is created by opening WhatsApp. Prepared messages keep their own guard.
+      window.open(`https://wa.me/${contactPhone}`, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'تعذّر فتح واتساب. حاول مرة أخرى.', 'error');
+    }
   };
 
   // Status info for currently tapped tooth in ToothQuickSheet
@@ -614,13 +607,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
             <strong className="block text-xs text-slate-800">رسوم الكشف لهذه الزيارة</strong>
             <span className="text-[11px] text-slate-500">اختيارية وتُضاف مرة واحدة إلى إجمالي الزيارة</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setIncludeExaminationFee(value => !value)}
-            className={`min-h-[44px] px-3 rounded-xl text-xs font-black border transition-colors ${includeExaminationFee ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white text-slate-700 border-slate-300'}`}
-          >
-            {includeExaminationFee ? 'تمت إضافة الكشف' : 'بدون كشف'}
-          </button>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="إضافة رسوم الكشف">
+            <button type="button" aria-pressed={!includeExaminationFee} onClick={() => setIncludeExaminationFee(false)} className={`min-h-[44px] px-3 rounded-xl text-xs font-black border ${!includeExaminationFee ? 'bg-teal-700 text-white' : 'bg-white text-slate-700'}`}>بدون كشف</button>
+            <button type="button" aria-pressed={includeExaminationFee} onClick={() => setIncludeExaminationFee(true)} className={`min-h-[44px] px-3 rounded-xl text-xs font-black border ${includeExaminationFee ? 'bg-teal-700 text-white' : 'bg-white text-slate-700'}`}>إضافة كشف</button>
+          </div>
         </div>
         {includeExaminationFee && (
           <div>
@@ -685,393 +675,88 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       <div className="flex items-center justify-between gap-3 rounded-xl bg-[#0f3d3e] px-3 py-2.5 text-white">
         <span className="text-xs font-bold">إجمالي الزيارة</span>
         <strong className="font-mono text-sm">
-          {((typeof manualAmount === 'number' && Number.isFinite(manualAmount) ? manualAmount : serviceType === 'تركيبات - ثابتة' && selectedToothId ? autoCrownsTotal : 0) + (includeExaminationFee && typeof examinationFeeAmount === 'number' && Number.isFinite(examinationFeeAmount) ? examinationFeeAmount : 0)).toLocaleString()} ج.م
+          {((typeof manualAmount === 'number' && Number.isFinite(manualAmount) ? manualAmount : 0) + (includeExaminationFee && typeof examinationFeeAmount === 'number' && Number.isFinite(examinationFeeAmount) ? examinationFeeAmount : 0)).toLocaleString()} ج.م
         </strong>
       </div>
     </>
   );
 
   return (
-    <div className="space-y-4 pb-28 font-tajawal antialiased text-slate-800">
+    <div className="patient-file font-tajawal antialiased text-slate-800" dir="rtl">
+      {canEditPatients && isProstheticOpen && onSaveProstheticOrder && <ProstheticOrderForm patient={patient} crownPrices={crownPrices} examinationFee={configuredExamFee} initialToothId={prostheticTooth} canRegisterPayment={canRegisterPayment} onSave={onSaveProstheticOrder} onClose={() => setIsProstheticOpen(false)} />}
       {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={canRevealRemainingBalance} onAuthorizeSend={onAuthorizeWhatsappSend} onClose={() => setIsWhatsAppOpen(false)} />}
 
-      {/* 1. Header & Profile Redesign (Mobile First, Desktop Grid) */}
-      <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-sm space-y-4">
-        {/* Top Bar: Back Button & Quick Profile Actions */}
-        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-colors cursor-pointer active:scale-95 touch-manipulation min-h-[44px]"
-          >
-            <ArrowRight className="w-4 h-4" />
-            <span>{origin === 'contacts' ? 'جهات الاتصال' : origin === 'appointments' ? 'جدول المواعيد' : 'فهرس الحالات'}</span>
+      <div className="patient-file-overview">
+      <header className="patient-file-header">
+        <div className="patient-file-topline">
+          <button type="button" onClick={onBack} className="patient-file-back">
+            <ArrowRight aria-hidden="true" />
+            <span>{origin === 'contacts' ? 'جهات الاتصال' : origin === 'appointments' ? 'المواعيد' : 'المرضى'}</span>
           </button>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono font-black bg-[#0f3d3e] text-[#c9a227] px-2.5 py-1 rounded-xl shadow-2xs border border-teal-800">
-              #{patient.id}
-            </span>
-            {canEditPatients && (<button
-              type="button"
-              onClick={handleOpenEditPatient}
-              className="p-2.5 min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer flex items-center justify-center active:scale-95 touch-manipulation"
-              title="تعديل البيانات"
-            >
-              <Edit3 className="w-4 h-4" />
-            </button>)}
-            {canDeletePatients && (<button
-              type="button"
-              onClick={handleDeletePatientConfirmed}
-              className="p-2.5 min-h-[44px] min-w-[44px] rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-all cursor-pointer flex items-center justify-center active:scale-95 touch-manipulation"
-              title="حذف الملف"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>)}
+          <div className="patient-file-header-tools">
+            <span className="patient-file-number">ملف <bdi dir="ltr">#{patient.id}</bdi></span>
+            {canEditPatients && <button type="button" onClick={handleOpenEditPatient} aria-label="تعديل بيانات المريض" className="patient-file-icon"><Edit3 aria-hidden="true" /></button>}
+            {canDeletePatients && <button type="button" onClick={handleDeletePatientConfirmed} aria-label="حذف ملف المريض" className="patient-file-icon patient-file-icon--danger"><Trash2 aria-hidden="true" /></button>}
           </div>
         </div>
-
-        {/* Compact Profile Identity Layout */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          {/* Avatar + Name + Demographics */}
-          <div className="flex items-center gap-3.5 min-w-0">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#0f3d3e] text-[#c9a227] flex items-center justify-center font-black text-xl shadow-inner shrink-0 border border-teal-800">
-              {patient.name.substring(0, 2)}
-            </div>
-
-            <div className="space-y-1 min-w-0">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-black text-slate-900 truncate">
-                {patient.name}
-              </h1>
-
-              {/* Compact Demographics Pills */}
-              <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
-                <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded-lg border border-slate-200 font-bold">
-                  {patient.age} سنة
-                </span>
-                <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded-lg border border-slate-200 font-bold">
-                  {patient.gender === 'female' ? 'أنثى' : 'ذكر'}
-                </span>
-                {patient.mobile && (
-                  <span className="bg-emerald-50 text-emerald-900 px-2 py-0.5 rounded-lg border border-emerald-200 font-mono dir-ltr font-bold">
-                    📱 {patient.mobile}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Quick Metrics Bar in Header (Visit info & Balance) */}
-          <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200/90 text-xs flex-wrap justify-between md:justify-end">
-            <div>
-              <span className="text-slate-400 block text-[11px] font-bold">أول زيارة</span>
-              <span className="font-bold text-slate-800 font-mono">{firstVisitDate}</span>
-            </div>
-            <div className="h-6 w-px bg-slate-200" />
-            <div>
-              <span className="text-slate-400 block text-[11px] font-bold">آخر زيارة</span>
-              <span className="font-bold text-slate-800 font-mono">{lastVisitDate}</span>
-            </div>
-            <div className="h-6 w-px bg-slate-200" />
-            <div>
-              <span className="text-slate-400 block text-[11px] font-bold">الجلسات</span>
-              <span className="font-black text-[#0f3d3e]">{patient.sessions.length}</span>
-            </div>
-            <div className="h-6 w-px bg-slate-200" />
-            <div>
-              <span className="text-slate-400 block text-[11px] font-bold">المتبقي</span>
-              <span className={`font-mono font-black ${totalRemain > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                {maskRemaining(totalRemain)}
-              </span>
+        <div className="patient-file-identity">
+          <div className="patient-file-avatar" aria-hidden="true">{patient.name.substring(0, 2)}</div>
+          <div className="patient-file-name">
+            <h1>{patient.name}</h1>
+            <div className="patient-file-meta">
+              <span>{patient.age} سنة · {patient.gender === 'female' ? 'أنثى' : 'ذكر'}</span>
+              {patient.mobile && <span className="patient-file-phone"><Phone aria-hidden="true" /><bdi dir="ltr">{patient.mobile}</bdi></span>}
+              <span>آخر زيارة <bdi dir="ltr">{lastVisitDate}</bdi></span>
             </div>
           </div>
         </div>
+        {contactPhone ? <div className="patient-file-contact-actions" role="group" aria-label="التواصل مع المريض">
+          <a href={`tel:${telephoneNumber}`} aria-label={`الاتصال بالمريض ${patient.mobile}`} className="patient-file-call"><Phone aria-hidden="true" /><span>اتصال</span></a>
+          {canUseWhatsApp && <><button type="button" onClick={openPatientChat} className="patient-file-whatsapp" aria-label="فتح محادثة واتساب مع المريض"><MessageCircle aria-hidden="true" /><span>واتساب</span></button><button type="button" onClick={() => setIsWhatsAppOpen(true)} className="patient-file-message"><MessageSquare aria-hidden="true" /><span>رسالة جاهزة</span></button></>}
+        </div> : <p className="patient-file-no-phone">{patient.mobile ? 'رقم التواصل غير مكتمل؛ راجعه من تعديل بيانات المريض.' : 'لا يوجد رقم تواصل مسجّل.'}</p>}
+        {patient.allergy?.trim() && <div className="patient-medical-note">
+          <FileText className="w-5 h-5 shrink-0" aria-hidden="true" />
+          <div><strong>معلومة طبية مسجّلة</strong><p>{patient.allergy}</p></div>
+        </div>}
+        {(canEditPatients || canRegisterPayment || canManageAppointments) && <div className="patient-file-actions">
+          {canEditPatients && <button type="button" onClick={() => handleOpenServiceModal()} className="patient-file-action patient-file-action--primary"><Plus aria-hidden="true" /><span>تسجيل خدمة</span></button>}
+          {canEditPatients && onSaveProstheticOrder && <button type="button" onClick={() => openProstheticOrder()} className="patient-file-action"><Layers aria-hidden="true" /><span>تركيبة جديدة</span></button>}
+          {canRegisterPayment && <button type="button" onClick={() => handleOpenPaymentModal()} className="patient-file-action patient-file-action--payment"><Wallet aria-hidden="true" /><span>تحصيل دفعة</span></button>}
+          {canManageAppointments && <button type="button" onClick={() => handleOpenAddApptModal()} className="patient-file-action"><Calendar aria-hidden="true" /><span>حجز موعد</span></button>}
+        </div>}
+      </header>
 
-        {/* Keep existing medical information visible without forcing a form field. */}
-        {patient.allergy && patient.allergy.trim() !== '' && (
-          <div className="patient-medical-note">
-            <FileText className="w-5 h-5 shrink-0" aria-hidden="true" />
-            <div>
-              <strong>معلومة طبية مسجّلة</strong>
-              <p>{patient.allergy}</p>
-            </div>
-          </div>
-        )}
-
-        {/* 2. Quick Actions Row (4 Uniform Buttons in 1 Touch) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-slate-100">
-          {patient.mobile ? (
-            <a
-              href={`tel:${patient.mobile.replace(/\D/g, '')}`}
-              className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation text-center"
-              title="اتصال مباشر"
-            >
-              <Phone className="w-4 h-4 shrink-0" />
-              <span className="truncate">اتصال</span>
-            </a>
-          ) : (
-            <button
-              disabled
-              className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-slate-200 text-slate-400 font-bold text-xs cursor-not-allowed text-center"
-            >
-              <Phone className="w-4 h-4 shrink-0" />
-              <span className="truncate">اتصال</span>
-            </button>
-          )}
-
-          {canUseWhatsApp && (patient.mobile ? (
-            <button
-              type="button"
-              onClick={() => setIsWhatsAppOpen(true)}
-              className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation text-center"
-              title="مراسلة واتساب"
-            >
-              <MessageCircle className="w-4 h-4 shrink-0" />
-              <span className="truncate">واتساب</span>
-            </button>
-          ) : (
-            <button
-              disabled
-              className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-slate-200 text-slate-400 font-bold text-xs cursor-not-allowed text-center"
-            >
-              <MessageCircle className="w-4 h-4 shrink-0" />
-              <span className="truncate">واتساب</span>
-            </button>
-          ))}
-
-          {canManageAppointments && (<button
-            type="button"
-            onClick={() => handleOpenAddApptModal()}
-            className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-[#0f3d3e] hover:bg-[#134d4f] text-white font-black text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation text-center"
-          >
-            <Calendar className="w-4 h-4 shrink-0" />
-            <span className="truncate">حجز موعد</span>
-          </button>)}
-
-          {canEditPatients && (<button
-            type="button"
-            onClick={handleOpenEditPatient}
-            className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-2.5 min-h-[44px] rounded-2xl bg-[#c9a227] hover:bg-amber-600 text-slate-950 font-black text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation text-center"
-          >
-            <Edit3 className="w-4 h-4 shrink-0" />
-            <span className="truncate">تعديل البيانات</span>
-          </button>)}
-        </div>
+      <PatientFinancialOverview total={totalRequired} paid={totalPaid} remaining={totalRemain}
+        isPrivacyMode={isPrivacyMode} canViewRemainingBalance={canViewRemainingBalance}
+        onOpenDetails={() => { setActiveTab('finance'); setShowFinancialDetails(true); }} />
       </div>
 
-      {/* 3. Quick Summary Cards Row (Directly below Header, NO Tab required) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3">
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">عدد الجلسات</span>
-          <span className="text-lg font-black text-[#0f3d3e] mt-1">{patient.sessions.length}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">الأسنان المعالجة</span>
-          <span className="text-lg font-black text-amber-700 mt-1">{treatedTeethCount}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">حالات المعمل</span>
-          <span className="text-lg font-black text-teal-700 mt-1">{labCasesCount}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">آخر زيارة</span>
-          <span className="text-xs font-black text-slate-800 font-mono mt-1">{lastVisitDate}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">إجمالي المطلوب</span>
-          <span className="text-xs font-mono font-black text-slate-900 mt-1">{maskMoney(totalRequired)}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-slate-500 block">المدفوع</span>
-          <span className="text-xs font-mono font-black text-emerald-700 mt-1">{maskMoney(totalPaid)}</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between col-span-2 sm:col-span-1">
-          <span className="text-[11px] font-bold text-slate-500 block">المتبقي</span>
-          <span className={`text-xs font-mono font-black mt-1 ${totalRemain > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-            {maskRemaining(totalRemain)}
-          </span>
-        </div>
+      <div className="patient-file-clinical-strip" aria-label="ملخص الزيارات">
+        <span><History aria-hidden="true" /><strong>{patient.sessions.length}</strong> جلسات</span>
+        <span><Layers aria-hidden="true" /><strong>{treatedTeethCount}</strong> أسنان مسجّلة</span>
+        <span><Microscope aria-hidden="true" /><strong>{labCasesCount}</strong> جلسات تركيبات</span>
+        {patient.notes?.trim() && <span className="patient-file-note"><FileText aria-hidden="true" />{patient.notes}</span>}
       </div>
 
-      {/* 4. Sticky Segmented Control Tabs */}
-      <div className="bg-white p-1.5 rounded-2xl border border-slate-200">
-        <div className="flex flex-wrap items-center gap-1.5 py-0.5">
-          <button
-            type="button"
-            onClick={() => setActiveTab('chart')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'chart'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>🦷</span>
-            <span>المخطط الطبي</span>
-          </button>
+      <nav className="patient-file-tabs" aria-label="أقسام ملف المريض">
+        {[
+          { key: 'chart', label: 'الأسنان', icon: <Layers aria-hidden="true" /> },
+          { key: 'sessions', label: 'الجلسات', icon: <History aria-hidden="true" /> },
+          { key: 'appointments', label: 'المواعيد', icon: <Calendar aria-hidden="true" /> },
+          { key: 'finance', label: 'الحساب', icon: <Wallet aria-hidden="true" /> },
+          ...(canUseRx ? [{ key: 'prescription', label: 'الروشتات', icon: <FileText aria-hidden="true" /> }] : []),
+          { key: 'info', label: 'البيانات', icon: <UserCheck aria-hidden="true" /> },
+        ].map(tab => <button type="button" key={tab.key} aria-pressed={activeTab === tab.key}
+          aria-controls="patient-file-content" onClick={() => setActiveTab(tab.key as typeof activeTab)}>
+          {tab.icon}<span>{tab.label}</span>
+        </button>)}
+      </nav>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('sessions')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'sessions'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>📝</span>
-            <span>الجلسات</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${activeTab === 'sessions' ? 'bg-[#c9a227] text-slate-950' : 'bg-slate-200 text-slate-700'}`}>
-              {patient.sessions.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('appointments')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'appointments'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>📅</span>
-            <span>المواعيد</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${activeTab === 'appointments' ? 'bg-[#c9a227] text-slate-950' : 'bg-slate-200 text-slate-700'}`}>
-              {patientAppointments.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('finance')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'finance'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>💰</span>
-            <span>المالية والرصيد</span>
-          </button>
-
-          {canUseRx && (<button
-            type="button"
-            onClick={() => setActiveTab('prescription')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'prescription'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>💊</span>
-            <span>الروشتة</span>
-          </button>)}
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('info')}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer min-h-[44px] touch-manipulation ${
-              activeTab === 'info'
-                ? 'bg-[#0f3d3e] text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <span>👤</span>
-            <span>معلومات الملف</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 5. Main Views Grid (Desktop Multi-Column / Mobile Stacked) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 pt-2">
-
-        {/* Desktop Sidebar Info Column (4 Cols on LG) */}
-        <div className="hidden lg:block lg:col-span-4 space-y-4">
-          {/* Quick Demographics & Notes Card */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm space-y-4 sticky top-20">
-            <h3 className="text-sm font-black text-[#0f3d3e] flex items-center gap-2 border-b border-slate-100 pb-2.5">
-              <span>👤 ملخص بياني وسريع</span>
-            </h3>
-
-            {/* Financial Balance Progress Meter */}
-            <div className="space-y-2 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
-              <span className="text-xs font-black text-slate-800 block">الموقف المالي العام:</span>
-              {!isPrivacyMode && canViewRemainingBalance && <BalanceProgressMeter
-                total={totalRequired}
-                paid={totalPaid}
-                remaining={totalRemain}
-                size="md"
-                type="patient"
-              />}
-            </div>
-
-            {/* Quick Demographics */}
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500 font-bold">رقم الملف:</span>
-                <span className="font-mono font-bold text-slate-900">#{patient.id}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500 font-bold">تاريخ الميلاد والسن:</span>
-                <span className="font-bold text-slate-900">{patient.age} سنة ({patient.gender === 'female' ? 'أنثى' : 'ذكر'})</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500 font-bold">الهاتف:</span>
-                <span className="font-mono dir-ltr font-bold text-slate-900">{patient.mobile || '—'}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500 font-bold">أول زيارة:</span>
-                <span className="font-mono font-bold text-slate-900">{firstVisitDate}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500 font-bold">آخر زيارة:</span>
-                <span className="font-mono font-bold text-slate-900">{lastVisitDate}</span>
-              </div>
-            </div>
-
-            {/* General Notes */}
-            <div className="space-y-1 bg-amber-50/60 p-3 rounded-2xl border border-amber-200/80">
-              <span className="text-xs font-black text-amber-900 block">ملاحظات الملف العامة:</span>
-              <p className="text-xs text-amber-950 leading-relaxed">
-                {patient.notes || 'لا توجد ملاحظات مدونة.'}
-              </p>
-            </div>
-
-            {/* Direct Actions */}
-            <div className="space-y-2 pt-2">
-              {canEditPatients && (<button
-                type="button"
-                onClick={() => handleOpenServiceModal()}
-                className="w-full py-3 rounded-2xl bg-[#0f3d3e] hover:bg-[#134d4f] text-white text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs min-h-[44px]"
-              >
-                <Plus className="w-4 h-4" />
-                <span>تسجيل خدمة عامة</span>
-              </button>)}
-
-              {canRegisterPayment && (<button
-                type="button"
-                onClick={() => handleOpenPaymentModal()}
-                className="w-full py-3 rounded-2xl bg-[#c9a227] hover:bg-amber-600 text-slate-950 text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs min-h-[44px]"
-              >
-                <Wallet className="w-4 h-4" />
-                <span>تحصيل دفعة مالية</span>
-              </button>)}
-            </div>
-          </div>
-        </div>
-
-        {/* Main Content Area (8 Cols on LG, 12 Cols on Mobile) */}
-        <div className="col-span-1 lg:col-span-8 space-y-4">
-
+      <div className="patient-file-content-shell">
+        <div id="patient-file-content" className="patient-file-content">
           {/* 5.1 Tooth Chart Tab & Selected Tooth Card */}
           {activeTab === 'chart' && (
-            <div className="space-y-4">
+            <div className={`patient-file-chart-layout${selectedToothId ? ' patient-file-chart-layout--selected' : ''}`}>
               <ToothChart
                 patient={patient}
                 onOpenAddSessionModal={handleOpenToothSheet}
@@ -1093,7 +778,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                             سن #{selectedToothId}
                           </span>
                           <span className="text-xs font-bold text-slate-500">
-                            {selectedToothStatus ? { normal: 'سليم', filled: 'حشو', crown: 'تركيبة', endodontic: 'علاج عصب', extracted: 'مخلوع / مفقود' }[selectedToothStatus.status] : ''}
+                            {selectedToothStatus ? { normal: 'بدون علامة علاجية', filled: 'حشو', crown: 'تركيبة', endodontic: 'علاج عصب', extracted: 'مخلوع / مفقود' }[selectedToothStatus.status] : ''}
                           </span>
                         </div>
                         <h3 className="text-base sm:text-lg font-black text-slate-900 mt-0.5">
@@ -1127,21 +812,22 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                     </div>
 
                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                      <span className="text-slate-500 block">المدفوع:</span>
+                      <span className="text-slate-500 block">تحصيل الجلسات المرتبطة:</span>
                       <span className="font-mono font-black text-emerald-700 text-xs mt-0.5 block">
                         {maskMoney(selectedToothFinancials.pd)}
                       </span>
                     </div>
 
                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                      <span className="text-slate-500 block">المتبقي:</span>
-                      <span className={`font-mono font-black text-xs mt-0.5 block ${selectedToothFinancials.rem > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      <span className="text-slate-500 block">متبقي الجلسات المرتبطة:</span>
+                      <span className={`font-mono font-black text-xs mt-0.5 block ${!canRevealRemainingBalance ? 'text-slate-500' : selectedToothFinancials.rem > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                         {maskRemaining(selectedToothFinancials.rem)}
                       </span>
                     </div>
                   </div>
 
                   {/* Timeline for services on this tooth */}
+                  <p className="text-xs text-slate-500 leading-relaxed">حساب الجلسات المرتبطة يشمل الكشف وأي إجراءات أخرى في نفس الجلسة، وليس تكلفة هذا السن وحده.</p>
                   <div className="pt-2">
                     <h4 className="text-xs font-black text-slate-800 mb-2.5 flex items-center gap-1.5">
                       <History className="w-4 h-4 text-[#0f3d3e]" />
@@ -1160,14 +846,14 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                             className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs"
                           >
                             <div className="space-y-0.5">
-                              <span className="font-black text-[#0f3d3e] text-sm">{s.type}</span>
+                              <span className="font-black text-[#0f3d3e] text-sm">{getSessionToothProcedure(s, selectedToothId)}</span>
                               <span className="text-slate-500 font-mono block text-[11px]">📅 التاريخ: {s.date}</span>
                             </div>
 
                             <div className="text-left font-mono space-y-0.5 dir-ltr">
                               <div className="font-black text-slate-900">{maskMoney(s.amount)}</div>
-                              <div className={sessionBalance(s) > 0 ? 'text-rose-600 font-bold text-[11px]' : 'text-emerald-600 font-bold text-[11px]'}>
-                                {sessionBalance(s) > 0 ? `متبقي ${maskRemaining(sessionBalance(s))}` : 'خالص السداد'}
+                              <div className={!canRevealRemainingBalance ? 'text-slate-500 text-[11px]' : sessionBalance(s) > 0 ? 'text-rose-600 font-bold text-[11px]' : 'text-emerald-600 font-bold text-[11px]'}>
+                                {!canRevealRemainingBalance ? 'الرصيد مخفي' : sessionBalance(s) > 0 ? `متبقي ${maskRemaining(sessionBalance(s))}` : 'خالص السداد'}
                               </div>
                             </div>
                           </div>
@@ -1211,23 +897,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   </button>)}
                 </div>
               ) : (
-                /* Vertical Timeline Layout for Sessions */
-                <div className="relative pl-2 sm:pl-4 pr-2 sm:pr-4 py-2 space-y-6 before:absolute before:inset-0 before:left-6 sm:before:left-8 before:w-0.5 before:bg-slate-200">
+                <div className="patient-session-list">
                   {patient.sessions.map((s, idx) => {
                     const isExpanded = expandedSessionId === s.id;
 
                     return (
-                      <div key={s.id} className="relative flex items-start gap-3 sm:gap-4 group">
-                        {/* Timeline Circle Bullet */}
-                        <div className="relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-[#0f3d3e] text-[#c9a227] flex items-center justify-center font-bold text-xs shrink-0 shadow-md">
-                          🦷
-                        </div>
-
-                        {/* Timeline Content Card */}
-                        <div className="flex-1 min-w-0 bg-slate-50 hover:bg-slate-100/80 rounded-2xl p-3.5 sm:p-4 border border-slate-200/90 transition-all space-y-3 shadow-2xs">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 pb-2.5">
+                      <article key={s.id} className="patient-session-card">
+                        <div className="min-w-0 space-y-3">
+                          <div className="patient-session-heading">
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
+                                <span className="patient-session-number">جلسة <bdi>{idx + 1}</bdi></span>
                                 <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">
                                   {s.type}
                                 </h4>
@@ -1237,18 +917,16 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-500 font-mono block mt-0.5">
-                                📅 تاريخ الجلسة: {s.date}
-                              </span>
+                              <time className="patient-session-date" dateTime={s.date}><Calendar aria-hidden="true" /> <bdi>{s.date}</bdi></time>
                             </div>
 
                             {/* Action & Meter */}
-                            <div className="flex items-center gap-2 justify-end pt-2 sm:pt-0">
+                            <div className="patient-session-actions">
                               {canRegisterPayment && sessionBalance(s) > 0 && (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenPaymentModal(s)}
-                                  className="px-3 py-1.5 min-h-[40px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation flex items-center gap-1"
+                                  className="patient-session-collect"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                   <span>تحصيل دفعة</span>
@@ -1258,14 +936,26 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                               <button
                                 type="button"
                                 onClick={() => setExpandedSessionId(isExpanded ? null : s.id)}
-                                className="p-2 text-slate-500 hover:text-slate-800 cursor-pointer rounded-xl bg-white border border-slate-200"
+                                aria-expanded={isExpanded}
+                                aria-controls={`patient-session-details-${s.id}`}
+                                aria-label={`تفاصيل الجلسة ${idx + 1}`}
+                                className="patient-session-details-button"
                               >
+                                <span>التفاصيل</span>
                                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                               </button>
                             </div>
                           </div>
 
+                          {s.prosthetic && <p className="patient-session-prosthetic"><span>{s.prosthetic.kind === 'fixed' ? 'تركيبة ثابتة' : 'تركيبة متحركة'} · {s.prosthetic.material}</span><span>العدد <bdi>{s.prosthetic.units}</bdi>{!isPrivacyMode && <> · سعر الوحدة <bdi>{maskMoney(s.prosthetic.unitPrice)}</bdi></>}</span></p>}
+
                           {/* Financial Progress Meter for Session */}
+                          {!!s.services?.length && <ul className="patient-file-service-list" aria-label="تفاصيل خدمات الجلسة">
+                            {s.services.map(service => <li key={service.id}>
+                              <span>{service.name}<small>{service.tooth ? getToothLabel(service.tooth) : 'خدمة عامة'}</small></span>
+                              {!isPrivacyMode && <bdi>{maskMoney(service.price)}</bdi>}
+                            </li>)}
+                          </ul>}
                           {!isPrivacyMode && canViewRemainingBalance && <BalanceProgressMeter
                             total={Math.max(0, s.amount - (s.discount || 0))}
                             paid={getSessionCollected(s)}
@@ -1276,7 +966,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
                           {/* Collapsible Payments Log */}
                           {isExpanded && (
-                            <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2 animate-fadeIn text-xs">
+                            <div id={`patient-session-details-${s.id}`} className="patient-session-details space-y-2">
                               <span className="font-bold text-slate-800 block">
                                 حركات التحصيل المباشرة لهذه الخدمة ({s.paymentsLog?.length || 0}):
                               </span>
@@ -1288,10 +978,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                                   {s.paymentsLog.map((p, pIdx) => (
                                     <div
                                       key={p.id || pIdx}
-                                      className="p-2 bg-emerald-50/60 rounded-lg border border-emerald-100 flex items-center justify-between font-mono font-bold text-slate-800"
+                                      className="patient-session-receipt"
                                     >
-                                      <span>دفعة بتاريخ {p.date}{p.voidedAt ? ' — ملغاة' : ''}</span>
-                                      <span className={p.voidedAt ? 'text-slate-500 line-through' : 'text-emerald-800'}>{maskMoney(p.amount)}</span>
+                                      <span>دفعة بتاريخ <bdi>{p.date}</bdi>{p.voidedAt ? ' — ملغاة' : ''}</span>
+                                      <bdi className={p.voidedAt ? 'text-slate-500 line-through' : 'text-emerald-800'}>{maskMoney(p.amount)}</bdi>
                                     </div>
                                   ))}
                                 </div>
@@ -1299,7 +989,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                             </div>
                           )}
                         </div>
-                      </div>
+                      </article>
                     );
                   })}
                 </div>
@@ -1465,43 +1155,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 </button>)}
               </div>
 
-              {/* Compact Metric Summary Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
-                  <span className="text-xs text-slate-500 font-bold block">إجمالي تكلفة العلاج:</span>
-                  <span className="text-lg sm:text-xl font-black font-mono text-slate-900">
-                    {maskMoney(totalRequired)}
-                  </span>
-                </div>
-
-                <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-1">
-                  <span className="text-xs text-emerald-700 font-bold block">المدفوع الكلي:</span>
-                  <span className="text-lg sm:text-xl font-black font-mono text-emerald-900">
-                    {maskMoney(totalPaid)}
-                  </span>
-                </div>
-
-                <div className="p-4 bg-rose-50/70 rounded-2xl border border-rose-200 space-y-1">
-                  <span className="text-xs text-rose-700 font-bold block">المتبقي المطلوب:</span>
-                  <span className="text-lg sm:text-xl font-black font-mono text-rose-900">
-                    {maskRemaining(totalRemain)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              {canRevealRemainingBalance && <div className="space-y-1">
-                <div className="flex justify-between text-xs font-bold text-slate-700">
-                  <span>نسبة تحصيل المبالغ: {paidPercentage}%</span>
-                  <span>{maskMoney(totalPaid)} من {maskMoney(totalRequired)}</span>
-                </div>
-                <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
-                  <div
-                    className="bg-emerald-500 h-full transition-all duration-500"
-                    style={{ width: `${paidPercentage}%` }}
-                  />
-                </div>
-              </div>}
+              <p className="text-sm text-slate-600">الملخص أعلى الملف يجمع حساب المريض كله. هنا تفاصيل كل جلسة ودفعاتها، دون تكلفة المعمل.</p>
 
               {/* View Details Toggle Button */}
               <div className="pt-2">
@@ -1519,23 +1173,19 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               {showFinancialDetails && (
                 <div className="pt-3 border-t border-slate-100 space-y-3 animate-fadeIn">
                   <h4 className="text-xs font-black text-slate-800">تفاصيل جلسات الخدمات والمبالغ المتبقية:</h4>
-                  <div className="space-y-2">
+                  <div className="patient-file-finance-list">
                     {patient.sessions.map((s, idx) => (
-                      <div
+                      <article
                         key={s.id || idx}
-                        className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-bold"
+                        className="patient-file-finance-row"
                       >
-                        <div>
-                          <span className="text-slate-900 block">{s.type} ({s.toothLabel || 'بدون تحديد سنة'})</span>
-                          <span className="text-slate-500 font-mono text-[11px]">تاريخ: {s.date}</span>
-                        </div>
-
-                        <div className="flex items-center gap-3 font-mono dir-ltr">
-                          <span className="text-slate-600">التكلفة: {maskMoney(s.amount)}</span>
-                          <span className="text-emerald-700">تم دفع: {maskMoney(getSessionCollected(s))}</span>
-                          <span className="text-rose-700">متبقي: {maskRemaining(sessionBalance(s))}</span>
-                        </div>
-                      </div>
+                        <header><div><strong>{s.type}</strong><small>{s.toothLabel || 'خدمة عامة'}</small></div><time dateTime={s.date}><bdi dir="ltr">{s.date}</bdi></time></header>
+                        <dl>
+                          <div><dt>بعد الخصم</dt><dd><bdi>{maskMoney(Math.max(0, s.amount - (s.discount || 0)))}</bdi></dd></div>
+                          <div><dt>المدفوع</dt><dd><bdi>{maskMoney(getSessionCollected(s))}</bdi></dd></div>
+                          <div><dt>المتبقي</dt><dd><bdi>{maskRemaining(sessionBalance(s))}</bdi></dd></div>
+                        </dl>
+                      </article>
                     ))}
                   </div>
                 </div>
@@ -1551,6 +1201,9 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               clinicLogo={clinicLogo}
               drugCatalog={drugCatalog}
               canSendWhatsApp={canUseWhatsApp}
+              onAuthorizeWhatsappSend={onAuthorizeWhatsappSend}
+              canPrint={capabilities?.exportData === true && !isPrivacyMode}
+              onAuthorizePrint={onAuthorizePrint}
             />
           )}
 
@@ -1570,9 +1223,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   <a
-                    href={`tel:${patient.mobile?.replace(/\D/g, '') || ''}`}
+                    href={telephoneNumber ? `tel:${telephoneNumber}` : undefined}
+                    aria-disabled={!telephoneNumber}
                     className={`p-3 min-h-[48px] rounded-xl flex items-center justify-center gap-2 font-bold text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation ${
-                      patient.mobile ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-200 text-slate-400 pointer-events-none'
+                      telephoneNumber ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-200 text-slate-400 pointer-events-none'
                     }`}
                   >
                     <Phone className="w-4 h-4" />
@@ -1581,10 +1235,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
                   {canUseWhatsApp && (<button
                     type="button"
-                    disabled={!patient.mobile}
-                    onClick={() => setIsWhatsAppOpen(true)}
+                    disabled={!contactPhone}
+                    onClick={openPatientChat}
                     className={`p-3 min-h-[48px] rounded-xl flex items-center justify-center gap-2 font-bold text-xs transition-all cursor-pointer shadow-2xs active:scale-95 touch-manipulation ${
-                      patient.mobile ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-400 pointer-events-none'
+                      contactPhone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-400 pointer-events-none'
                     }`}
                   >
                     <MessageCircle className="w-4 h-4" />
@@ -1592,9 +1246,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   </button>)}
 
                   <a
-                    href={`sms:${patient.mobile?.replace(/\D/g, '') || ''}`}
+                    href={telephoneNumber ? `sms:${telephoneNumber}` : undefined}
+                    aria-disabled={!telephoneNumber}
                     className={`p-3 min-h-[48px] rounded-xl flex items-center justify-center gap-2 font-bold text-xs transition-all cursor-pointer border border-slate-200 active:scale-95 touch-manipulation ${
-                      patient.mobile ? 'bg-white text-slate-800 hover:bg-slate-50' : 'bg-slate-200 text-slate-400 pointer-events-none'
+                      telephoneNumber ? 'bg-white text-slate-800 hover:bg-slate-50' : 'bg-slate-200 text-slate-400 pointer-events-none'
                     }`}
                   >
                     <MessageSquare className="w-4 h-4 text-sky-600" />
@@ -1703,25 +1358,26 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
             )}
 
             {/* Quick Service Selection Options */}
+            {canEditPatients && onSaveProstheticOrder && <button type="button" disabled={saving} onClick={() => openProstheticOrder(toothSheetId)} className="patient-file-action w-full"><Layers aria-hidden="true" />تسجيل تركيبة مرتبطة بالملف</button>}
             <div className="space-y-2">
               <span className="text-xs font-black text-slate-800 block">اختر نوع الخدمة السريعة:</span>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {QUICK_SERVICES.map(qs => (
+                {clinicalServices.map(name => (
                   <button
-                    key={qs.id}
+                    key={name}
                     type="button"
                     onClick={() => {
-                      setServiceType(qs.type);
-                      setManualAmount(qs.price > 0 ? qs.price : '');
+                      setServiceType(name);
+                      setManualAmount(getDefaultPrice(name) || '');
                     }}
                     className={`p-2.5 rounded-2xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 min-h-[64px] touch-manipulation ${
-                      serviceType === qs.type
+                      serviceType === name
                         ? 'bg-[#0f3d3e] text-white border-[#0f3d3e] shadow-xs'
                         : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
                     }`}
                   >
-                    <span className="text-base">{qs.icon}</span>
-                    <span className="text-[11px] font-bold leading-tight">{qs.name}</span>
+                    <span className="text-[12px] font-bold leading-tight">{name}</span>
+                    {getServiceGroup(name) === 'clinical' && <small className="text-[11px]">{getDefaultPrice(name) > 0 ? `${getDefaultPrice(name).toLocaleString('ar-EG')} ج.م` : 'حدد السعر'}</small>}
                   </button>
                 ))}
               </div>
@@ -1824,11 +1480,13 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   نوع الخدمة الطبية
                 </label>
                 <select
+                  id="input-service-type"
                   value={serviceType}
-                  onChange={e => setServiceType(e.target.value)}
+                  onChange={e => { setServiceType(e.target.value); setManualAmount(getDefaultPrice(e.target.value) || ''); }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold focus:outline-none focus:border-[#0f3d3e]"
                 >
-                  {serviceTypes.map(st => (
+                  {!clinicalServices.length && <option value="">أضف خدمة من الإعدادات أولًا</option>}
+                  {clinicalServices.map(st => (
                     <option key={st} value={st}>{st}</option>
                   ))}
                 </select>

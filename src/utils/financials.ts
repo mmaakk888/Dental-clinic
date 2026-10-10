@@ -45,7 +45,12 @@ function getIndependentGeneralPayments(patient: Patient) {
 
   patient.sessions.forEach(session => {
     (session.paymentsLog || [])
-      .filter(payment => !payment.voidedAt && !payment.createdAt && payment.id !== `legacy_${session.id}`)
+      .filter(payment => !payment.voidedAt && !payment.createdAt && payment.id !== `legacy_${session.id}`
+        // The first linked-prosthetic release omitted createdAt. Its exact,
+        // operation-derived receipt identity still proves an explicit new
+        // transaction; it must not hide an unrelated older general receipt.
+        && !(session.prosthetic && /^prosthetic_session_[a-f0-9-]{36}$/i.test(session.id)
+          && payment.id === session.id.replace('prosthetic_session_', 'prosthetic_receipt_')))
       .forEach(payment => {
         const key = `${payment.date}|${positiveMoney(payment.amount)}`;
         legacyMirrorCounts.set(key, (legacyMirrorCounts.get(key) || 0) + 1);
@@ -153,6 +158,7 @@ export interface DailyReportRow {
   totalValue: number;
   paidAmount: number;
   discountAmount: number;
+  /** Current whole-file balance, not debt attributed to this visit or day. */
   remainAmount: number;
   paymentMethod: 'cash' | 'card' | 'transfer';
   date: string;
@@ -182,7 +188,7 @@ export function calculateDailyCollections(
 ): DailyCollectionMetrics {
   const rows: DailyReportRow[] = [];
   let examFeesCollected = 0;
-  const procedureFeesCollectedByName: Record<string, number> = {};
+  const procedureFeesCollectedByName: Record<string, number> = Object.create(null);
   let totalIncomeCollected = 0;
   let totalDiscountsGiven = 0;
   let totalOutstandingRemain = 0;
@@ -193,6 +199,7 @@ export function calculateDailyCollections(
   const patientIdsSeen = new Set<string>();
 
   patients.forEach(patient => {
+    const patientFinancial = getPatientFinancialSummary(patient);
     patient.sessions.forEach(session => {
       // Check if session itself took place on the filtered date
       const sessionInPeriod = dateFilterFn(session.date);
@@ -215,10 +222,9 @@ export function calculateDailyCollections(
         const totalVal = session.amount;
         
         const discountAmt = sessionInPeriod ? (session.discount || 0) : 0;
-        const remainAmt = Math.max(0, session.amount - getSessionCollected(session) - (session.discount || 0));
+        const remainAmt = patientFinancial.totalRemaining;
 
         if (sessionInPeriod) {
-          totalOutstandingRemain += remainAmt;
           totalDiscountsGiven += discountAmt;
         }
 
@@ -243,19 +249,31 @@ export function calculateDailyCollections(
           }
         }
 
-        // Calculate distribution of paid amount
-        const firstReceiptDate = installmentsInPeriod.map(payment => payment.date).sort()[0];
-        const previouslyCollected = firstReceiptDate ? allActiveInstallments
-          .filter(payment => payment.date < firstReceiptDate)
-          .reduce((sum, payment) => sum + positiveMoney(payment.amount), 0) : 0;
-        const beforeDistribution = distributePaymentToServices(examFee, servicesList, previouslyCollected, discountAmt);
-        const cumulativeDistribution = distributePaymentToServices(examFee, servicesList, previouslyCollected + paidInPeriod, discountAmt);
-        const distribution = {
-          examFeePaid: Math.max(0, cumulativeDistribution.examFeePaid - beforeDistribution.examFeePaid),
-          services: cumulativeDistribution.services.map((service, index) => ({
-            ...service, paid: Math.max(0, (service.paid || 0) - (beforeDistribution.services[index]?.paid || 0))
-          }))
-        };
+        // Allocate each selected receipt at its real chronological position.
+        // Combining a disjoint period before allocation would charge the exam
+        // again or move money to another service when an intervening date is
+        // excluded. This is reporting only, never a rewrite of receipt history.
+        const distribution = { examFeePaid: 0, services: servicesList.map(service => ({ ...service, paid: 0 })) };
+        let collectedBefore = 0;
+        for (const receipt of [...allActiveInstallments].sort((a, b) => a.date.localeCompare(b.date))) {
+          const before = distributePaymentToServices(examFee, servicesList, collectedBefore, discountAmt);
+          collectedBefore += positiveMoney(receipt.amount);
+          if (!dateFilterFn(receipt.date)) continue;
+          const after = distributePaymentToServices(examFee, servicesList, collectedBefore, discountAmt);
+          distribution.examFeePaid += Math.max(0, after.examFeePaid - before.examFeePaid);
+          distribution.services.forEach((service, index) => { service.paid += Math.max(0, (after.services[index]?.paid || 0) - (before.services[index]?.paid || 0)); });
+        }
+        if (legacyPaidInPeriod > 0) {
+          const legacy = distributePaymentToServices(examFee, servicesList, legacyPaidInPeriod, discountAmt);
+          distribution.examFeePaid = legacy.examFeePaid;
+          distribution.services.forEach((service, index) => { service.paid = legacy.services[index]?.paid || 0; });
+        }
+        // Incomplete historical breakdowns and overpayments must not make
+        // actual cash disappear or pretend it belongs to a known treatment.
+        const unallocatedPaid = Math.max(0, paidInPeriod - distribution.examFeePaid
+          - distribution.services.reduce((sum, service) => sum + service.paid, 0));
+        if (unallocatedPaid > 0) procedureFeesCollectedByName['تحصيل غير موزع على خدمة'] =
+          (procedureFeesCollectedByName['تحصيل غير موزع على خدمة'] || 0) + unallocatedPaid;
 
         if (examFee > 0) {
           examFeesCollected += distribution.examFeePaid;
@@ -280,11 +298,12 @@ export function calculateDailyCollections(
           fileNo: patient.id,
           patientName: patient.name,
           mobile: patient.mobile,
-          time: session.time || '10:00 ص',
+          time: session.time || '—',
           proceduresText,
           servicesBreakdown: [
             ...(examFee > 0 ? [{ name: 'كشف ومعاينة', price: examFee, paid: distribution.examFeePaid }] : []),
-            ...distribution.services.map(s => ({ name: s.name, price: s.price, paid: s.paid || 0 }))
+            ...distribution.services.map(s => ({ name: s.name, price: s.price, paid: s.paid || 0 })),
+            ...(unallocatedPaid > 0 ? [{ name: 'تحصيل غير موزع على خدمة', price: 0, paid: unallocatedPaid }] : [])
           ],
           totalValue: totalVal,
           paidAmount: paidInPeriod,
@@ -317,19 +336,23 @@ export function calculateDailyCollections(
           totalValue: paymentAmount,
           paidAmount: paymentAmount,
           discountAmount: 0,
-          remainAmount: getPatientFinancialSummary(patient).totalRemaining,
+          remainAmount: patientFinancial.totalRemaining,
           paymentMethod: 'cash',
           date: pay.date,
           isWalkIn: false
         });
       }
     });
+    // General receipts are unallocated credits. Do not invent a per-service
+    // settlement or count one patient's current debt again for every visit.
+    if (patientIdsSeen.has(patient.id)) totalOutstandingRemain += patientFinancial.totalRemaining;
   });
 
   return {
     rows,
     examFeesCollected,
-    procedureFeesCollectedByName,
+    // Keep the public plain-record shape, copying only accumulated own keys.
+    procedureFeesCollectedByName: { ...procedureFeesCollectedByName },
     totalIncomeCollected,
     totalDiscountsGiven,
     totalOutstandingRemain,

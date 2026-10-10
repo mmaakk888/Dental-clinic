@@ -1,5 +1,6 @@
 import { Patient, Session } from '../types';
-import { getPatientFinancialSummary, getSessionCollected } from './financials';
+import { getSessionCollected } from './financials';
+import { getPatientSessionReceiptLimit } from './patientCollection';
 
 export const normalizePaymentSearch = (value: string) => value.trim().toLocaleLowerCase('ar')
   .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
@@ -15,7 +16,7 @@ export function validateHomePayment(patient: Patient | undefined, sessionId: str
   const session = patient?.sessions.find(item => item.id === sessionId);
   if (!patient || !session) return { valid: false, reason: 'selection', maximum: 0 } as const;
   if (!Number.isFinite(value) || value <= 0) return { valid: false, reason: 'amount', maximum: 0 } as const;
-  const maximum = Math.min(paymentSessionRemaining(session), getPatientFinancialSummary(patient).totalRemaining);
+  const maximum = getPatientSessionReceiptLimit(patient, session);
   if (value > maximum) return { valid: false, reason: 'limit', maximum } as const;
   return { valid: true, maximum } as const;
 }

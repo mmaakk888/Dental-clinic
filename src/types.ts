@@ -154,6 +154,8 @@ export interface SessionServiceItem {
   price: number;
   paid?: number;
   discount?: number;
+  /** Optional exact chart ID; absent for general or not-yet-localized services. */
+  tooth?: string | null;
 }
 
 export interface Session {
@@ -186,6 +188,8 @@ export interface Session {
   time?: string;
   treatmentStage?: 'single' | 'first' | 'second' | 'third' | 'follow_up';
   rootCanalStatus?: 'access_cleaning' | 'working_length' | 'canal_filled' | 'impression' | 'final_restoration';
+  /** Patient-facing price snapshot only; never supplier cost or lab identity. */
+  prosthetic?: { kind: 'fixed' | 'removable'; material: string; units: number; unitPrice: number };
 }
 
 export interface GeneralPayment {
@@ -264,6 +268,10 @@ export interface Lab {
 export interface LabCase {
   id: string;
   linkedSessionId?: string;
+  labServiceId?: string;
+  teethIds?: string[];
+  /** Local retry identity; not a server signature or authorization token. */
+  creationFingerprint?: string;
   labId: string;
   labName: string;
   patientId: string;
@@ -298,6 +306,16 @@ export interface DockAppearance {
   showLabels: boolean;
   /** Direct mobile links, excluding the More button. Permissions are filtered first. */
   mobileVisibleCount: 3 | 4;
+  /** Explicit More placement on every screen; home is always direct. */
+  moreSections?: string[];
+}
+
+export type HomeSectionKey = 'actions' | 'metrics' | 'schedule' | 'followUp';
+export interface HomeLayoutSettings {
+  sectionOrder: HomeSectionKey[];
+  hiddenSections: HomeSectionKey[];
+  density: 'comfortable' | 'compact';
+  appointmentLimit: 3 | 6 | 10;
 }
 
 export interface UILabels {
@@ -308,6 +326,8 @@ export interface UILabels {
   /** Floating navigation labels, separate from legacy patient-file tab labels. */
   navigationLabels?: Partial<Record<'home' | 'patients' | 'contacts' | 'appointments' | 'lab' | 'summary' | 'settings', string>>;
   dockAppearance?: DockAppearance;
+  /** Display preferences only: never grant permissions or hide the fixed date/search. */
+  homeLayout?: HomeLayoutSettings;
 }
 
 export interface UserPermission {

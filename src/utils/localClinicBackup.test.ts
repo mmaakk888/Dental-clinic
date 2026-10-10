@@ -86,7 +86,7 @@ test('fresh full snapshot ignores stale cache, excludes sessions and rejects mal
     // Fresh clinics no longer inject demo patients. Install an explicit synthetic
     // saved record to test deep-clone isolation, not a runtime fallback.
     values.set('dental_patients_v2', JSON.stringify([INITIAL_PATIENTS[0]]));
-    const snapshot = Storage.getBackupDataFresh(); assert.equal(snapshot.clinicName, 'بعد'); assert.equal(Object.keys(snapshot).length, 17);
+    const snapshot = Storage.getBackupDataFresh(); assert.equal(snapshot.clinicName, 'بعد'); assert.equal(Object.keys(snapshot).length, 20);
     assert.equal('rememberedSession' in snapshot, false); assert.equal('currentUser' in snapshot, false);
     (snapshot.patients as any[])[0].name = 'changed clone'; assert.notEqual((Storage.getBackupDataFresh().patients as any[])[0].name, 'changed clone');
     values.set('dental_theme_v2', '{broken'); assert.throws(() => Storage.getBackupDataFresh(), /نسخة ناقصة/);
@@ -147,7 +147,7 @@ new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(createR
 
 test('backup controls require full-backup access and restore starts disabled without writes/downloads', () => {
   let operations = 0; const operation = async () => { operations++; };
-  const props = { patients: [], contacts: [], canViewPatients: true, canManageFullBackup: false, onGetFullBackupSnapshot: operation, onRestoreFullData: operation, onAuthorizeDataExport: operation };
+  const props = { patients: [], contacts: [], canTransferData: true, canViewPatients: true, canManageFullBackup: false, onGetFullBackupSnapshot: operation, onRestoreFullData: operation, onAuthorizeDataExport: operation };
   assert.doesNotMatch(compiled.exports.renderTransfer(props), /نسخة محلية كاملة/);
   assert.match(compiled.exports.renderTransfer({ ...props, canManageFullBackup: true }), /نسخة محلية كاملة/);
   assert.doesNotMatch(compiled.exports.renderTransfer({ ...props, canManageFullBackup: true, canViewPatients: false }), /نسخة محلية كاملة/);

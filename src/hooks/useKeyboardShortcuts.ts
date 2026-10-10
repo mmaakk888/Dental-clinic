@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { printAuthorizedDocument } from '../utils/authorizedDataOutput';
 
 interface KeyboardShortcutsOptions {
   onNewPatient?: () => void;
@@ -6,6 +7,8 @@ interface KeyboardShortcutsOptions {
   onCollectPayment?: () => void;
   onNewAppointment?: () => void;
   onPrint?: () => void;
+  canPrint?: boolean;
+  onAuthorizePrint?: () => void;
   onSave?: () => void;
   onEscape?: () => void;
 }
@@ -55,11 +58,9 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions) {
       // Ctrl + P: Print
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        if (options.onPrint) {
-          options.onPrint();
-        } else {
-          window.print();
-        }
+        // No unconditional browser-print fallback: callers must opt in and reauthorize.
+        try { if (options.onPrint) printAuthorizedDocument(options.canPrint === true, options.onAuthorizePrint, options.onPrint); }
+        catch { /* A missing or revoked permission never opens an output dialog. */ }
         return;
       }
 

@@ -1,12 +1,14 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlertCircle, ArrowDown, ArrowUp, Calendar, CheckCircle2, ChevronLeft, ContactRound, Eye, Home, Landmark, ListOrdered, LockKeyhole, Microscope, Monitor, MoreHorizontal, RotateCcw, Save, Settings2, SlidersHorizontal, Smartphone, Type, Undo2, Users } from 'lucide-react';
-import type { DockAppearance } from '../../types';
+import type { DockAppearance, HomeLayoutSettings } from '../../types';
 import { DEFAULT_UI_LABELS } from '../../data/initialData';
 import { cloneContentDraft, DEFAULT_HOME_SUBTITLE, DEFAULT_HOME_WELCOME, getHomeSubtitle, getHomeWelcome, getNavigationItems, getNavigationLabel, moveNavigationSection, NAVIGATION_SECTIONS, normalizeNavigationOrder, validateContentDraft } from '../../utils/clinicContent';
 import type { ContentDraft, NavigationKey } from '../../utils/clinicContent';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
-import { DEFAULT_DOCK_APPEARANCE, getDockAppearance, splitMobileNavigation } from '../../utils/dockAppearance';
+import { DEFAULT_DOCK_APPEARANCE, getDockAppearance, splitDesktopNavigation, splitMobileNavigation } from '../../utils/dockAppearance';
 import { DockAppearanceControls } from './DockAppearanceControls';
+import { HomeLayoutControls } from './HomeLayoutControls';
+import { getHomeLayout, HOME_SECTIONS } from '../../utils/homeLayout';
 import './contentLayout.css';
 
 interface ContentLayoutProps extends ContentDraft {
@@ -29,6 +31,7 @@ function editableDraft(values: ContentDraft): ContentDraft {
   const next = cloneContentDraft(values);
   next.tileOrder = normalizeNavigationOrder(values.tileOrder);
   next.labels.dockAppearance = { ...next.labels.dockAppearance, ...getDockAppearance(next.labels) };
+  next.labels.homeLayout = getHomeLayout(next.labels);
   next.labels.homeSubtitle = getHomeSubtitle(next.labels);
   next.labels.welcomeText = getHomeWelcome(next.labels);
   next.labels.navigationLabels = { ...next.labels.navigationLabels, ...Object.fromEntries(getNavigationItems(next.labels, next.tileOrder).map(item => [item.key, item.label])) };
@@ -42,9 +45,9 @@ function editableDraft(values: ContentDraft): ContentDraft {
 export function ContentPreview({ draft, clinicName, mode, onModeChange }: { draft: ContentDraft; clinicName: string; mode: 'mobile' | 'desktop'; onModeChange: (mode: 'mobile' | 'desktop') => void }) {
   const items = getNavigationItems(draft.labels, draft.tileOrder);
   const appearance = getDockAppearance(draft.labels);
-  const split = splitMobileNavigation(items, appearance);
-  const visible = mode === 'mobile' ? split.visible : items;
-  const extra = mode === 'mobile' ? split.extra : [];
+  const homeLayout = getHomeLayout(draft.labels);
+  const split = mode === 'mobile' ? splitMobileNavigation(items, appearance) : splitDesktopNavigation(items, appearance);
+  const { visible, extra } = split;
   return <section className="cl-preview-card" aria-label="معاينة المحتوى والترتيب">
     <div className="cl-preview-heading"><div><h3>شوف التغييرات قبل الحفظ</h3><p>نموذج توضيحي بدون بيانات مرضى.</p></div>
       <div className="cl-device-controls" aria-label="حجم المعاينة">
@@ -54,10 +57,9 @@ export function ContentPreview({ draft, clinicName, mode, onModeChange }: { draf
     </div>
     <div className="cl-preview-stage"><div className="cl-demo" data-device={mode}>
       <div className="cl-demo-top"><Home aria-hidden="true" /><span>{clinicName || 'عيادة الأسنان'}</span><span className="cl-demo-tag">معاينة</span></div>
-      <div className="cl-demo-body"><div className="cl-demo-day"><Calendar aria-hidden="true" /><span>تاريخ اليوم</span><time>١٠:٣٠ ص</time></div>
+      <div className="cl-demo-body" data-home-density={homeLayout.density}><div className="cl-demo-day"><Calendar aria-hidden="true" /><span>تاريخ اليوم</span><time>١٠:٣٠ ص</time></div>
         <div className="cl-demo-placeholder"><Users aria-hidden="true" /><span>بحث بالاسم أو رقم الملف أو الموبايل</span></div>
-        <div className="cl-demo-placeholder"><SlidersHorizontal aria-hidden="true" /><span>إجراءات اليوم</span><small>حسب صلاحيات الحساب</small></div>
-        <div className="cl-demo-placeholder"><Calendar aria-hidden="true" /><span>ملخص اليوم والمواعيد</span></div>
+        {homeLayout.sectionOrder.filter(key => !homeLayout.hiddenSections.includes(key)).map(key => <div key={key} className="cl-demo-placeholder" data-home-section={key}><SlidersHorizontal aria-hidden="true" /><span>{HOME_SECTIONS.find(section => section.key === key)!.label}</span><small>{key === 'schedule' ? `حتى ${homeLayout.appointmentLimit.toLocaleString('ar-EG')} مواعيد` : 'حسب الصلاحيات'}</small></div>)}
       </div>
       <div className="cl-demo-dock" data-dock-size={appearance.size} data-show-labels={appearance.showLabels} aria-label="ترتيب شريط التنقل في المعاينة">{visible.map(item => {
         const Icon = icons[item.key];
@@ -161,6 +163,22 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
     setDraft(current => ({ ...current, labels: { ...current.labels, dockAppearance: { ...current.labels.dockAppearance, ...value } } }));
     clearError('dockAppearance');
   };
+  const updatePlacement = (key: Exclude<NavigationKey, 'home'>, placement: 'dock' | 'more') => {
+    if (busy.current || conflict) return;
+    setDraft(current => {
+      const appearance = getDockAppearance(current.labels);
+      const moreSections = appearance.moreSections!.filter(item => item !== key);
+      if (placement === 'more') moreSections.push(key);
+      return { ...current, labels: { ...current.labels, dockAppearance: { ...current.labels.dockAppearance, ...appearance, moreSections } } };
+    });
+    setMoveNotice(`${getNavigationLabel(draft.labels, key)}: ${placement === 'more' ? 'داخل المزيد على الموبايل فقط' : 'في شريط الموبايل؛ قد ينتقل للمزيد إذا امتلأ العدد المباشر'}. شريط الكمبيوتر لا يتغير. احفظ لتطبيق التغيير.`);
+    clearError('dockAppearance');
+  };
+  const updateHomeLayout = (value: HomeLayoutSettings) => {
+    if (busy.current) return;
+    setDraft(current => ({ ...current, labels: { ...current.labels, homeLayout: value } }));
+    clearError('homeLayout');
+  };
   const move = (key: Exclude<NavigationKey, 'home'>, direction: 'up' | 'down') => {
     if (busy.current) return;
     const nextOrder = moveNavigationSection(draft.tileOrder, key, direction);
@@ -172,12 +190,13 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
     setDraft(cloneContentDraft(savedRef.current));
     setConflict(false); setErrors({}); setSaveError(''); setMoveNotice('');
   };
-  const discard = () => askConfirm({ title: 'إلغاء التغييرات غير المحفوظة؟', message: 'ستعود النصوص وترتيب التنقل إلى آخر إعدادات محفوظة. بيانات العيادة والمرضى لا تتغير.', confirmLabel: 'إلغاء التغييرات', tone: 'warning', onConfirm: restore });
-  const reset = () => askConfirm({ title: 'استعادة النصوص والترتيب الافتراضي؟', message: 'تتغير المسودة فقط. اسم العيادة وشعارها وصلاحيات الحسابات لا تتغير، ولن يُطبّق الترتيب حتى تحفظه.', confirmLabel: 'استعادة في المسودة', tone: 'info', onConfirm: () => {
+  const discard = () => askConfirm({ title: 'إلغاء التغييرات غير المحفوظة؟', message: 'ستعود الرئيسية والنصوص والشريط إلى آخر إعدادات محفوظة. بيانات العيادة والمرضى لا تتغير.', confirmLabel: 'إلغاء التغييرات', tone: 'warning', onConfirm: restore });
+  const reset = () => askConfirm({ title: 'استعادة إعدادات العرض الافتراضية؟', message: 'تعود أقسام الرئيسية والشريط والنصوص للوضع الافتراضي في المسودة فقط. اسم العيادة وشعارها وصلاحيات الحسابات لا تتغير؛ التطبيق بعد الحفظ.', confirmLabel: 'استعادة في المسودة', tone: 'info', onConfirm: () => {
     setDraft(current => {
       const next = cloneContentDraft(current);
       next.tileOrder = normalizeNavigationOrder([]);
       next.labels.dockAppearance = { ...next.labels.dockAppearance, ...DEFAULT_DOCK_APPEARANCE };
+      next.labels.homeLayout = getHomeLayout(undefined);
       next.labels.homeSubtitle = DEFAULT_HOME_SUBTITLE;
       next.labels.welcomeText = DEFAULT_HOME_WELCOME;
       next.labels.navigationLabels = { ...next.labels.navigationLabels, home: 'الرئيسية' };
@@ -196,7 +215,7 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
     setErrors(result.errors);
     if (!result.valid) {
       const errorKey = Object.keys(result.errors)[0];
-      if (errorKey === 'homeSubtitle' || errorKey === 'welcomeText') setSection('home');
+      if (errorKey === 'homeSubtitle' || errorKey === 'welcomeText' || errorKey === 'homeLayout') setSection('home');
       else if (errorKey === 'dockAppearance') setSection('appearance');
       else { setSection('navigation'); setSelectedKey(errorKey.split('.')[1] as NavigationKey); }
       requestAnimationFrame(() => {
@@ -214,7 +233,7 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
       const next = editableDraft(result.value);
       setDraft(next); setSaved(cloneContentDraft(next));
       setSaveError(''); setMoveNotice('');
-      showToast('تم حفظ المحتوى وترتيب التنقل.', 'success');
+      showToast('تم حفظ الرئيسية والمحتوى وترتيب التنقل.', 'success');
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'تعذّر الحفظ. المسودة كما هي؛ حاول مرة أخرى.');
     } finally { busy.current = false; setSaving(false); }
@@ -238,38 +257,43 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
   };
   const selectedName = draft.labels.navigationLabels?.[selectedKey] ?? getNavigationLabel(draft.labels, selectedKey);
   const selectedCanonical = selectedKey === 'home' ? 'الرئيسية' : NAVIGATION_SECTIONS.find(item => item.key === selectedKey)!.label;
+  const appearance = getDockAppearance(draft.labels);
+  const forcedMore = new Set(appearance.moreSections);
+  const mobileDirectKeys = new Set(splitMobileNavigation(getNavigationItems(draft.labels, draft.tileOrder), appearance).visible.map(item => item.key));
   return <form ref={formRef} className="content-layout" onSubmit={save} noValidate dir="rtl">
-    <header className="cl-header"><div><span className="cl-eyebrow">مظهر العيادة / تنظيم الواجهة</span><h2>المحتوى والترتيب</h2><p>عدّل النصوص ورتّب الشريط العائم واختَر حجمه وطريقة عرضه.</p></div>
+    <header className="cl-header"><div><span className="cl-eyebrow">مظهر العيادة / تنظيم الواجهة</span><h2>المحتوى والترتيب</h2><p>اختَر أقسام الرئيسية ورتّبها، واضبط الشريط العائم وأسماء أقسامه.</p></div>
       <span className="cl-draft-status" data-dirty={isDirty} role="status">{isDirty ? <><span /> تغييرات غير محفوظة</> : <><CheckCircle2 aria-hidden="true" /> الإعدادات المحفوظة</>}</span>
     </header>
     <div className="cl-tabs" role="tablist" aria-label="أجزاء المحتوى والترتيب">{sections.map((item, index) => <button key={item.key} ref={element => { tabButtons.current[index] = element; }} type="button" role="tab" id={`${id}-tab-${item.key}`} aria-controls={`${id}-panel-${item.key}`} aria-selected={section === item.key} tabIndex={section === item.key ? 0 : -1} onKeyDown={event => tabKeyDown(event, index)} onClick={() => setSection(item.key)}><item.icon aria-hidden="true" />{item.label}</button>)}</div>
     {conflict && <div className="cl-save-error" role="alert"><AlertCircle aria-hidden="true" /><div><strong>تغيّرت الإعدادات المحفوظة أثناء التعديل.</strong><p>مسودتك لم تُحذف. ألغِ التغييرات للعودة إلى أحدث إعدادات قبل التعديل والحفظ من جديد.</p></div></div>}
     <div className={`cl-body-layout${section === 'preview' ? ' cl-preview-only' : ''}${section === 'navigation' || section === 'appearance' ? ' cl-no-aside' : ''}`}>
       <section id={`${id}-panel-${section}`} role="tabpanel" aria-labelledby={`${id}-tab-${section}`} className="cl-editor-panel cl-section-enter" key={section}>
-        {section === 'home' && <div className="cl-section-card"><div className="cl-section-title"><Home aria-hidden="true" /><div><h3>رئيسية مختصرة للعمل اليومي</h3><p>تاريخ اليوم والساعة، ثم البحث، وإجراءات اليوم قبل الملخصات والمواعيد. لا يوجد كارت ترحيبي كبير.</p></div></div>
-          <p className="cl-hint">الإجراءات والبيانات تظهر حسب صلاحيات الحساب. اسم الرئيسية وترتيب الأقسام من تبويب «ترتيب الشريط»، وحجم الأيقونات من «حجم الشريط».</p>
+        {section === 'home' && <div className="cl-section-card"><div className="cl-section-title"><Home aria-hidden="true" /><div><h3>رتّب الرئيسية على طريقة شغلك</h3><p>تحكّم في الأقسام الظاهرة وترتيبها والمسافات بينها، وشاهد النتيجة قبل الحفظ.</p></div></div>
+          <HomeLayoutControls value={getHomeLayout(draft.labels)} onChange={updateHomeLayout} disabled={saving || conflict} />
+          {errors.homeLayout && <p className="cl-error" role="alert">{errors.homeLayout}</p>}
           <details ref={legacyTextsRef} className="cl-legacy-texts"><summary><Type aria-hidden="true" /> نصوص التصميم السابق <ChevronLeft className="cl-legacy-chevron" aria-hidden="true" /></summary><p>محفوظة للتوافق مع النسخ السابقة، ولا تظهر في الرئيسية الحالية. تعديلها لا يضيف كارت الترحيب.</p><div>
             {field('homeSubtitle', 'الوصف المحفوظ سابقًا', draft.labels.homeSubtitle, 180, 'هذا النص غير ظاهر في التصميم الحالي.', value => updateHome('homeSubtitle', value))}
             {field('welcomeText', 'رسالة المتابعة المحفوظة سابقًا', draft.labels.welcomeText, 120, 'هذا النص غير ظاهر في التصميم الحالي.', value => updateHome('welcomeText', value))}
           </div></details>
           <div className="cl-note"><Home aria-hidden="true" /><p>اسم العيادة وشعارها وألوانها تُعدّل من قسم «الهوية والمظهر».</p></div>
         </div>}
-        {section === 'navigation' && <div className="cl-navigation-panel"><div className="cl-section-card"><div className="cl-section-title"><ListOrdered aria-hidden="true" /><div><h3>ترتيب أقسام التنقل</h3><p>اختَر قسمًا لتعديل اسمه، واستخدم الأسهم لتغيير ترتيبه.</p></div></div>
+        {section === 'navigation' && <div className="cl-navigation-panel"><div className="cl-section-card"><div className="cl-section-title"><ListOrdered aria-hidden="true" /><div><h3>أماكن الأقسام وترتيبها</h3><p>حدّد لكل قسم: في الشريط أو داخل المزيد. اضغط الاسم لتغييره، والأسهم لترتيبه.</p></div></div>
           <div className="cl-order-list">
             <div className="cl-order-row cl-fixed-row" data-selected={selectedKey === 'home'}><button type="button" className="cl-row-select" onClick={() => selectNavigationSection('home')} aria-pressed={selectedKey === 'home'} aria-controls={`${id}-name-editor`} aria-label="تعديل اسم الرئيسية"><span className="cl-row-icon"><Home aria-hidden="true" /></span><span className="cl-row-label"><strong>{getNavigationLabel(draft.labels, 'home')}</strong><small>أول الشريط دائمًا</small></span></button><span className="cl-fixed-tag"><LockKeyhole aria-hidden="true" /> ثابتة</span></div>
             {draft.tileOrder.map((key, index) => {
               const navKey = key as Exclude<NavigationKey, 'home'>;
               const Icon = icons[navKey];
               const name = getNavigationLabel(draft.labels, navKey);
-              return <div key={key} className="cl-order-row" data-selected={selectedKey === key}><button type="button" className="cl-row-select" onClick={() => selectNavigationSection(navKey)} aria-pressed={selectedKey === key} aria-controls={`${id}-name-editor`} aria-label={`تعديل قسم ${name}`}><span className="cl-row-number">{index + 2}</span><span className="cl-row-icon"><Icon aria-hidden="true" /></span><span className="cl-row-label"><strong>{name}</strong><small>{index < getDockAppearance(draft.labels).mobileVisibleCount - 1 ? 'مباشر على الموبايل عند السماح بكل الأقسام' : 'داخل المزيد أو مباشر حسب صلاحيات الحساب'}</small></span></button>
+              return <div key={key} className="cl-order-row cl-placeable-row" data-selected={selectedKey === key}><button type="button" className="cl-row-select" onClick={() => selectNavigationSection(navKey)} aria-pressed={selectedKey === key} aria-controls={`${id}-name-editor`} aria-label={`تغيير اسم ${name}`}><span className="cl-row-number">{index + 2}</span><span className="cl-row-icon"><Icon aria-hidden="true" /></span><span className="cl-row-label"><strong>{name}</strong><small>{forcedMore.has(key) ? 'داخل المزيد على الموبايل فقط' : mobileDirectKeys.has(navKey) ? 'في الشريط على الموبايل والكمبيوتر' : 'في الشريط على الكمبيوتر؛ المزيد على الموبايل لامتلاء الشريط'}</small></span></button>
                 <div className="cl-move-buttons"><button type="button" aria-label={`تقديم ${name} في الترتيب`} title="تقديم القسم" disabled={index === 0} onClick={() => move(navKey, 'up')}><ArrowUp aria-hidden="true" /></button><button type="button" aria-label={`تأخير ${name} في الترتيب`} title="تأخير القسم" disabled={index === draft.tileOrder.length - 1} onClick={() => move(navKey, 'down')}><ArrowDown aria-hidden="true" /></button></div>
+                <div className="cl-placement-choices" role="group" aria-label={`مكان ظهور ${name}`}><button type="button" aria-pressed={!forcedMore.has(key)} aria-label={`${name}: في الشريط`} disabled={saving || conflict} onClick={() => updatePlacement(navKey, 'dock')}><ListOrdered aria-hidden="true" />في الشريط</button><button type="button" aria-pressed={forcedMore.has(key)} aria-label={`${name}: داخل المزيد`} disabled={saving || conflict} onClick={() => updatePlacement(navKey, 'more')}><MoreHorizontal aria-hidden="true" />داخل المزيد</button></div>
               </div>;
             })}
           </div>
-          <p className="cl-hint">الرئيسية ثابتة أول الشريط. العدد الظاهر على الموبايل من تبويب «حجم الشريط»، والباقي في «المزيد» حسب صلاحيات الحساب.</p>
+          <p className="cl-hint">الرئيسية ثابتة. «داخل المزيد» للموبايل فقط؛ الكمبيوتر يعرض جميع الأقسام المسموح بها في الشريط. على الموبايل يظهر أول ٣ أو ٤ أقسام مؤهلة حسب الترتيب والصلاحيات، والباقي داخل المزيد.</p>
           <p className="sr-only" aria-live="polite">{moveNotice}</p>
         </div>
-          <div ref={nameEditorRef} id={`${id}-name-editor`} className="cl-section-card cl-name-editor"><div className="cl-section-title"><Settings2 aria-hidden="true" /><div><h3>تعديل قسم {selectedCanonical}</h3><p>التعديل يظهر في شريط التنقل وقائمة المزيد.</p></div></div>
+          <div ref={nameEditorRef} id={`${id}-name-editor`} className="cl-section-card cl-name-editor"><div className="cl-section-title"><Settings2 aria-hidden="true" /><div><h3>تغيير اسم {selectedCanonical}</h3><p>اكتب الاسم المناسب لك؛ يظهر في الشريط وقائمة المزيد بدون تغيير وظيفة القسم.</p></div></div>
             {field(`navigationLabels.${selectedKey}`, 'الاسم الظاهر في التنقل', selectedName, 20, 'اسم قصير وواضح لسهولة القراءة على الموبايل.', updateName)}
             {selectedKey !== 'home' && field(`tiles.${selectedKey}.desc`, 'الوصف داخل قائمة المزيد', draft.labels.tiles[selectedKey]?.desc ?? DEFAULT_UI_LABELS.tiles[selectedKey].desc, 140, 'يظهر إذا كان القسم داخل «المزيد». الفارغ يستخدم الوصف الافتراضي.', updateDescription)}
             <div className="cl-note"><LockKeyhole aria-hidden="true" /><p>تغيير الاسم أو الترتيب لا يمنح صلاحيات جديدة، ولا يغيّر ترتيب مؤشرات اليوم أو الإجراءات.</p></div>

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_PATIENT_CROWN_PRICES, DEFAULT_SERVICE_TYPES } from '../data/initialData';
-import { cloneServiceCatalog, getServiceGroup, isProtectedServiceType, normalizeServiceName, parseCatalogPrice, PROTECTED_SERVICE_TYPES, validateServiceCatalog, validateServiceName } from './serviceCatalog';
+import { cloneServiceCatalog, DEFAULT_EXAMINATION_FEE, getClinicalServicePrice, getServiceGroup, isProtectedServiceType, normalizeServiceName, parseCatalogPrice, PROTECTED_SERVICE_TYPES, validateServiceCatalog, validateServiceName } from './serviceCatalog';
 
 test('name normalization combines Arabic variants, marks, spaces, digits and case only for lookup', () => {
   const original = '  إِطـْباق   عَلى ۱۲٣ ABC  ';
@@ -18,7 +18,7 @@ test('catalog clones preserve exact valid names and use independent defaults for
   const names = ['  حشو   ليزر  ', 'نوع قديم'];
   const source = { serviceTypes: names, crownPrices: { PFM: 0, 'نوع مخصص': 75.5 } };
   const copy = cloneServiceCatalog(source);
-  assert.deepEqual(copy, source);
+  assert.deepEqual(copy, { ...source, clinicalPrices: { '  حشو   ليزر  ': 0, 'نوع قديم': 0 }, examinationFee: 100 });
   copy.serviceTypes.reverse();
   copy.crownPrices.PFM = 600;
   assert.deepEqual(names, ['  حشو   ليزر  ', 'نوع قديم']);
@@ -33,7 +33,7 @@ test('catalog clones preserve exact valid names and use independent defaults for
     assert.notEqual(DEFAULT_SERVICE_TYPES.at(-1), 'مسودة');
     assert.equal(DEFAULT_PATIENT_CROWN_PRICES.PFM, 1200);
   }
-  assert.deepEqual(cloneServiceCatalog({ serviceTypes: [], crownPrices: {} }), { serviceTypes: [], crownPrices: {} });
+  assert.deepEqual(cloneServiceCatalog({ serviceTypes: [], crownPrices: {} }), { serviceTypes: [], crownPrices: {}, clinicalPrices: {}, examinationFee: 100 });
 });
 
 test('price map cloning copies own keys safely and retains malformed values without aliasing', () => {
@@ -142,5 +142,39 @@ test('catalog helpers never alter historical records attached to their input', (
   const result = validateServiceCatalog(source);
   assert.equal(result.valid, true);
   assert.deepEqual(source, before);
-  assert.deepEqual(Object.keys(result.value), ['serviceTypes', 'crownPrices']);
+  assert.deepEqual(Object.keys(result.value), ['serviceTypes', 'crownPrices', 'clinicalPrices', 'examinationFee']);
+});
+
+test('clinical prices default unconfigured without mapping old shortcut charges, and exam defaults to confirmed100 but retains zero', () => {
+  const legacy = cloneServiceCatalog({ serviceTypes: ['حشو', 'تنظيف', 'تركيبات - ثابتة'], crownPrices: { PFM: 1200 } });
+  assert.equal(DEFAULT_EXAMINATION_FEE, 100);
+  assert.equal(legacy.examinationFee, 100);
+  assert.deepEqual(legacy.clinicalPrices, { 'حشو': 0, 'تنظيف': 0 });
+  assert.equal(cloneServiceCatalog({ ...legacy, examinationFee: 0 }).examinationFee, 0);
+  assert.equal(getClinicalServicePrice('حشو', legacy), 0);
+  const catalog = cloneServiceCatalog({ ...legacy, clinicalPrices: { 'حشو': 350, 'تنظيف': 0, 'اسم محذوف': 999, 'تركيبات - ثابتة': 100 } });
+  assert.equal(getClinicalServicePrice('حشو', catalog), 350);
+  assert.equal(getClinicalServicePrice('تنظيف', catalog), 0);
+  assert.equal(getClinicalServicePrice('اسم محذوف', catalog), 0);
+  assert.equal(getClinicalServicePrice('تركيبات - ثابتة', catalog), 0);
+  catalog.clinicalPrices['حشو'] = NaN;
+  assert.equal(getClinicalServicePrice('حشو', catalog), 0);
+});
+
+test('catalog validates clinical prices and exam fee with Arabic input and preserves unrelated history', () => {
+  const source = { serviceTypes: ['حشو', 'تركيبات - ثابتة'], crownPrices: { PFM: 1200 }, clinicalPrices: { 'حشو': '٣٥٠' }, examinationFee: '٠' };
+  const result = validateServiceCatalog(source);
+  assert.equal(result.valid, true);
+  assert.equal(result.value.clinicalPrices?.['حشو'], 350);
+  assert.equal(result.value.examinationFee, 0);
+  assert.equal(source.clinicalPrices['حشو'], '٣٥٠');
+  for (const examinationFee of [null, -1, Infinity, NaN, '', {}, '100.123']) assert.ok(validateServiceCatalog({ ...source, examinationFee }).errors.examinationFee);
+  for (const clinicalPrices of [null, [], 'bad', { 'حشو': -1 }, { 'حشو': Infinity }, { 'حشو': '' }, { 'حشو': 1, 'حَشو': 2 }]) assert.equal(validateServiceCatalog({ ...source, clinicalPrices }).valid, false);
+});
+
+test('new crown types require safe unique names and valid prices while original types cannot disappear', () => {
+  const baseline = { serviceTypes: ['حشو'], crownPrices: { PFM: 1200 } };
+  assert.equal(validateServiceCatalog({ ...baseline, crownPrices: { PFM: 1500, 'نوع جديد': 2000 } }, baseline).valid, true);
+  for (const crownPrices of [{ PFM: 1200, pfm: 10 }, { PFM: 1200, '': 10 }, { PFM: 1200, 'نوع\nجديد': 10 }, { PFM: 1200, constructor: 10 }, { PFM: 1200, 'نوع جديد': -1 }]) assert.equal(validateServiceCatalog({ ...baseline, crownPrices }, baseline).valid, false);
+  assert.ok(validateServiceCatalog({ ...baseline, crownPrices: { 'نوع جديد': 2000 } }, baseline).errors['crownPrices.PFM']);
 });

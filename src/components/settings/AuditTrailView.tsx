@@ -1,203 +1,131 @@
-import React, { useState, useMemo } from 'react';
-import { History, Filter, Search, Download, Trash2, User, ShieldCheck, Calendar, HardDrive, Printer } from 'lucide-react';
-import { getAuditLogs, AuditLogItem } from '../../services/auditLogger';
-import { serializeClinicCsv } from '../../utils/csvExport';
+import React, { useId, useMemo, useState } from 'react';
+import { History, Search, Download, UserRound, CalendarDays, Monitor, Printer, SlidersHorizontal, X } from 'lucide-react';
+import { getAuditLogs, type AuditLogItem } from '../../services/auditLogger';
+import { AUDIT_ACTIONS, AUDIT_ENTITIES, auditActionLabel, auditEntityLabel, filterAuditLogs, formatAuditDateTime, serializeAuditCsv } from '../../utils/auditTrailPresentation';
+import { downloadTransferBlob } from '../../utils/patientSpreadsheets';
+import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import './auditTrail.css';
 
-export const AuditTrailView: React.FC = () => {
+export interface AuditTrailViewProps {
+  canExport?: boolean;
+  /** Must reauthorize the current stored account, session and privacy state. */
+  onAuthorizeExport?: () => void;
+}
+
+export const AuditTrailView: React.FC<AuditTrailViewProps> = ({ canExport = false, onAuthorizeExport }) => {
   const [logs] = useState<AuditLogItem[]>(() => getAuditLogs());
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterAction, setFilterAction] = useState<string>('all');
-  const [filterEntity, setFilterEntity] = useState<string>('all');
+  const [filterAction, setFilterAction] = useState('all');
+  const [filterEntity, setFilterEntity] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(50);
+  const { showToast } = useToastAndConfirm();
+  const fieldId = `audit-${useId().replace(/[^\w-]/g, '')}`;
+  const filteredLogs = useMemo(() => filterAuditLogs(logs, searchQuery, filterAction, filterEntity), [logs, searchQuery, filterAction, filterEntity]);
+  const hasFilters = !!searchQuery.trim() || filterAction !== 'all' || filterEntity !== 'all';
+  const transferAllowed = canExport && typeof onAuthorizeExport === 'function';
 
-  const filteredLogs = useMemo(() => {
-    return logs.filter(log => {
-      const q = searchQuery.toLowerCase().trim();
-      const matchSearch =
-        !q ||
-        log.userName.toLowerCase().includes(q) ||
-        log.recordName.toLowerCase().includes(q) ||
-        log.details.toLowerCase().includes(q);
-
-      const matchAction = filterAction === 'all' || log.action === filterAction;
-      const matchEntity = filterEntity === 'all' || log.entity === filterEntity;
-
-      return matchSearch && matchAction && matchEntity;
-    });
-  }, [logs, searchQuery, filterAction, filterEntity]);
-
-  const handleExportCSV = () => {
-    const headers = ['المعرف', 'التاريخ والوقت', 'المستخدم', 'الدور', 'العملية', 'الجهة', 'السجل', 'التفاصيل', 'الجهاز'];
-    const rows = filteredLogs.map(l => [
-      l.id,
-      new Date(l.timestamp).toLocaleString('ar-EG'),
-      l.userName,
-      l.userRole,
-      l.action,
-      l.entity,
-      l.recordName,
-      l.details,
-      l.device || ''
-    ]);
-
-    const csvContent = serializeClinicCsv(headers, rows);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `سجل_نشاطات_العيادة_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const authorize = () => {
+    if (!transferAllowed) throw new Error('غير مسموح بتصدير سجل النشاطات أو طباعته من هذا الحساب.');
+    onAuthorizeExport!();
   };
+  const handleExportCSV = () => {
+    try {
+      authorize();
+      const blob = new Blob([serializeAuditCsv(filteredLogs)], { type: 'text/csv;charset=utf-8;' });
+      downloadTransferBlob(blob, `سجل_نشاطات_العيادة_${new Date().toISOString().split('T')[0]}.csv`, authorize);
+    } catch {
+      showToast('تعذّر تصدير سجل النشاطات. راجع صلاحيات الحساب وحالة الجلسة.', 'error');
+    }
+  };
+  const handlePrint = () => {
+    try {
+      authorize();
+      // Native printing includes only mounted rows, unlike the complete CSV.
+      if (filteredLogs.length > visibleCount) {
+        showToast('اعرض بقية النتائج أولًا للطباعة، أو صدّر CSV للحصول على كل النتائج.', 'warning');
+        return;
+      }
+      authorize();
+      window.print();
+    } catch {
+      showToast('تعذّرت الطباعة. راجع صلاحيات الحساب وحالة الجلسة.', 'error');
+    }
+  };
+  const resetFilters = () => { setSearchQuery(''); setFilterAction('all'); setFilterEntity('all'); setVisibleCount(50); };
 
   return (
-    <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/80 space-y-6 font-tajawal">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shadow-2xs">
-            <History className="w-6 h-6" />
-          </div>
+    <section className="audit-trail" dir="rtl" aria-labelledby={`${fieldId}-title`}>
+      <header className="audit-trail-header">
+        <div className="audit-trail-heading">
+          <span className="audit-trail-icon" aria-hidden="true"><History /></span>
           <div>
-            <h2 className="text-lg sm:text-xl font-black text-slate-900">سجل النشاطات والمراجعة (Audit Log)</h2>
-            <p className="text-xs sm:text-sm text-slate-500">تتبع كامل لجميع العمليات، التعديلات والحذفيات في العيادة لضمان الأمان والمساءلة</p>
+            <h2 id={`${fieldId}-title`}>سجل النشاطات</h2>
+            <p>العمليات المسجلة في هذا المتصفح، مع المستخدم والتاريخ وتفاصيل كل عملية.</p>
           </div>
         </div>
+        {transferAllowed && <div className="audit-trail-actions">
+          <button type="button" className="audit-trail-button is-primary" onClick={handleExportCSV} disabled={!filteredLogs.length}><Download aria-hidden="true" />تصدير CSV</button>
+          <button type="button" className="audit-trail-button" onClick={handlePrint} disabled={!filteredLogs.length}><Printer aria-hidden="true" />طباعة</button>
+        </div>}
+      </header>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExportCSV}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm shadow-xs transition-all cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            تصدير excel / csv
-          </button>
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm transition-all cursor-pointer"
-          >
-            <Printer className="w-4 h-4" />
-            طباعة
-          </button>
-        </div>
+      <div className="audit-trail-filters" role="search" aria-label="تصفية سجل النشاطات">
+        <label className="audit-trail-field audit-trail-search" htmlFor={`${fieldId}-search`}>
+          <span>البحث في السجل</span>
+          <div className="audit-trail-input-wrap"><Search aria-hidden="true" /><input id={`${fieldId}-search`} type="search" value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setVisibleCount(50); }} placeholder="اسم المستخدم، رقم الملف أو التفاصيل" /></div>
+        </label>
+        <label className="audit-trail-field" htmlFor={`${fieldId}-action`}>
+          <span>نوع العملية</span>
+          <select id={`${fieldId}-action`} value={filterAction} onChange={event => { setFilterAction(event.target.value); setVisibleCount(50); }}>
+            <option value="all">كل العمليات</option>
+            {AUDIT_ACTIONS.map(action => <option key={action.value} value={action.value}>{action.label}</option>)}
+          </select>
+        </label>
+        <label className="audit-trail-field" htmlFor={`${fieldId}-entity`}>
+          <span>القسم</span>
+          <select id={`${fieldId}-entity`} value={filterEntity} onChange={event => { setFilterEntity(event.target.value); setVisibleCount(50); }}>
+            <option value="all">كل الأقسام</option>
+            {AUDIT_ENTITIES.map(entity => <option key={entity.value} value={entity.value}>{entity.label}</option>)}
+          </select>
+        </label>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="بحث باسم المستخدم أو السجل..."
-            className="w-full pr-9 pl-3 py-2 bg-white rounded-xl border border-slate-200 text-xs sm:text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-200 outline-none"
-          />
-        </div>
-
-        <select
-          value={filterAction}
-          onChange={e => setFilterAction(e.target.value)}
-          className="px-3 py-2 bg-white rounded-xl border border-slate-200 text-xs sm:text-sm font-bold text-slate-800 outline-none"
-        >
-          <option value="all">كل العمليات</option>
-          <option value="create">إضافة جديد</option>
-          <option value="edit">تعديل بيانات</option>
-          <option value="delete">حذف سجل</option>
-          <option value="payment">تحصيل مالي</option>
-          <option value="login">تسجيل دخول</option>
-        </select>
-
-        <select
-          value={filterEntity}
-          onChange={e => setFilterEntity(e.target.value)}
-          className="px-3 py-2 bg-white rounded-xl border border-slate-200 text-xs sm:text-sm font-bold text-slate-800 outline-none"
-        >
-          <option value="all">كل الأقسام</option>
-          <option value="patient">سجلات المرضى</option>
-          <option value="appointment">المواعيد</option>
-          <option value="lab">حالات المعمل</option>
-          <option value="expense">المصروفات</option>
-          <option value="system">النظام والسيشن</option>
-        </select>
+      <div className="audit-trail-summary">
+        <p role="status"><SlidersHorizontal aria-hidden="true" />{hasFilters ? 'نتائج البحث' : 'العمليات المسجلة'} <strong><bdi>{filteredLogs.length.toLocaleString('ar-EG')}</bdi></strong>{hasFilters && <span>من <bdi>{logs.length.toLocaleString('ar-EG')}</bdi></span>}</p>
+        {hasFilters && <button type="button" className="audit-trail-reset" onClick={resetFilters}><X aria-hidden="true" />مسح الفلاتر</button>}
       </div>
 
-      {/* Table of logs */}
-      <div className="overflow-x-auto rounded-2xl border border-slate-200/80">
-        <table className="w-full text-right border-collapse">
-          <thead>
-            <tr className="bg-slate-100/80 text-slate-700 text-xs font-black">
-              <th className="p-3.5">الوقت والتاريخ</th>
-              <th className="p-3.5">المستخدم</th>
-              <th className="p-3.5">نوع العملية</th>
-              <th className="p-3.5">السجل المترابط</th>
-              <th className="p-3.5">التفاصيل والقيمة</th>
-              <th className="p-3.5">الجهاز</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-xs sm:text-sm font-semibold">
-            {filteredLogs.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="p-8 text-center text-slate-400">
-                  لا توجد عمليات مسجلة تطابق فلتر البحث
-                </td>
-              </tr>
-            ) : (
-              filteredLogs.map(log => {
-                let badgeBg = 'bg-slate-100 text-slate-700';
-                let actionLabel = log.action;
-
-                if (log.action === 'create') {
-                  badgeBg = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                  actionLabel = 'إضافة جديد';
-                } else if (log.action === 'edit') {
-                  badgeBg = 'bg-amber-100 text-amber-800 border-amber-200';
-                  actionLabel = 'تعديل';
-                } else if (log.action === 'delete') {
-                  badgeBg = 'bg-rose-100 text-rose-800 border-rose-200';
-                  actionLabel = 'حذف';
-                } else if (log.action === 'payment') {
-                  badgeBg = 'bg-indigo-100 text-indigo-800 border-indigo-200';
-                  actionLabel = 'تحصيل مالي';
-                } else if (log.action === 'login') {
-                  badgeBg = 'bg-purple-100 text-purple-800 border-purple-200';
-                  actionLabel = 'تسجيل دخول';
-                }
-
-                return (
-                  <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="p-3.5 font-mono text-slate-600 dir-ltr text-right">
-                      {new Date(log.timestamp).toLocaleString('ar-EG', {
-                        month: 'numeric',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </td>
-                    <td className="p-3.5">
-                      <div className="font-extrabold text-slate-900">{log.userName}</div>
-                      <span className="text-[10px] text-slate-500 font-bold">{log.userRole}</span>
-                    </td>
-                    <td className="p-3.5">
-                      <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${badgeBg}`}>
-                        {actionLabel}
-                      </span>
-                    </td>
-                    <td className="p-3.5 font-bold text-slate-800">{log.recordName}</td>
-                    <td className="p-3.5 text-slate-600 max-w-xs leading-relaxed">
-                      {log.details}
-                      {log.newValue && (
-                        <span className="block text-emerald-700 font-bold mt-0.5">القيمة: {log.newValue}</span>
-                      )}
-                    </td>
-                    <td className="p-3.5 text-slate-500 text-xs font-medium">{log.device || 'كمبيوتر'}</td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      {filteredLogs.length === 0 ? <div className="audit-trail-empty">
+        <History aria-hidden="true" />
+        <h3>{hasFilters ? 'لا توجد نتائج مطابقة' : 'لا توجد نشاطات مسجلة'}</h3>
+        <p>{hasFilters ? 'جرّب اسمًا أو رقم ملف آخر، أو أعد عرض كل العمليات.' : 'ستظهر هنا العمليات التي يسجلها النظام أثناء العمل.'}</p>
+        {hasFilters && <button type="button" className="audit-trail-button" onClick={resetFilters}>عرض كل العمليات</button>}
+      </div> : <ol className="audit-trail-list" aria-label="العمليات المسجلة">
+        {filteredLogs.slice(0, visibleCount).map(log => {
+          const timestamp = formatAuditDateTime(log.timestamp);
+          return <li key={log.id}>
+            <article className="audit-trail-entry">
+              <div className="audit-trail-entry-top">
+                <div className="audit-trail-tags"><span className={`audit-trail-badge is-${log.action}`}>{auditActionLabel(log.action)}</span><span className="audit-trail-entity">{auditEntityLabel(log.entity)}</span></div>
+                <time className="audit-trail-time" dateTime={timestamp.iso} aria-label={`التاريخ: ${timestamp.date}، الوقت: ${timestamp.time}`}><CalendarDays aria-hidden="true" /><bdi>{timestamp.date}</bdi><span aria-hidden="true">·</span><bdi>{timestamp.time}</bdi></time>
+              </div>
+              <div className="audit-trail-entry-body">
+                <div className="audit-trail-description">
+                  <h3><bdi dir="auto">{log.recordName || 'عملية عامة'}</bdi></h3>
+                  <p><bdi dir="auto">{log.details || 'لا توجد تفاصيل إضافية.'}</bdi></p>
+                  {log.newValue !== undefined && log.newValue !== '' && <div className="audit-trail-value"><span>القيمة المسجلة</span><strong><bdi dir="auto">{log.newValue}</bdi></strong></div>}
+                </div>
+                <dl className="audit-trail-meta">
+                  <div><dt><UserRound aria-hidden="true" />المستخدم</dt><dd><bdi dir="auto">{log.userName || 'غير محدد'}</bdi>{log.userRole && <small><bdi dir="auto">{log.userRole}</bdi></small>}</dd></div>
+                  <div><dt><Monitor aria-hidden="true" />الجهاز</dt><dd><bdi dir="auto">{log.device || 'غير محدد'}</bdi></dd></div>
+                </dl>
+              </div>
+            </article>
+          </li>;
+        })}
+      </ol>}
+      {filteredLogs.length > visibleCount && <button type="button" className="audit-trail-button audit-trail-more" onClick={() => setVisibleCount(count => count + 50)}>عرض المزيد (<bdi>{(filteredLogs.length - visibleCount).toLocaleString('ar-EG')}</bdi> عملية متبقية)</button>}
+      <p className="audit-trail-note">هذا سجل محلي للعمليات المسجلة، وليس سجل مراجعة سحابيًا أو نسخة احتياطية من بيانات العيادة.</p>
+    </section>
   );
 };

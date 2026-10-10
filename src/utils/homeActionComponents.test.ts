@@ -61,7 +61,7 @@ test('all five real quick-action dialogs have matching accessible titles and the
 });
 
 test('real action dialogs keep initial patient result rendering bounded for 5000 fake files', () => {
-  assert.equal((renderCase('walkin').match(/اختبارمريض/g) || []).length, 8);
+  assert.equal((renderCase('walkin').match(/اختبارمريض/g) || []).length, 4);
   assert.equal((renderCase('payment').match(/اختبارمريض/g) || []).length, 20);
   assert.equal((renderCase('schedule').match(/اختبارمريض/g) || []).length, 8);
   assert.equal((renderCase('report').match(/اختبارمريض/g) || []).length, 50);
@@ -70,7 +70,7 @@ test('real action dialogs keep initial patient result rendering bounded for 5000
 test('walk-in has no automatic extraction, pre-filled receipt or unsupported card/transfer choice', () => {
   const html = renderCase('walkin');
   assert.ok(!html.includes('اسم الخدمة 1'));
-  assert.ok(html.includes('لا تُضاف خدمة أو دفعة تلقائيًا'));
+  assert.ok(html.includes('تُحفظ الزيارة والكشف والدفعة مرة واحدة'));
   assert.ok(!html.includes('Card'));
   assert.ok(!html.includes('تحويل إلكتروني'));
   assert.ok(!html.includes('تم التسديد بالكامل'));

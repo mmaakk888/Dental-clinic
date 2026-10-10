@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextWalkInFileNumber, validateWalkInAmounts } from './walkInDraft';
+import { getWalkInServiceOptions, getWalkInToothOptions, nextWalkInFileNumber, validateWalkInAmounts, walkInExaminationDefault } from './walkInDraft';
 import { calculateDailyCollections } from './financials';
 import type { Patient } from '../types';
 
 test('walk-in file suggestions include Arabic digits but do not parse mixed identifiers', () => {
   assert.equal(nextWalkInFileNumber([{ id: '٤٠١' }, { id: '500-old' }, { id: '00402' }]), '403');
-  assert.equal(nextWalkInFileNumber([]), '101');
-  assert.equal(nextWalkInFileNumber([{ id: String(Number.MAX_SAFE_INTEGER) }]), '');
+  assert.equal(nextWalkInFileNumber([]), '1');
+  assert.equal(nextWalkInFileNumber([{ id: String(Number.MAX_SAFE_INTEGER) }]), '9007199254740992');
 });
 
 test('a free walk-in visit with no procedure creates no fictional service income or cash', () => {
@@ -28,4 +28,29 @@ test('walk-in draft rejects invalid or excessive costs and accepts decimals and 
   for (const value of [-1, Infinity, NaN]) assert.ok(validateWalkInAmounts(value, services, 0, 0));
   assert.ok(validateWalkInAmounts(0, services, 101, 0));
   assert.ok(validateWalkInAmounts(0, [{ ...services[0], name: ' ' }], 0, 0));
+});
+
+test('walk-in service options come only from active clinical catalog and use configured prices including zero', () => {
+  assert.deepEqual(getWalkInServiceOptions(), []);
+  assert.deepEqual(getWalkInServiceOptions(['خدمة اختبار', 'تركيبات - ثابتة', 'خدمة بدون سعر', 'خدمة مجانية', 'خدمة اختبار'], {
+    'خدمة اختبار': 450.5, 'تركيبات - ثابتة': 9000, 'خدمة مجانية': 0, 'اسم قديم': 800,
+  }), [{ name: 'خدمة اختبار', price: 450.5 }, { name: 'خدمة بدون سعر', price: 0 }, { name: 'خدمة مجانية', price: 0 }]);
+});
+
+test('walk-in examination default is 100 but preserves explicit free price and never accepts invalid settings', () => {
+  assert.equal(walkInExaminationDefault(), 100);
+  assert.equal(walkInExaminationDefault(0), 0);
+  assert.equal(walkInExaminationDefault(125.5), 125.5);
+  for (const value of [NaN, Infinity, -1, '100', null]) assert.equal(walkInExaminationDefault(value), 100);
+});
+
+test('walk-in teeth use canonical chart IDs for all permanent and primary quadrants without fake labels', () => {
+  const adult = getWalkInToothOptions('adult').flatMap(group => group.options);
+  const pediatric = getWalkInToothOptions('pediatric').flatMap(group => group.options);
+  assert.equal(adult.length, 32); assert.equal(pediatric.length, 20);
+  assert.equal(new Set([...adult, ...pediatric].map(item => item.value)).size, 52);
+  assert.ok(adult.some(item => item.value === 'lr8' && item.label.includes('سن 8')));
+  assert.ok(pediatric.some(item => item.value === 'ulA' && item.label.includes('لبني (A)')));
+  for (const tooth of [undefined, null, 'ur6', 'llE']) assert.equal(validateWalkInAmounts(0, [{ id: 'fake', name: 'خدمة اختبار', price: 0, tooth }], 0, 0), null);
+  for (const tooth of ['', 'ur0', 'ul9', 'ur6junk', 'zz2', 'llf', 'ur1.2', 'lrA\n']) assert.match(validateWalkInAmounts(0, [{ id: 'fake', name: 'خدمة اختبار', price: 0, tooth }], 0, 0) || '', /سنًا صحيحًا/);
 });

@@ -33,7 +33,7 @@ export const ACCOUNT_PERMISSION_GROUPS: readonly { title: string; items: readonl
     { key: 'financialReports', action: 'financial_reports', label: 'التقارير المالية', help: 'الوصول إلى تقارير وحسابات العيادة المالية.' },
   ] },
   { title: 'الإدارة', items: [
-    { key: 'controlPanel', action: 'access_control_panel', label: 'لوحة التحكم وإدارة الحسابات', help: 'صلاحية واسعة تشمل الإعدادات والحسابات والنسخ الاحتياطي.' },
+    { key: 'controlPanel', action: 'access_control_panel', label: 'دخول لوحة التحكم', help: 'دخول الإعدادات المسموح بها. لا يمنح السكرتارية إدارة الحسابات أو النسخ أو الاستيراد والتصدير.' },
     { key: 'managePrices', action: 'manage_prices', label: 'إدارة أسعار الخدمات', help: 'تعديل قائمة الخدمات وأسعارها.' },
   ] },
 ];
@@ -115,7 +115,7 @@ export function validateAccountSchedule(schedule: User['accessSchedule']): strin
 /** A manager is usable in at least one valid work window, not necessarily at this instant. */
 export function isUsableControlPanelManager(user: User): boolean {
   return user.isActive !== false && !!string(user.username).trim()
-    && hasPasswordCredential(user) && canPerformAction(user, 'access_control_panel') && !validateAccountSchedule(user.accessSchedule);
+    && hasPasswordCredential(user) && canPerformAction(user, 'manage_users') && !validateAccountSchedule(user.accessSchedule);
 }
 
 export function guardAccountRemoval(users: User[], userId: string, currentUserId?: string): string | null {

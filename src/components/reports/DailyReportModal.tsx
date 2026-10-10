@@ -242,14 +242,14 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
             {/* Total Outstanding Remaining */}
             <div className="bg-rose-50 p-4 rounded-2xl border border-rose-200 shadow-2xs">
               <div className="flex items-center justify-between mb-1 text-rose-900">
-                <span className="text-xs font-black font-tajawal font-tajawal">المتبقي المطلوب (ديون زيارات)</span>
+                <span className="text-xs font-black font-tajawal">رصيد الملفات الحالي</span>
                 <AlertCircle className="w-5 h-5 text-rose-600" />
               </div>
               <div className="text-2xl sm:text-3xl font-black text-rose-800 font-mono tracking-tight my-1">
                 {canViewRemainingBalance ? mask(metrics.totalOutstandingRemain) : 'غير متاح'}
               </div>
               <div className="text-[10px] text-rose-600 font-bold">
-                متبقي غير مسدد على جلسات الفترة
+                إجمالي المتبقي الآن لملفات التقرير، كل ملف مرة واحدة؛ وليس رصيدًا تاريخيًا للفترة
               </div>
             </div>
 
@@ -322,7 +322,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                   </span>
                 </h4>
                 <p className="text-[11px] text-slate-500 font-medium">
-                  عرض كل زيارة، الخدمات المقدمة، المبلغ المستحصل، والخصم الممنوح
+                  الزيارات والتحصيلات خلال الفترة؛ رصيد الملف الحالي يتكرر للوضوح ولا يُجمع من الصفوف
                 </p>
               </div>
 
@@ -352,7 +352,7 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                       <th className="p-2.5">إجمالي المطلوب</th>
                       <th className="p-2.5 text-emerald-700">المحصل فعلياً</th>
                       <th className="p-2.5 text-amber-700">الخصم/الإعفاء</th>
-                      <th className="p-2.5 text-rose-700">المتبقي</th>
+                      <th className="p-2.5 text-rose-700">رصيد الملف الآن</th>
                       <th className="p-2.5 text-center">طريقة الدفع</th>
                     </tr>
                   </thead>
