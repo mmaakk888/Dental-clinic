@@ -600,6 +600,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <h3 id="cloud-readiness-title" className="font-bold">نسخ احتياطي يدوي، وليس مزامنة بين الأجهزة</h3>
               <p className="leading-relaxed">التشغيل الحالي محلي. يلزم إكمال Firebase Authentication وصلاحيات قاعدة البيانات قبل الاعتماد على النسخ السحابي أو نقل بيانات مرضى حقيقية. لا تفتح قواعد المشروع للجميع لتجاوز خطأ الاتصال.</p>
               <p className="leading-relaxed">للنسخة المحلية الكاملة افتح «التصدير والاستيراد». رفع الواجهة إلى Firebase Hosting وحده لا ينقل ملفات المرضى أو يفعّل المزامنة.</p>
+              <a href="/?clinic-cloud=1" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center rounded-xl border border-indigo-200 bg-white px-3 py-2 font-bold text-indigo-700">فتح مدخل التشغيل السحابي — قيد التجهيز (نافذة جديدة)</a>
+              <p className="text-xs leading-relaxed">المدخل الجديد يفحص حساب Firebase وعضوية المالك فقط؛ لا ينقل هذه النسخ أو بيانات العيادة، ولا يفعّل الحفظ السحابي بعد.</p>
             </section>
             {/* Connection Status Banner */}
             <div className="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 text-white rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-md">

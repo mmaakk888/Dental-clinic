@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import React, { ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface Props {
@@ -7,14 +7,12 @@ interface Props {
 
 interface State {
   hasError: boolean;
-  error: Error | null;
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
   public props: Props;
   public state: State = {
-    hasError: false,
-    error: null
+    hasError: false
   };
 
   constructor(props: Props) {
@@ -22,12 +20,14 @@ export class ErrorBoundary extends React.Component<Props, State> {
     this.props = props;
   }
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+  public static getDerivedStateFromError(): State {
+    return { hasError: true };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error in Dental Clinic Management System:', error, errorInfo);
+  public componentDidCatch() {
+    // Provider/render errors can contain record or credential details. Keep
+    // those out of both the fallback UI and normal browser diagnostics.
+    console.error('The clinic interface could not be displayed. No save confirmation is implied.');
   }
 
   private handleReload = () => {
@@ -46,21 +46,15 @@ export class ErrorBoundary extends React.Component<Props, State> {
             <div className="space-y-2">
               <h2 className="text-xl font-black text-slate-900">حدث خطأ مفاجئ في النظام</h2>
               <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                تم حفظ بياناتك بأمان. يمكنك إعادة تحميل الصفحة لاستئناف العمل فوراً.
+                تعذر إكمال العرض. إذا كنت تُجري عملية حفظ، تحقق من سجلها قبل إعادة المحاولة؛ هذه الرسالة لا تؤكد نجاح الحفظ.
               </p>
             </div>
-
-            {this.state.error && (
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] font-mono text-rose-800 text-left dir-ltr overflow-x-auto max-h-32">
-                {this.state.error.toString()}
-              </div>
-            )}
 
             <button
               onClick={this.handleReload}
               className="w-full py-3.5 px-5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
             >
-              <RefreshCw className="w-4 h-4 animate-spin-slow" />
+              <RefreshCw className="w-4 h-4" />
               إعادة تشغيل العيادة الآن
             </button>
           </div>
