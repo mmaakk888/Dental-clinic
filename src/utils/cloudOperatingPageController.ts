@@ -2,9 +2,11 @@ import { CloudOperatingAuthError, cloudOperatingAuthErrorMessage,
   type CloudOperatingAuthSession, type CloudOperatingAuthState,
   type CloudOperatingFirebaseSession } from './cloudOperatingAuth';
 import type { createCloudContactWorkspaceController } from './cloudContactWorkspaceController';
+import type { CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
 
 export type CloudOperatingContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
-export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, 'getContacts'>>;
+export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, 'getContacts' | 'getPatients'>>;
+export type CloudOperatingPatientsWorkspace = CloudPatientWorkspaceController;
 export type CloudOperatingContactsState = Readonly<{
   phase: 'closed' | 'opening' | 'open';
   error: string;
@@ -17,6 +19,7 @@ export type CloudOperatingPageState = Readonly<{
   error: string;
   cleanupFailed: boolean;
   contacts: CloudOperatingContactsState;
+  patients: CloudOperatingContactsState;
 }>;
 
 const CLEANUP_ERROR = 'تعذر تأكيد إغلاق جلسة الدخول. أعد تحميل الصفحة قبل المحاولة من جديد.';
@@ -24,6 +27,8 @@ const SIGN_IN_FIRST = 'سجّل الدخول أولًا لتحديث حالة ا
 const CONTACTS_ERROR = 'تعذر فتح مساحة جهات الاتصال. لم نستخدم بيانات محلية بديلة.';
 const CONTACTS_UNAVAILABLE = 'مساحة جهات الاتصال غير متاحة في جلسة الدخول الحالية.';
 const CONTACTS_CLOSE_ERROR = 'أكمل المسودة أو ألغها أولًا؛ العملية غير المؤكدة تحتاج إعادة التحقق قبل الإغلاق.';
+const PATIENTS_ERROR = 'تعذر فتح مساحة ملفات المرضى. لم نستخدم بيانات محلية بديلة.';
+const PATIENTS_UNAVAILABLE = 'مساحة ملفات المرضى غير متاحة في جلسة الدخول الحالية.';
 
 function contactsState(phase: CloudOperatingContactsState['phase'], error = ''): CloudOperatingContactsState {
   return Object.freeze({ phase, error });
@@ -43,7 +48,8 @@ export function createCloudOperatingPageController(
   isRuntimeValid: () => boolean,
 ) {
   let state: CloudOperatingPageState = Object.freeze({ auth: authState('signed-out'),
-    pending: false, closing: false, error: '', cleanupFailed: false, contacts: contactsState('closed') });
+    pending: false, closing: false, error: '', cleanupFailed: false,
+    contacts: contactsState('closed'), patients: contactsState('closed') });
   const listeners = new Set<(value: CloudOperatingPageState) => void>();
   let epoch = 0;
   let closed = false;
@@ -58,6 +64,12 @@ export function createCloudOperatingPageController(
   let contactsOpening: Promise<CloudOperatingContactsWorkspace | null> | null = null;
   let contactsIdentity: { session: CloudOperatingPageSession; uid: string } | null = null;
   let contactsInvalidating = false;
+  let patientsLease = 0;
+  let patientsWorkspace: CloudOperatingPatientsWorkspace | null = null;
+  let patientsOpening: Promise<CloudOperatingPatientsWorkspace | null> | null = null;
+  let patientsIdentity: { session: CloudOperatingPageSession; uid: string } | null = null;
+  let patientsInvalidating = false;
+  let workspaceSwitching = false;
 
   function publish(next: CloudOperatingPageState, notify = true) {
     state = Object.freeze(next);
@@ -106,6 +118,36 @@ export function createCloudOperatingPageController(
     return true;
   }
 
+  function revokePatients() {
+    ++patientsLease;
+    const previous = patientsWorkspace;
+    patientsWorkspace = null;
+    patientsOpening = null;
+    patientsIdentity = null;
+    publish({ ...state, patients: contactsState('closed') }, false);
+    const wasInvalidating = patientsInvalidating;
+    patientsInvalidating = true;
+    try { previous?.dispose(); } finally { patientsInvalidating = wasInvalidating; }
+  }
+
+  function patientsActive(ticket: number, candidate: CloudOperatingPageSession, uid: string): boolean {
+    const owned = () => !closed && !closing && !cleanupFailed && !patientsInvalidating
+      && patientsLease === ticket && session === candidate;
+    if (!owned()) return false;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    if (!owned()) return false;
+    const auth = candidate.getState();
+    if (!owned()) return false;
+    if (auth.phase === 'signed-out' || auth.phase === 'signing-out' || auth.phase === 'closed'
+      || auth.phase === 'owner-checked' && auth.owner?.uid !== uid) {
+      revokePatients();
+      if (!closed && !closing && !cleanupFailed && session === candidate) publish({ ...state, auth });
+      return false;
+    }
+    // A metadata refresh is not a new identity/view lifetime.
+    return true;
+  }
+
   async function getSession(ticket: number): Promise<CloudOperatingPageSession | null> {
     if (!active(ticket)) return null;
     if (session) return session;
@@ -131,9 +173,11 @@ export function createCloudOperatingPageController(
       if (closed || closing || cleanupFailed || session !== candidate) return;
       if (!runtimeValid()) { void rejectRuntime(); return; }
       if (auth.phase === 'signed-out' || auth.phase === 'signing-out' || auth.phase === 'closed'
-        || auth.phase === 'owner-checked' && contactsIdentity && auth.owner?.uid !== contactsIdentity.uid) {
+        || auth.phase === 'owner-checked' && (contactsIdentity && auth.owner?.uid !== contactsIdentity.uid
+          || patientsIdentity && auth.owner?.uid !== patientsIdentity.uid)) {
         publish({ ...state, auth }, false);
         revokeContacts();
+        revokePatients();
         if (closed || closing || cleanupFailed || session !== candidate) return;
       }
       publish({ ...state, auth });
@@ -178,14 +222,15 @@ export function createCloudOperatingPageController(
       if (!success) cleanupFailed = true;
       publish({ auth: authState(closed ? 'closed' : 'signed-out'), pending: false,
         closing: false, error: cleanupFailed ? CLEANUP_ERROR : '', cleanupFailed,
-        contacts: contactsState('closed') }, !closed);
+        contacts: contactsState('closed'), patients: contactsState('closed') }, !closed);
     });
     // Establish closing ownership/state before workspace disposal callbacks can
     // synchronously attempt another close, open, sign-in or view disposal.
     publish({ auth: authState(permanent ? 'closed' : 'signing-out'), pending: false,
       closing: true, error: cleanupFailed ? CLEANUP_ERROR : '', cleanupFailed,
-      contacts: contactsState('closed') }, false);
+      contacts: contactsState('closed'), patients: contactsState('closed') }, false);
     revokeContacts();
+    revokePatients();
     try { stop?.(); } catch { /* Session disposal remains mandatory. */ }
     if (oldSession) {
       try { immediateDisposal = Promise.resolve(oldSession.dispose()).then(() => true, () => false); }
@@ -206,6 +251,7 @@ export function createCloudOperatingPageController(
 
   async function run(kind: 'sign-in' | 'refresh', email?: string, password?: string): Promise<void> {
     if (closed || closing || cleanupFailed || state.pending || contactsInvalidating || contactsOpening
+      || patientsInvalidating || patientsOpening || workspaceSwitching
       || session?.getState().phase === 'checking') return;
     if (!runtimeValid()) { await rejectRuntime(); return; }
     if (kind === 'refresh' && !session) {
@@ -214,7 +260,7 @@ export function createCloudOperatingPageController(
     }
     const ticket = ++epoch;
     publish({ ...state, auth: authState('checking'), pending: true, error: '' }, false);
-    if (kind === 'sign-in') revokeContacts();
+    if (kind === 'sign-in') { revokeContacts(); revokePatients(); }
     publish(state);
     try {
       const current = await getSession(ticket);
@@ -252,7 +298,7 @@ export function createCloudOperatingPageController(
   }
 
   function openContacts(): Promise<CloudOperatingContactsWorkspace | null> {
-    if (closed || closing || cleanupFailed || contactsInvalidating) return Promise.resolve(null);
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
     if (contactsOpening) return contactsOpening;
     const existing = getContactsWorkspace();
@@ -268,6 +314,13 @@ export function createCloudOperatingPageController(
       publish({ ...state, contacts: contactsState('closed', CONTACTS_UNAVAILABLE) });
       return Promise.resolve(null);
     }
+    if (patientsWorkspace || patientsOpening) {
+      workspaceSwitching = true;
+      try { if (!closePatients()) return Promise.resolve(null); }
+      finally { workspaceSwitching = false; }
+    }
+    // Closing the other workspace notifies subscribers; they may close Auth.
+    if (closed || closing || cleanupFailed || session !== candidate) return Promise.resolve(null);
     const ticket = ++contactsLease;
     contactsIdentity = { session: candidate, uid: owner.uid };
     const work: Promise<CloudOperatingContactsWorkspace | null> = Promise.resolve().then(async () => {
@@ -309,10 +362,11 @@ export function createCloudOperatingPageController(
     return work;
   }
 
-  function closeContacts(): boolean {
-    if (closed || closing || contactsInvalidating) return false;
+  function closeContacts(expected?: CloudOperatingContactsWorkspace): boolean {
+    if (closed || closing || contactsInvalidating || patientsInvalidating) return false;
     if (!runtimeValid()) { void rejectRuntime(); return false; }
     const workspace = getContactsWorkspace();
+    if (expected && workspace !== expected) return false;
     if (workspace) {
       const current = workspace.getState();
       if (current.draft || current.saveStatus !== 'idle') {
@@ -325,9 +379,91 @@ export function createCloudOperatingPageController(
     return true;
   }
 
+  function getPatientsWorkspace(): CloudOperatingPatientsWorkspace | null {
+    const identity = patientsIdentity;
+    if (!identity || !patientsActive(patientsLease, identity.session, identity.uid)) return null;
+    return patientsWorkspace;
+  }
+
+  function openPatients(): Promise<CloudOperatingPatientsWorkspace | null> {
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || workspaceSwitching) return Promise.resolve(null);
+    if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (patientsOpening) return patientsOpening;
+    const existing = getPatientsWorkspace();
+    if (existing) return Promise.resolve(existing);
+    const candidate = session;
+    const owner = candidate?.getState().owner;
+    if (!candidate || state.pending || state.auth.phase !== 'owner-checked'
+      || candidate.getState().phase !== 'owner-checked' || !owner || typeof candidate.getPatients !== 'function') {
+      publish({ ...state, patients: contactsState('closed', PATIENTS_UNAVAILABLE) });
+      return Promise.resolve(null);
+    }
+    if (contactsWorkspace || contactsOpening) {
+      workspaceSwitching = true;
+      try { if (!closeContacts()) return Promise.resolve(null); }
+      finally { workspaceSwitching = false; }
+    }
+    if (closed || closing || cleanupFailed || session !== candidate) return Promise.resolve(null);
+    const ticket = ++patientsLease;
+    patientsIdentity = { session: candidate, uid: owner.uid };
+    const work: Promise<CloudOperatingPatientsWorkspace | null> = Promise.resolve().then(async () => {
+      try {
+        if (!patientsActive(ticket, candidate, owner.uid)) return null;
+        const repository = await candidate.getPatients!();
+        if (!patientsActive(ticket, candidate, owner.uid)) return null;
+        const workspace = await import('./cloudPatientWorkspaceController');
+        if (!patientsActive(ticket, candidate, owner.uid)) return null;
+        const controller = workspace.createCloudPatientWorkspaceController({
+          getRepository: async () => {
+            if (!patientsActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
+            return repository;
+          },
+          isActive: () => patientsActive(ticket, candidate, owner.uid),
+        });
+        if (!patientsActive(ticket, candidate, owner.uid)) { controller.dispose(); return null; }
+        patientsWorkspace = controller;
+        publish({ ...state, patients: contactsState('open') });
+        return patientsActive(ticket, candidate, owner.uid) && patientsWorkspace === controller ? controller : null;
+      } catch {
+        if (closed || closing || cleanupFailed || session !== candidate) return null;
+        const phase = candidate.getState().phase;
+        if (patientsLease !== ticket && phase !== 'signed-out' && phase !== 'signing-out' && phase !== 'closed') return null;
+        const cleanup = beginClose(false);
+        const closingTicket = epoch;
+        await cleanup;
+        if (!closed && closingTicket === epoch && !cleanupFailed) {
+          publish({ ...state, patients: contactsState('closed', PATIENTS_ERROR) });
+        }
+        return null;
+      } finally {
+        if (patientsOpening === work) patientsOpening = null;
+      }
+    });
+    patientsOpening = work;
+    publish({ ...state, patients: contactsState('opening') });
+    return work;
+  }
+
+  function closePatients(expected?: CloudOperatingPatientsWorkspace): boolean {
+    if (closed || closing || patientsInvalidating || contactsInvalidating) return false;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    const workspace = getPatientsWorkspace();
+    if (expected && workspace !== expected) return false;
+    if (workspace) {
+      const current = workspace.getState();
+      if (current.draft || current.saveStatus !== 'idle') {
+        publish({ ...state, patients: contactsState('open', CONTACTS_CLOSE_ERROR) });
+        return false;
+      }
+    }
+    revokePatients();
+    publish(state);
+    return true;
+  }
+
   return {
     getState: () => {
-      if (contactsIdentity && !runtimeValid()) void rejectRuntime();
+      if ((contactsIdentity || patientsIdentity) && !runtimeValid()) void rejectRuntime();
       return state;
     },
     subscribe: (listener: (value: CloudOperatingPageState) => void) => {
@@ -340,6 +476,9 @@ export function createCloudOperatingPageController(
     openContacts,
     getContactsWorkspace,
     closeContacts,
+    openPatients,
+    getPatientsWorkspace,
+    closePatients,
     signOut: (): Promise<boolean> => closed ? Promise.resolve(false) : beginClose(false),
     dispose: (): Promise<void> => {
       if (disposal) return disposal;

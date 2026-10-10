@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import CloudOperatingPage from '../components/auth/CloudOperatingPage';
 import type { createCloudContactWorkspaceController } from './cloudContactWorkspaceController';
+import type { CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
 
 type Workspace = ReturnType<typeof createCloudContactWorkspaceController>;
 type Element = { type: unknown; props: Record<string, any> };
@@ -135,5 +136,77 @@ test('return-to-local action disposes the preview before awaiting session cleanu
     page.button(' العودة للنسخة المحلية').props.onClick();
     assert.equal(controller.getState().closed, true);
     assert.equal(controller.getState().draft, null);
+  });
+});
+
+test('patient preview opens explicitly without Auth, data reads or a draft and all actions remain inert', async () => {
+  await withPage(async page => {
+    const open = page.button('معاينة واجهة ملفات المرضى');
+    assert.equal(open.props.disabled, false);
+    open.props.onClick();
+    const view = page.preview(), controller = view.props.controller as CloudPatientWorkspaceController;
+    assert.equal(view.props.previewOnly, true);
+    assert.deepEqual(controller.getState().records, []);
+    assert.equal(controller.getState().selected, null);
+    assert.equal(controller.getState().draft, null);
+    assert.equal(controller.getState().loaded, false);
+    assert.equal(controller.beginCreate(), false);
+    assert.equal(controller.updateProfile({ name: 'Synthetic preview' }), false);
+    await controller.refresh(); await controller.loadMore(); await controller.save();
+    await controller.findByFileNo(1); await controller.findByPhone({ mobile: '01000000001' });
+    assert.deepEqual(controller.getState().records, []);
+    assert.equal(controller.getState().error, '');
+  });
+});
+
+test('patient preview close/reopen isolates lifetimes and retained close cannot affect a fresh preview', async () => {
+  await withPage(page => {
+    const retainedOpen = page.button('معاينة واجهة ملفات المرضى');
+    retainedOpen.props.onClick();
+    const old = page.preview(), oldController = old.props.controller as CloudPatientWorkspaceController;
+    retainedOpen.props.onClick();
+    assert.equal(page.preview().props.controller, oldController);
+    old.props.onClose();
+    assert.equal(oldController.getState().closed, true);
+    page.button('معاينة واجهة ملفات المرضى').props.onClick();
+    const fresh = page.preview(), freshController = fresh.props.controller as CloudPatientWorkspaceController;
+    assert.notEqual(freshController, oldController);
+    old.props.onClose();
+    assert.equal(page.preview().props.controller, freshController);
+    assert.equal(freshController.getState().closed, false);
+    page.unmount();
+    assert.equal(freshController.getState().closed, true);
+    retainedOpen.props.onClick();
+    assert.equal(freshController.getState().closed, true);
+  });
+});
+
+test('retained preview opens cannot put patient and contact previews in competing workspaces', async () => {
+  await withPage(page => {
+    const contactOpen = page.button('معاينة واجهة جهات الاتصال');
+    const patientOpen = page.button('معاينة واجهة ملفات المرضى');
+    patientOpen.props.onClick();
+    const patients = page.preview();
+    contactOpen.props.onClick();
+    assert.equal(page.preview().props.controller, patients.props.controller);
+    patients.props.onClose();
+    contactOpen.props.onClick();
+    const contacts = page.preview();
+    patientOpen.props.onClick();
+    assert.equal(page.preview().props.controller, contacts.props.controller);
+    contacts.props.onClose();
+    patientOpen.props.onClick();
+    assert.notEqual(page.preview().props.controller, contacts.props.controller);
+  });
+});
+
+test('return-to-local disposes the patient preview before asynchronous session cleanup', async () => {
+  await withPage(page => {
+    page.button('معاينة واجهة ملفات المرضى').props.onClick();
+    const controller = page.preview().props.controller as CloudPatientWorkspaceController;
+    page.button(' العودة للنسخة المحلية').props.onClick();
+    assert.equal(controller.getState().closed, true);
+    assert.equal(controller.getState().draft, null);
+    assert.deepEqual(controller.getState().records, []);
   });
 });

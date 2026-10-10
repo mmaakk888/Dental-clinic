@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Cloud, Database, Eye, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UsersRound } from 'lucide-react';
+import { ArrowRight, Check, Cloud, Database, Eye, FolderHeart, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UsersRound } from 'lucide-react';
 import { ClinicLogo } from '../common/ClinicLogo';
 import CloudUnavailablePage from './CloudUnavailablePage';
 import { isCloudOperatingRequest } from '../../utils/clinicEntryRoute';
@@ -7,15 +7,19 @@ import { CLOUD_PROJECT_ID } from '../../utils/cloudIdentity';
 import { createFirebaseOperatingAuth } from '../../utils/cloudOperatingAuth';
 import { CLOUD_CONTACTS_UI_STAGE, createCloudContactUiPreview } from '../../utils/cloudContactUiStage';
 import type { createCloudContactWorkspaceController } from '../../utils/cloudContactWorkspaceController';
+import { CLOUD_PATIENTS_UI_STAGE, createCloudPatientUiPreview } from '../../utils/cloudPatientUiStage';
+import type { CloudPatientWorkspaceController } from '../../utils/cloudPatientWorkspaceController';
 import { createCloudOperatingPageController, type CloudOperatingPageController,
   type CloudOperatingPageState } from '../../utils/cloudOperatingPageController';
 
 const CloudContactsWorkspace = lazy(() => import('../contacts/CloudContactsWorkspace'));
+const CloudPatientsWorkspace = lazy(() => import('../patients/CloudPatientsWorkspace'));
 type ContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
 
 const INITIAL_STATE: CloudOperatingPageState = {
   auth: { phase: 'signed-out', owner: null }, pending: false, closing: false, error: '', cleanupFailed: false,
   contacts: { phase: 'closed', error: '' },
+  patients: { phase: 'closed', error: '' },
 };
 
 function validRoute() {
@@ -31,6 +35,9 @@ export default function CloudOperatingPage() {
   const previewRef = useRef<ContactsWorkspace | null>(null);
   const [preview, setPreview] = useState<ContactsWorkspace | null>(null);
   const [workspace, setWorkspace] = useState<ContactsWorkspace | null>(null);
+  const patientPreviewRef = useRef<CloudPatientWorkspaceController | null>(null);
+  const [patientPreview, setPatientPreview] = useState<CloudPatientWorkspaceController | null>(null);
+  const [patientWorkspace, setPatientWorkspace] = useState<CloudPatientWorkspaceController | null>(null);
 
   useEffect(() => {
     // A pure controller, not an SDK session. StrictMode remount gets a fresh
@@ -43,6 +50,7 @@ export default function CloudOperatingPage() {
         // Temporary Auth checking keeps the same workspace lease. Actual
         // identity loss disposes it in the parent before this UI notification.
         if (next.contacts.phase !== 'open') setWorkspace(null);
+        if (next.patients.phase !== 'open') setPatientWorkspace(null);
       }
     });
     setView(controller.getState());
@@ -50,6 +58,8 @@ export default function CloudOperatingPage() {
       if (active.current === controller) active.current = null;
       previewRef.current?.dispose();
       previewRef.current = null;
+      patientPreviewRef.current?.dispose();
+      patientPreviewRef.current = null;
       unsubscribe();
       void controller.dispose().catch(() => undefined);
     };
@@ -58,12 +68,18 @@ export default function CloudOperatingPage() {
   async function leave(returnToLocal: boolean) {
     const controller = active.current;
     if (!controller) return;
-    const currentWorkspace = controller.getContactsWorkspace();
-    if (currentWorkspace?.getState().draft && !window.confirm('الخروج يمسح المسودة من هذه الصفحة. إذا وصلت عملية للخادم فلن يلغيها الخروج. هل تريد المتابعة؟')) return;
+    const contacts = controller.getContactsWorkspace()?.getState();
+    const patients = controller.getPatientsWorkspace()?.getState();
+    if ([contacts, patients].some(current => current?.draft || current && current.saveStatus !== 'idle')
+      && !window.confirm('الخروج يمسح المسودة من هذه الصفحة. إذا وصلت عملية للخادم فلن يلغيها الخروج. هل تريد المتابعة؟')) return;
     previewRef.current?.dispose();
     previewRef.current = null;
     setPreview(null);
     setWorkspace(null);
+    patientPreviewRef.current?.dispose();
+    patientPreviewRef.current = null;
+    setPatientPreview(null);
+    setPatientWorkspace(null);
     setPassword('');
     const confirmed = await controller.signOut();
     if (confirmed && returnToLocal && active.current === controller && validRoute()) window.location.assign('/');
@@ -71,9 +87,10 @@ export default function CloudOperatingPage() {
 
   function openPreview() {
     const parent = active.current;
-    if (!parent || !validRoute() || previewRef.current) return;
+    if (!parent || !validRoute() || previewRef.current || patientPreviewRef.current) return;
     const status = parent.getState();
-    if (status.pending || status.closing || status.cleanupFailed || status.contacts.phase !== 'closed') return;
+    if (status.pending || status.closing || status.cleanupFailed || status.contacts.phase !== 'closed'
+      || status.patients.phase !== 'closed') return;
     const controller: ContactsWorkspace = createCloudContactUiPreview(() => previewRef.current === controller
       && active.current === parent && validRoute());
     previewRef.current = controller;
@@ -85,7 +102,7 @@ export default function CloudOperatingPage() {
     // mandatory when this future feature is released. No URL/setting bypass.
     if (!CLOUD_CONTACTS_UI_STAGE.available) return;
     const controller = active.current;
-    if (!controller || !validRoute()) return;
+    if (!controller || !validRoute() || previewRef.current || patientPreviewRef.current) return;
     const contacts = await controller.openContacts();
     if (!contacts || active.current !== controller || !validRoute()
       || controller.getContactsWorkspace() !== contacts) return;
@@ -98,7 +115,38 @@ export default function CloudOperatingPage() {
       previewRef.current.dispose();
       previewRef.current = null;
       setPreview(null);
-    } else if (active.current?.getContactsWorkspace() === displayed && active.current.closeContacts()) setWorkspace(null);
+    } else if (active.current?.getContactsWorkspace() === displayed && active.current.closeContacts(displayed)) setWorkspace(null);
+  }
+
+  function openPatientPreview() {
+    const parent = active.current;
+    if (!parent || !validRoute() || previewRef.current || patientPreviewRef.current) return;
+    const status = parent.getState();
+    if (status.pending || status.closing || status.cleanupFailed || status.contacts.phase !== 'closed'
+      || status.patients.phase !== 'closed') return;
+    const controller: CloudPatientWorkspaceController = createCloudPatientUiPreview(() => patientPreviewRef.current === controller
+      && active.current === parent && validRoute());
+    patientPreviewRef.current = controller;
+    setPatientPreview(controller);
+  }
+
+  async function openPatients() {
+    if (!CLOUD_PATIENTS_UI_STAGE.available) return;
+    const controller = active.current;
+    if (!controller || !validRoute() || previewRef.current || patientPreviewRef.current) return;
+    const patients = await controller.openPatients();
+    if (!patients || active.current !== controller || !validRoute()
+      || controller.getPatientsWorkspace() !== patients) return;
+    setPatientWorkspace(patients);
+    await patients.refresh();
+  }
+
+  function closePatients(displayed: CloudPatientWorkspaceController) {
+    if (patientPreviewRef.current === displayed) {
+      displayed.dispose();
+      patientPreviewRef.current = null;
+      setPatientPreview(null);
+    } else if (active.current?.getPatientsWorkspace() === displayed && active.current.closePatients(displayed)) setPatientWorkspace(null);
   }
 
   if (!validRoute()) return <CloudUnavailablePage />;
@@ -107,6 +155,7 @@ export default function CloudOperatingPage() {
   const blocked = busy || view.cleanupFailed;
   const owner = view.auth.phase === 'owner-checked' ? view.auth.owner : null;
   const displayedWorkspace = preview ?? workspace;
+  const displayedPatients = patientPreview ?? patientWorkspace;
 
   return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-5 sm:px-6 sm:py-8 text-slate-900">
     <div className="mx-auto w-full max-w-5xl space-y-5 sm:space-y-7">
@@ -115,7 +164,9 @@ export default function CloudOperatingPage() {
         <button type="button" onClick={() => void leave(true)} disabled={view.closing || view.cleanupFailed} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 disabled:opacity-50"><ArrowRight size={18} aria-hidden="true" /> العودة للنسخة المحلية</button>
       </header>
 
-      {displayedWorkspace ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة جهات الاتصال…</section>}>
+      {displayedPatients ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة ملفات المرضى…</section>}>
+        <CloudPatientsWorkspace controller={displayedPatients} onClose={() => closePatients(displayedPatients)} previewOnly={patientPreview !== null} closing={view.closing} />
+      </Suspense> : displayedWorkspace ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة جهات الاتصال…</section>}>
         <CloudContactsWorkspace controller={displayedWorkspace} onClose={() => closeContacts(displayedWorkspace)} previewOnly={preview !== null} />
       </Suspense> : <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
         <section className="min-w-0 rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm" aria-labelledby="operating-account-title">
@@ -129,7 +180,7 @@ export default function CloudOperatingPage() {
           </div> : <form className="space-y-4" aria-busy={busy} onSubmit={event => {
             event.preventDefault();
             const controller = active.current;
-            if (!controller || blocked) return;
+            if (!controller || blocked || previewRef.current || patientPreviewRef.current) return;
             const submittedPassword = password;
             setPassword('');
             void controller.signIn(email, submittedPassword);
@@ -145,6 +196,14 @@ export default function CloudOperatingPage() {
         </section>
 
         <aside className="min-w-0 space-y-4" aria-labelledby="operating-readiness-title">
+          <section aria-labelledby="operating-patients-title" className="rounded-3xl border border-indigo-100 bg-white p-5 sm:p-7 shadow-sm">
+            <div className="flex items-start gap-3"><span className="shrink-0 rounded-2xl bg-indigo-50 p-3 text-indigo-600"><FolderHeart size={23} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-patients-title" className="text-lg font-extrabold">ملفات المرضى السحابية</h2><p className="mt-1 text-sm leading-7 text-slate-500">ملف تعريفي مرتب ورقم تلقائي مشترك، مع بحث بالرقم أو الهاتف.</p></div></div>
+            <p id="operating-patients-stage" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-7 text-amber-950">{CLOUD_PATIENTS_UI_STAGE.reason}</p>
+            <button type="button" disabled={blocked} onClick={openPatientPreview} className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700 disabled:opacity-50"><Eye size={19} aria-hidden="true" />معاينة واجهة ملفات المرضى</button>
+            <p className="mt-2 text-xs leading-6 text-slate-500">معاينة فارغة للتصميم فقط، بلا بيانات أو اتصال بقاعدة البيانات. لا يلزم تسجيل الدخول لمشاهدتها.</p>
+            {owner && <button type="button" aria-describedby="operating-patients-stage" disabled={blocked || !CLOUD_PATIENTS_UI_STAGE.available || view.patients.phase === 'opening'} onClick={() => void openPatients()} className="mt-3 flex min-h-11 w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{CLOUD_PATIENTS_UI_STAGE.available ? 'فتح ملفات المرضى من الخادم' : 'حفظ ملفات المرضى غير مفعّل بعد'}</button>}
+            {view.patients.error && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm leading-7 text-rose-800">{view.patients.error}</p>}
+          </section>
           <section aria-labelledby="operating-contacts-title" className="rounded-3xl border border-indigo-100 bg-white p-5 sm:p-7 shadow-sm">
             <div className="flex items-start gap-3"><span className="shrink-0 rounded-2xl bg-indigo-50 p-3 text-indigo-600"><UsersRound size={23} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-contacts-title" className="text-lg font-extrabold">جهات الاتصال السحابية</h2><p className="mt-1 text-sm leading-7 text-slate-500">واجهة مرتبة للموبايل والكمبيوتر، وحالات واضحة للحفظ وإعادة المحاولة.</p></div></div>
             <p id="operating-contacts-stage" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-7 text-amber-950">{CLOUD_CONTACTS_UI_STAGE.reason}</p>

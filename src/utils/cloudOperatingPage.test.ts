@@ -35,9 +35,10 @@ test('operating entry initially renders an accessible explicit login, not a clou
   assert.match(html, /text-base/u);
   assert.match(html, /min-w-0/u);
   assert.match(html, /معاينة واجهة جهات الاتصال/u);
+  assert.match(html, /معاينة واجهة ملفات المرضى/u);
   assert.match(html, /بلا بيانات أو اتصال بقاعدة البيانات/u);
   assert.match(html, /الحفظ السحابي غير مفعّل بعد/u);
-  assert.doesNotMatch(html, /فتح جهات الاتصال من الخادم|cloud-contact-name/u);
+  assert.doesNotMatch(html, /فتح جهات الاتصال من الخادم|فتح ملفات المرضى من الخادم|cloud-contact-name|cloud-patient-name/u);
 });
 
 test('operating page independently blocks external, malformed, conflicting and duplicate routes', () => {
@@ -52,7 +53,7 @@ test('operating page independently blocks external, malformed, conflicting and d
 
 test('operating entry graph excludes App, clinic records, local authentication, AI and previous backup client', async () => {
   const result = await build({ entryPoints: ['src/components/auth/CloudOperatingPage.tsx'], bundle: true,
-    write: false, metafile: true, platform: 'browser', logLevel: 'silent',
+    write: false, outdir: 'synthetic-bundle-only', metafile: true, platform: 'browser', logLevel: 'silent',
     external: ['react', 'react-dom', 'lucide-react', 'firebase/*'] });
   const inputs = Object.keys(result.metafile!.inputs);
   assert.ok(inputs.includes('src/utils/cloudOperatingAuth.ts'));

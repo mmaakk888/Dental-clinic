@@ -1,0 +1,83 @@
+.cloud-patients-workspace { width: 100%; max-width: 76rem; margin-inline: auto; color: #0f172a; display: grid; gap: 1rem; min-width: 0; }
+.cloud-patients-workspace * { box-sizing: border-box; }
+.cloud-patients-workspace :is(h2,h3,h4,p) { margin: 0; }
+.cloud-patients-workspace h2 { font-size: clamp(1.25rem,2.5vw,1.5rem); font-weight: 750; }
+.cloud-patients-workspace h3 { font-weight: 700; }
+.cloud-patients-workspace .cpw-surface { border: 1px solid #e2e8f0; border-radius: 1rem; background: #fff; padding: 1rem; min-width: 0; }
+.cloud-patients-workspace .cpw-header, .cloud-patients-workspace .cpw-section-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.cloud-patients-workspace .cpw-header { align-items: flex-start; }
+.cloud-patients-workspace .cpw-heading { display: flex; gap: .75rem; align-items: flex-start; min-width: 0; }
+.cloud-patients-workspace .cpw-heading > div { min-width: 0; }
+.cloud-patients-workspace .cpw-heading p { color: #475569; font-size: .875rem; line-height: 1.8; margin-top: .25rem; }
+.cloud-patients-workspace .cpw-heading-icon { width: 2.75rem; height: 2.75rem; border-radius: .75rem; flex: 0 0 auto; display: grid; place-items: center; background: #eff6ff; color: #1d4ed8; }
+.cloud-patients-workspace .cpw-button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: .45rem; border-radius: .75rem; padding: .5rem .8rem; font-size: .875rem; font-weight: 650; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: color 130ms,background-color 130ms,border-color 130ms; max-width: 100%; }
+.cloud-patients-workspace .cpw-button svg { flex-shrink: 0; }
+.cloud-patients-workspace .cpw-button-secondary { background: #fff; color: #334155; border-color: #cbd5e1; }
+.cloud-patients-workspace .cpw-button-secondary:hover { background: #f8fafc; }
+.cloud-patients-workspace .cpw-button-primary { background: #1d4ed8; color: #fff; }
+.cloud-patients-workspace .cpw-button-primary:hover { background: #1e40af; }
+.cloud-patients-workspace .cpw-button-whatsapp { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+.cloud-patients-workspace .cpw-button-whatsapp:hover { background: #d1fae5; }
+.cloud-patients-workspace :is(button,a,input,textarea,summary):focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.cloud-patients-workspace :is(button,input,textarea):disabled, .cloud-patients-workspace [aria-disabled=true] { opacity: .5; cursor: not-allowed; }
+.cloud-patients-workspace .cpw-input { display: block; width: 100%; min-width: 0; min-height: 48px; font-size: 16px; line-height: 1.5; border: 1px solid #cbd5e1; border-radius: .7rem; background: #fff; color: #0f172a; padding: .65rem .75rem; }
+.cloud-patients-workspace textarea.cpw-input { resize: vertical; }
+.cloud-patients-workspace input[dir=ltr] { text-align: left; }
+.cloud-patients-workspace label { display: block; font-size: .875rem; font-weight: 650; margin-bottom: .35rem; line-height: 1.6; }
+.cloud-patients-workspace label span { font-weight: 400; color: #64748b; }
+.cloud-patients-workspace .cpw-help { font-size: .75rem; line-height: 1.85; color: #64748b; }
+.cloud-patients-workspace .cpw-field-error { color: #9f1239; font-size: .75rem; line-height: 1.8; margin-top: .35rem; }
+.cloud-patients-workspace .cpw-close-help { max-width: 15rem; margin-top: .3rem; }
+.cloud-patients-workspace .cpw-message { border: 1px solid #e2e8f0; border-radius: .8rem; background: #f8fafc; padding: .8rem 1rem; font-size: .875rem; line-height: 1.9; overflow-wrap: anywhere; }
+.cloud-patients-workspace .cpw-message strong { display: block; }
+.cloud-patients-workspace .cpw-warning { background: #fffbeb; border-color: #fde68a; color: #78350f; }
+.cloud-patients-workspace .cpw-error { background: #fff1f2; border-color: #fecdd3; color: #881337; }
+.cloud-patients-workspace .cpw-info { background: #eff6ff; border-color: #bfdbfe; color: #1e3a8a; }
+.cloud-patients-workspace .cpw-layout, .cloud-patients-workspace .cpw-list-column { display: grid; gap: .8rem; min-width: 0; align-content: start; }
+.cloud-patients-workspace .cpw-search > .cpw-help { margin: .4rem 0 .8rem; }
+.cloud-patients-workspace .cpw-server-searches { display: grid; gap: .75rem; margin-top: .9rem; }
+.cloud-patients-workspace .cpw-input-action { display: grid; grid-template-columns: minmax(0,1fr) 48px; gap: .4rem; }
+.cloud-patients-workspace .cpw-input-action .cpw-button { padding: .5rem; }
+.cloud-patients-workspace .cpw-list-toolbar { border-top: 1px solid #f1f5f9; padding-top: .85rem; margin-top: .85rem; }
+.cloud-patients-workspace .cpw-record-list { display: grid; gap: .5rem; }
+.cloud-patients-workspace .cpw-patient-card { background: #fff; border: 1px solid #e2e8f0; border-radius: .8rem; overflow: hidden; }
+.cloud-patients-workspace .cpw-patient-selected { border-color: #93c5fd; background: #eff6ff; }
+.cloud-patients-workspace .cpw-patient-open { display: flex; width: 100%; min-height: 76px; gap: .7rem; padding: .7rem .8rem; align-items: center; text-align: right; background: transparent; border: 0; cursor: pointer; color: inherit; transition: background-color 130ms; }
+.cloud-patients-workspace .cpw-patient-open:hover:not(:disabled) { background: #f8fafc; }
+.cloud-patients-workspace .cpw-patient-open:focus-visible { outline-offset: -3px; }
+.cloud-patients-workspace .cpw-file-number { display: grid; gap: .1rem; min-width: 3.6rem; max-width: 6.3rem; padding: .3rem .5rem; background: #f1f5f9; border-radius: .65rem; text-align: center; flex-shrink: 0; overflow-wrap: anywhere; }
+.cloud-patients-workspace .cpw-file-number small { font-size: .65rem; color: #64748b; }
+.cloud-patients-workspace .cpw-file-number b { font-size: 1rem; font-weight: 750; }
+.cloud-patients-workspace .cpw-patient-summary { min-width: 0; flex: 1; }
+.cloud-patients-workspace .cpw-patient-summary strong { display: block; font-size: 1rem; overflow-wrap: anywhere; }
+.cloud-patients-workspace .cpw-patient-meta { display: flex; gap: .25rem .8rem; flex-wrap: wrap; font-size: .8rem; color: #64748b; margin-top: .2rem; }
+.cloud-patients-workspace .cpw-patient-meta bdi { overflow-wrap: anywhere; }
+.cloud-patients-workspace .cpw-card-chevron { flex-shrink: 0; color: #94a3b8; }
+.cloud-patients-workspace .cpw-empty { padding: 1.75rem 1rem; text-align: center; border: 1px dashed #cbd5e1; border-radius: .8rem; background: #f8fafc; color: #64748b; }
+.cloud-patients-workspace .cpw-empty > svg { margin: 0 auto .5rem; }
+.cloud-patients-workspace .cpw-empty p { font-weight: 650; color: #334155; }
+.cloud-patients-workspace .cpw-empty span { display: block; margin-top: .4rem; font-size: .8rem; line-height: 1.8; }
+.cloud-patients-workspace .cpw-load-more { width: 100%; }
+.cloud-patients-workspace .cpw-detail { order: -1; align-self: start; border-color: #bfdbfe; }
+.cloud-patients-workspace .cpw-detail-kicker { font-weight: 700; color: #1d4ed8; }
+.cloud-patients-workspace .cpw-patient-name { font-size: 1.2rem; overflow-wrap: anywhere; margin-top: .75rem; }
+.cloud-patients-workspace .cpw-facts { display: grid; gap: .65rem; margin: 1rem 0; }
+.cloud-patients-workspace .cpw-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; font-size: .875rem; }
+.cloud-patients-workspace .cpw-facts dt { color: #64748b; flex-shrink: 0; }
+.cloud-patients-workspace .cpw-facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; text-align: left; }
+.cloud-patients-workspace .cpw-communication, .cloud-patients-workspace .cpw-editor-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.cloud-patients-workspace .cpw-communication { padding-bottom: .8rem; border-bottom: 1px solid #f1f5f9; }
+.cloud-patients-workspace .cpw-note { margin-top: .8rem; }
+.cloud-patients-workspace .cpw-note :is(h4,p) { font-size: .875rem; line-height: 1.8; }
+.cloud-patients-workspace .cpw-note p, .cloud-patients-workspace .cpw-optional p { white-space: pre-wrap; overflow-wrap: anywhere; color: #475569; }
+.cloud-patients-workspace .cpw-optional { border-top: 1px solid #e2e8f0; margin-top: .8rem; padding-top: .2rem; font-size: .875rem; line-height: 1.8; }
+.cloud-patients-workspace .cpw-optional summary { cursor: pointer; min-height: 44px; padding-block: .6rem; color: #475569; }
+.cloud-patients-workspace .cpw-editor-title { display: flex; align-items: center; gap: .5rem; font-size: 1.125rem; }
+.cloud-patients-workspace .cpw-fields { border: 0; padding: 0; margin: 1rem 0; display: grid; min-width: 0; gap: .8rem; }
+.cloud-patients-workspace .cpw-field-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .7rem; }
+.cloud-patients-workspace .cpw-footer { display: flex; gap: .5rem; align-items: flex-start; padding: .7rem; background: #f8fafc; border-radius: .8rem; color: #64748b; font-size: .75rem; line-height: 1.8; }
+.cloud-patients-workspace .cpw-footer > svg { margin-top: .2rem; flex-shrink: 0; }
+@media (min-width: 640px) { .cloud-patients-workspace .cpw-server-searches { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (min-width: 1024px) { .cloud-patients-workspace .cpw-layout-detail { grid-template-columns: minmax(0,1.35fr) minmax(19rem,.85fr); align-items: start; } .cloud-patients-workspace .cpw-detail { order: 0; position: sticky; top: 1rem; } }
+@media (prefers-reduced-motion: no-preference) { .cloud-patients-workspace .cpw-panel { animation: cpw-panel-in 140ms ease-out; } @keyframes cpw-panel-in { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } } }
+@media (prefers-reduced-motion: reduce) { .cloud-patients-workspace .cpw-button, .cloud-patients-workspace .cpw-patient-open { transition: none; } }
