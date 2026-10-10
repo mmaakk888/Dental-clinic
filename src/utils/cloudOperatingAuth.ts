@@ -2,6 +2,7 @@ import config from '../../firebase.cloud-config.json';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID, type CloudOwnerIdentity } from './cloudIdentity';
 import { assessCloudOwnerMembership, type CloudOwnerMembership } from './cloudMembership';
 import { isLocalClinicHost } from './localRuntime';
+import type { CloudContactRepository } from './cloudContactRepository';
 
 type OperatingErrorCode = 'invalid-input' | 'busy' | 'unavailable' | 'changed' | 'closed';
 
@@ -170,13 +171,17 @@ export function createCloudOperatingAuthSession(adapter: CloudOperatingAuthAdapt
 }
 
 export type CloudOperatingAuthSession = ReturnType<typeof createCloudOperatingAuthSession>;
+export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
+  /** Explicit, owner-authorized capability. No SDK app/Auth object escapes. */
+  getContacts(): Promise<CloudContactRepository>;
+};
 
 /**
  * Explicit invocation only. Remains loopback-only until the clinical backend
  * and its Rules are integrated/tested. This factory does not publish Hosting,
  * create accounts, enable providers, read lists or write any document.
  */
-export async function createFirebaseOperatingAuth(): Promise<CloudOperatingAuthSession> {
+export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFirebaseSession> {
   const requireRuntime = () => {
     if (typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
       || config.projectId !== CLOUD_PROJECT_ID || config.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`) {
@@ -243,17 +248,122 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingAuthS
         try { unsubscribe(); } finally { await apps.deleteApp(app); }
       },
     });
+    // A capability belongs to one uninterrupted signed-in identity, not a UID
+    // string or the temporary UI checking phase. Retained methods must never
+    // become valid again after logout/relogin, even for the same owner.
+    let capabilityGeneration = 0;
+    let contactsCreation: Promise<CloudContactRepository> | null = null;
+    const revokeContacts = () => { ++capabilityGeneration; contactsCreation = null; };
+    session.subscribe(value => {
+      if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeContacts();
+    });
+    const operating: CloudOperatingFirebaseSession = Object.freeze({
+      ...session,
+      signIn: (email: string, password: string) => { revokeContacts(); return session.signIn(email, password); },
+      invalidate: () => { revokeContacts(); session.invalidate(); },
+      signOut: () => { revokeContacts(); return session.signOut(); },
+      dispose: () => { revokeContacts(); return session.dispose(); },
+      getContacts: async (): Promise<CloudContactRepository> => {
+        try {
+          const checked = session.getState();
+          const user = auth.currentUser;
+          if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
+            throw new CloudOperatingAuthError('changed');
+          }
+          const generation = capabilityGeneration;
+          const uid = checked.owner.uid;
+          const requireActive = () => {
+            try { requireRuntime(); }
+            catch { revokeContacts(); throw new CloudOperatingAuthError('changed'); }
+            const phase = session.getState().phase;
+            if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
+              || phase === 'signed-out' || phase === 'signing-out' || phase === 'closed') {
+              // A missed/delayed SDK observer must not allow later resurrection.
+              if (generation === capabilityGeneration) revokeContacts();
+              throw new CloudOperatingAuthError('changed');
+            }
+          };
+          const authorize = async () => {
+            requireActive();
+            const owner = await session.authorizeOwner();
+            requireActive();
+            if (owner.uid !== uid) { revokeContacts(); throw new CloudOperatingAuthError('changed'); }
+          };
+          await authorize();
+          requireActive();
+          if (!contactsCreation) {
+            // Assign ownership before deferred imports/factory callbacks. A
+            // cancelled load cannot initialize a data adapter after closure.
+            const creation = Promise.resolve().then(async () => {
+              requireActive();
+              const [contacts, contract] = await Promise.all([
+                import('./firebaseCloudContacts'), import('./cloudContactRepository'),
+              ]);
+              requireActive();
+              const repository = await contacts.createFirebaseCloudContacts(auth, {
+                isActive: () => { try { requireActive(); return true; } catch { return false; } },
+              });
+              requireActive();
+              const run = async <T>(work: () => Promise<T>): Promise<T> => {
+                try {
+                  await authorize();
+                  requireActive();
+                  const result = await work();
+                  // A server-accepted write may still commit after logout. We
+                  // reject its late UI result, not claim a server-side undo.
+                  requireActive();
+                  return result;
+                } catch (error) {
+                  let safe: Error = new CloudOperatingAuthError('unavailable');
+                  try {
+                    if (error instanceof CloudOperatingAuthError) safe = new CloudOperatingAuthError(error.code);
+                    if (error instanceof contract.CloudContactError
+                      && ['invalid', 'conflict', 'duplicate', 'unavailable'].includes(error.code)) {
+                      safe = new contract.CloudContactError(error.code);
+                    }
+                  } catch { /* Malformed SDK/Proxy failures remain fixed errors. */ }
+                  throw safe;
+                }
+              };
+              return Object.freeze({
+                commit: async input => {
+                  let prepared: ReturnType<typeof contract.prepareCloudContactCommand>;
+                  try { prepared = contract.prepareCloudContactCommand(input); }
+                  catch { throw new contract.CloudContactError('invalid'); }
+                  return run(() => repository.commit(prepared));
+                },
+                get: recordId => run(() => repository.get(recordId)),
+                listPage: async input => {
+                  let prepared: ReturnType<typeof contract.prepareCloudContactPageInput>;
+                  try { prepared = contract.prepareCloudContactPageInput(input); }
+                  catch { throw new contract.CloudContactError('invalid'); }
+                  return run(() => repository.listPage(prepared));
+                },
+              } satisfies CloudContactRepository);
+            });
+            contactsCreation = creation;
+            void creation.catch(() => { if (contactsCreation === creation) contactsCreation = null; });
+          }
+          const repository = await contactsCreation;
+          requireActive();
+          return repository;
+        } catch {
+          // Initialization/authorization errors never expose provider payloads.
+          throw new CloudOperatingAuthError('unavailable');
+        }
+      },
+    });
     try {
       unsubscribe = sdk.onAuthStateChanged(auth, user => {
-        if (trackedUser && user !== trackedUser) { trackedUser = null; session.invalidate(); }
-      }, () => session.invalidate());
+        if (trackedUser && user !== trackedUser) { trackedUser = null; operating.invalidate(); }
+      }, () => operating.invalidate());
     } catch {
       destroy = null;
       await session.dispose().catch(() => undefined);
       throw new CloudOperatingAuthError('unavailable');
     }
     destroy = null; // The returned lifecycle now owns this isolated SDK app.
-    return session;
+    return operating;
   } catch {
     await destroy?.().catch(() => undefined);
     throw new CloudOperatingAuthError('unavailable');

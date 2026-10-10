@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import type { CloudOperatingAuthSession } from './cloudOperatingAuth';
+import type { CloudOperatingFirebaseSession } from './cloudOperatingAuth';
 
 const PROJECT = 'dental-clinic-mmaakk888';
 const INSTANCE = '00000000-0000-4000-8000-000000000001';
@@ -10,9 +10,21 @@ const EMAIL = 'owner@example.invalid';
 const UID = 'synthetic-owner';
 const PASSWORD = 'synthetic-password-only';
 const AUTH_TIME = 1_700_000_000;
+const RECORD = '00000000-0000-4000-8000-000000000002';
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(accept => { resolve = accept; });
+  return { promise, resolve };
+}
+
+async function until(check: () => boolean) {
+  for (let tick = 0; tick < 100 && !check(); ++tick) await Promise.resolve();
+  assert.equal(check(), true, 'Expected synthetic boundary was not reached.');
+}
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -23,11 +35,19 @@ async function fixture(options: {
   stepFailure?: string;
   switchAt?: string;
   claims?: Record<string, unknown>;
+  contactsImportHook?: () => void;
+  contactsFactoryGate?: Promise<void>;
+  contactsMethodGate?: Promise<void>;
+  contactsFailure?: unknown;
+  onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
   const calls: string[] = [];
   const paths: string[][] = [];
   const forced: boolean[] = [];
+  const contactCalls: string[] = [];
+  const contactInputs: unknown[] = [];
+  let contactsActive: (() => boolean) | null = null;
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -37,9 +57,10 @@ async function fixture(options: {
   const database = {};
   const document = {};
   const module = { exports: {} as {
-    createFirebaseOperatingAuth(): Promise<CloudOperatingAuthSession>;
+    createFirebaseOperatingAuth(): Promise<CloudOperatingFirebaseSession>;
     cloudOperatingAuthErrorMessage(error: unknown): string;
     __copy(value: object): object;
+    __input<T>(value: T): T;
   } };
   const location = { hostname: options.hostname ?? '127.0.0.1' };
   function step(name: string) {
@@ -51,7 +72,8 @@ async function fixture(options: {
     if (options.stepFailure === name) throw new Error(`synthetic-provider-token-${PASSWORD}`);
   }
   const compiled = await bundle;
-  runInNewContext(`${compiled.outputFiles[0].text}\nmodule.exports.__copy = value => ({ ...value });`, {
+  runInNewContext(`${compiled.outputFiles[0].text}\nmodule.exports.__copy = value => ({ ...value });
+module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     module, exports: module.exports,
     window: { location,
       get localStorage() { throw new Error('No clinic records or remembered accounts may be read.'); },
@@ -69,6 +91,32 @@ async function fixture(options: {
         },
         deleteApp: async (target: unknown) => { assert.equal(target, app); step('deleteApp'); },
       };
+      if (name === './firebaseCloudContacts') {
+        options.contactsImportHook?.();
+        return { createFirebaseCloudContacts: async (target: unknown, settings: { isActive: () => boolean }) => {
+          assert.equal(target, auth);
+          assert.equal(settings.isActive(), true);
+          contactCalls.push('factory'); contactsActive = settings.isActive;
+          await options.contactsFactoryGate;
+          const work = async <T>(name: string, result: T) => {
+            contactCalls.push(name);
+            await options.contactsMethodGate;
+            if (options.contactsFailure !== undefined) throw options.contactsFailure;
+            return result;
+          };
+          return {
+            commit: (input: unknown) => {
+              contactInputs.push(input);
+              return work('commit', { status: 'committed', recordId: RECORD, revision: 1 });
+            },
+            get: () => work('get', null),
+            listPage: (input: unknown) => {
+              contactInputs.push(input);
+              return work('listPage', { records: [], nextAfterId: null });
+            },
+          };
+        } };
+      }
       if (name === 'firebase/auth') return {
         inMemoryPersistence: memory,
         initializeAuth: (target: unknown, settings: { persistence: unknown }) => {
@@ -107,6 +155,7 @@ async function fixture(options: {
         },
         getDoc: async (target: unknown) => {
           assert.equal(target, document); step('getDoc');
+          await options.onGetDoc?.();
           return {
             exists: () => options.membership !== null,
             data: () => module.exports.__copy(options.membership ?? {
@@ -119,8 +168,10 @@ async function fixture(options: {
       throw new Error(`Forbidden dependency: ${name}`);
     },
   });
-  return { api: module.exports, imports, calls, paths, forced, auth, location,
+  return { api: module.exports, imports, calls, paths, forced, auth, location, contactCalls, contactInputs,
+    contactsActive: () => contactsActive?.() ?? false,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
+    replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
   };
 }
@@ -133,7 +184,7 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts'].sort());
 });
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
@@ -253,6 +304,252 @@ test('SDK/provider failures never expose tokens or credential payloads and never
       return true;
     });
     assert.equal(session.getState().owner, null); assert.equal(h.auth.currentUser, null);
+    await session.dispose();
+  }
+});
+
+test('contacts are explicit and unavailable before owner confirmation without loading their adapter', async () => {
+  const h = await fixture();
+  const session = await h.api.createFirebaseOperatingAuth();
+  await assert.rejects(session.getContacts());
+  assert.equal(h.imports.includes('./firebaseCloudContacts'), false);
+  assert.deepEqual(h.contactCalls, []);
+  await session.signIn(EMAIL, PASSWORD);
+  assert.equal(h.imports.includes('./firebaseCloudContacts'), false);
+  await session.dispose();
+});
+
+test('contacts bind only exact isolated Auth, cache creation not data, and freshly authorize every method', async () => {
+  const h = await fixture();
+  const session = await h.api.createFirebaseOperatingAuth();
+  await session.signIn(EMAIL, PASSWORD);
+  const repository = await session.getContacts();
+  const again = await session.getContacts();
+  assert.equal(again, repository);
+  assert.equal(Object.isFrozen(repository), true);
+  assert.equal(h.contactsActive(), true);
+  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getContacts', 'getState',
+    'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
+  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'listPage']);
+  assert.deepEqual(h.contactCalls, ['factory']);
+  const before = h.paths.length;
+  assert.equal(await repository.get(RECORD), null);
+  const page = await repository.listPage();
+  assert.equal(page.nextAfterId, null);
+  const committed = await repository.commit(h.api.__input({ operationId: INSTANCE, recordId: RECORD,
+    expectedRevision: 0, action: 'create' as const, contact: { id: RECORD, name: 'Synthetic contact',
+      mobile: '01000000001', createdAt: '2026-10-10T10:00:00.000Z' } }));
+  assert.equal(committed.revision, 1);
+  assert.equal(h.paths.length, before + 3);
+  assert.deepEqual(h.contactCalls, ['factory', 'get', 'listPage', 'commit']);
+  await session.dispose();
+});
+
+test('logout permanently revokes retained contact capabilities even after same owner logs in again', async () => {
+  const h = await fixture();
+  const session = await h.api.createFirebaseOperatingAuth();
+  await session.signIn(EMAIL, PASSWORD);
+  const old = await session.getContacts();
+  const logout = session.signOut();
+  assert.equal(h.contactsActive(), false);
+  await assert.rejects(old.get(RECORD));
+  await logout;
+  await session.signIn(EMAIL, PASSWORD);
+  await assert.rejects(old.listPage());
+  await assert.rejects(old.commit(h.api.__input({ operationId: INSTANCE, recordId: RECORD,
+    expectedRevision: 0, action: 'create' as const, contact: { id: RECORD, name: 'Synthetic contact',
+      mobile: '01000000001', createdAt: '2026-10-10T10:00:00.000Z' } })));
+  assert.deepEqual(h.contactCalls, ['factory']);
+  const next = await session.getContacts();
+  assert.notEqual(next, old);
+  assert.equal(await next.get(RECORD), null);
+  assert.deepEqual(h.contactCalls, ['factory', 'factory', 'get']);
+  await session.dispose();
+});
+
+test('explicit invalidation, disposal and SDK identity replacement immediately revoke retained methods', async () => {
+  for (const event of ['invalidate', 'dispose', 'loseIdentity', 'replaceIdentity', 'observerFailure'] as const) {
+    const h = await fixture();
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getContacts();
+    if (event === 'invalidate') session.invalidate();
+    else if (event === 'dispose') void session.dispose();
+    else h[event]();
+    assert.equal(h.contactsActive(), false, event);
+    await assert.rejects(repository.get(RECORD));
+    assert.deepEqual(h.contactCalls, ['factory']);
+    await session.dispose();
+  }
+});
+
+test('host or emulator changes revoke a retained capability rather than allowing it to revive later', async () => {
+  for (const change of ['hostname', 'emulator'] as const) {
+    const h = await fixture();
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getContacts();
+    if (change === 'hostname') h.location.hostname = 'external.example.invalid';
+    else h.auth.emulatorConfig = {};
+    await assert.rejects(repository.get(RECORD));
+    h.location.hostname = '127.0.0.1'; h.auth.emulatorConfig = null;
+    await assert.rejects(repository.get(RECORD));
+    assert.deepEqual(h.contactCalls, ['factory']);
+    await session.dispose();
+  }
+});
+
+test('a closed lazy contacts import never proceeds to adapter creation', async () => {
+  let stop: (() => Promise<void>) | null = null;
+  let closing: Promise<void> | null = null;
+  const h = await fixture({ contactsImportHook: () => { closing = stop!(); } });
+  const session = await h.api.createFirebaseOperatingAuth();
+  stop = () => session.signOut();
+  await session.signIn(EMAIL, PASSWORD);
+  await assert.rejects(session.getContacts());
+  await closing;
+  assert.deepEqual(h.contactCalls, []);
+  await session.dispose();
+});
+
+test('a delayed adapter factory cannot return a capability after logout or identity changes', async () => {
+  for (const change of ['signOut', 'replaceIdentity'] as const) {
+    const gate = deferred();
+    const h = await fixture({ contactsFactoryGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const loading = session.getContacts();
+    const rejected = assert.rejects(loading);
+    await until(() => h.contactCalls.includes('factory'));
+    const closing = change === 'signOut' ? session.signOut() : (h.replaceIdentity(), Promise.resolve());
+    assert.equal(h.contactsActive(), false);
+    gate.resolve();
+    await rejected;
+    await closing;
+    await session.dispose();
+  }
+});
+
+test('logout during fresh contact authorization prevents lazy initialization or data method invocation', async () => {
+  for (const method of ['getContacts', 'get', 'listPage', 'commit'] as const) {
+    const gate = deferred();
+    let gateEnabled = false;
+    let gateReached = false;
+    const h = await fixture({ onGetDoc: async () => {
+      if (gateEnabled) { gateReached = true; await gate.promise; }
+    } });
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = method === 'getContacts' ? null : await session.getContacts();
+    gateEnabled = true;
+    const pending = method === 'getContacts' ? session.getContacts() : method === 'get' ? repository!.get(RECORD)
+      : method === 'listPage' ? repository!.listPage() : repository!.commit(h.api.__input({ operationId: INSTANCE,
+        recordId: RECORD, expectedRevision: 0, action: 'create' as const, contact: { id: RECORD,
+          name: 'Synthetic contact', mobile: '01000000001', createdAt: '2026-10-10T10:00:00.000Z' } }));
+    const rejected = assert.rejects(pending);
+    await until(() => gateReached);
+    const closing = session.signOut();
+    gate.resolve();
+    await rejected;
+    await closing;
+    assert.deepEqual(h.contactCalls, method === 'getContacts' ? [] : ['factory']);
+    if (method === 'getContacts') assert.equal(h.imports.includes('./firebaseCloudContacts'), false);
+    await session.dispose();
+  }
+});
+
+test('an already accepted data request may finish but its post-logout UI result is rejected', async () => {
+  for (const method of ['get', 'listPage', 'commit'] as const) {
+    const gate = deferred();
+    const h = await fixture({ contactsMethodGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getContacts();
+    const pending = method === 'get' ? repository.get(RECORD) : method === 'listPage' ? repository.listPage()
+      : repository.commit(h.api.__input({ operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create' as const,
+        contact: { id: RECORD, name: 'Synthetic contact', mobile: '01000000001', createdAt: '2026-10-10T10:00:00.000Z' } }));
+    const rejected = assert.rejects(pending);
+    await until(() => h.contactCalls.includes(method));
+    const closing = session.signOut();
+    assert.equal(h.contactsActive(), false);
+    gate.resolve();
+    await rejected;
+    await closing;
+    assert.deepEqual(h.contactCalls, ['factory', method]);
+    await session.dispose();
+  }
+});
+
+test('bound command and page inputs are snapshotted before pending membership authorization', async () => {
+  for (const method of ['commit', 'listPage'] as const) {
+    const gate = deferred();
+    let enabled = false;
+    let reached = false;
+    const h = await fixture({ onGetDoc: async () => {
+      if (enabled) { reached = true; await gate.promise; }
+    } });
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getContacts();
+    enabled = true;
+    const command = h.api.__input({ operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create' as const,
+      contact: { id: RECORD, name: 'Original synthetic contact', mobile: '01000000001', createdAt: '2026-10-10T10:00:00.000Z' } });
+    const query = h.api.__input({ limit: 2, afterId: RECORD });
+    const pending = method === 'commit' ? repository.commit(command) : repository.listPage(query);
+    await until(() => reached);
+    command.operationId = RECORD;
+    command.contact.name = 'Changed during authorization';
+    command.contact.mobile = '01000000002';
+    query.limit = 50;
+    query.afterId = INSTANCE;
+    gate.resolve();
+    await pending;
+    const received = h.contactInputs[0] as typeof command & typeof query;
+    if (method === 'commit') {
+      assert.equal(received.operationId, INSTANCE);
+      assert.equal(received.contact.name, 'Original synthetic contact');
+      assert.equal(received.contact.mobile, '01000000001');
+    } else {
+      assert.equal(received.limit, 2);
+      assert.equal(received.afterId, RECORD);
+    }
+    await session.dispose();
+  }
+});
+
+test('invalid or malicious contact inputs reject asynchronously before another authorization or data request', async () => {
+  const h = await fixture();
+  const session = await h.api.createFirebaseOperatingAuth();
+  await session.signIn(EMAIL, PASSWORD);
+  const repository = await session.getContacts();
+  const before = h.paths.length;
+  const malicious = new Proxy({}, { ownKeys() { throw new Error(PASSWORD); } });
+  for (const input of [{}, malicious]) {
+    let pending!: Promise<unknown>;
+    assert.doesNotThrow(() => { pending = repository.commit(input as never); });
+    await assert.rejects(pending, error => !String(error).includes(PASSWORD));
+  }
+  for (const input of [{ limit: 0 }, malicious]) {
+    let pending!: Promise<unknown>;
+    assert.doesNotThrow(() => { pending = repository.listPage(input as never); });
+    await assert.rejects(pending, error => !String(error).includes(PASSWORD));
+  }
+  assert.equal(h.paths.length, before);
+  await session.dispose();
+});
+
+test('contact method failures keep provider details and malformed Proxy exceptions out of UI errors', async () => {
+  for (const contactsFailure of [new Error(PASSWORD),
+    new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } })]) {
+    const h = await fixture({ contactsFailure });
+    const session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getContacts();
+    await assert.rejects(repository.get(RECORD), error => {
+      assert.equal(String(error).includes(PASSWORD), false);
+      assert.equal(h.api.cloudOperatingAuthErrorMessage(error).includes(PASSWORD), false);
+      return true;
+    });
     await session.dispose();
   }
 });

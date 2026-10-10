@@ -1,7 +1,7 @@
 import type { ClinicContact } from '../types';
 import { clinicContactValidationError, normalizeContactPhone } from './clinicContacts';
 
-// Transaction core only. No SDK initialization, local fallback, account data,
+// Explicit server operations only. No SDK initialization, local fallback, account data,
 // network, or automatic migration. A future adapter must enforce owner access
 // in server rules, then implement runTransaction with Firestore transactions.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -51,13 +51,27 @@ export interface CloudContactAdapter {
   authorizeOwner(): Promise<string>;
   /** Must resolve only after an atomic server commit, never an offline enqueue. */
   runTransaction<T>(work: (transaction: CloudContactTransaction) => Promise<T>): Promise<T>;
+  /** Fresh server reads only; optional for older transaction-only adapters. */
+  readRecord?(path: string): Promise<unknown | null>;
+  /** Returns a dense, bounded array of { id, data } server document snapshots. */
+  listRecordsPage?(afterId: string | null, limit: number): Promise<unknown>;
 }
+export interface CloudContactPageInput { afterId?: string | null; limit?: number }
+export interface CloudContactPage { records: CloudContactRecord[]; nextAfterId: string | null }
 export interface CloudContactRepositoryOptions {
   // Injected only for deterministic synthetic tests; production defaults to SHA-256.
   digest?: (text: string) => Promise<string>;
 }
 
 function invalid(): never { throw new CloudContactError('invalid'); }
+function safeError(error: unknown): CloudContactError {
+  try {
+    if (error instanceof CloudContactError && ['invalid', 'conflict', 'duplicate', 'unavailable'].includes(error.code)) {
+      return new CloudContactError(error.code);
+    }
+  } catch { /* Hostile error objects must not escape the fixed public errors. */ }
+  return new CloudContactError('unavailable');
+}
 function record(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
   const proto = Object.getPrototypeOf(value);
@@ -99,7 +113,8 @@ export function parseCloudContactRecord(value: unknown): CloudContactRecord {
       deleted: fields.deleted, lastOperationId: fields.lastOperationId, phoneKey: fields.phoneKey as string | null, data };
   } catch { return invalid(); }
 }
-function command(value: unknown): CloudContactCommand {
+/** Detached validated input; bind before an outer async authorization boundary. */
+export function prepareCloudContactCommand(value: unknown): CloudContactCommand {
   const fields = record(value, ['operationId', 'recordId', 'expectedRevision', 'action', 'contact']);
   if (typeof fields.operationId !== 'string' || !UUID.test(fields.operationId) || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)
     || !revision(fields.expectedRevision, true) || fields.expectedRevision >= MAX_REVISION
@@ -125,16 +140,79 @@ function phoneIndex(value: unknown, key: string): string | null {
   if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || fields.phoneKey !== key || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)) invalid();
   return fields.recordId;
 }
+export function prepareCloudContactPageInput(value: unknown): { afterId: string | null; limit: number } {
+  const fields: Record<string, unknown> = value === undefined ? {} : record(value, [], ['afterId', 'limit']);
+  const afterId = fields.afterId ?? null;
+  const limit = fields.limit === undefined ? 25 : fields.limit;
+  if (afterId !== null && (typeof afterId !== 'string' || !UUID.test(afterId))
+    || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) invalid();
+  return { afterId: afterId as string | null, limit };
+}
+function pageRows(value: unknown, limit: number): unknown[] {
+  if (!Array.isArray(value) || value.length > limit) invalid();
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || !keys.includes('length')) invalid();
+  const rows: unknown[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) invalid();
+    rows.push(descriptor.value);
+  }
+  return rows;
+}
 
 export function createCloudContactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions = {}) {
   const digest = options.digest ?? sha256;
   const hash = async (text: string) => { const value = await digest(text); if (!HASH.test(value)) invalid(); return value; };
+  const checkedRecord = async (value: unknown, id: string): Promise<CloudContactRecord> => {
+    const checked = parseCloudContactRecord(value);
+    if (checked.recordId !== id) invalid();
+    const phoneKey = checked.data ? await hash(`contact-phone-v1:${normalizeContactPhone(checked.data.mobile)}`) : null;
+    if (checked.phoneKey !== phoneKey) invalid();
+    return checked; // The parser copies both the envelope and contact payload.
+  };
   return {
+    async get(recordId: string): Promise<CloudContactRecord | null> {
+      try {
+        if (typeof recordId !== 'string' || !UUID.test(recordId)) invalid();
+        if (typeof adapter.readRecord !== 'function') throw new CloudContactError('unavailable');
+        const actorUid = await adapter.authorizeOwner();
+        if (!uid(actorUid)) invalid();
+        const value = await adapter.readRecord(recordPath(recordId));
+        const checked = value === null ? null : await checkedRecord(value, recordId);
+        if (await adapter.authorizeOwner() !== actorUid) throw new CloudContactError('unavailable');
+        return checked;
+      } catch (error) {
+        throw safeError(error);
+      }
+    },
+    async listPage(input?: CloudContactPageInput): Promise<CloudContactPage> {
+      try {
+        const prepared = prepareCloudContactPageInput(input);
+        if (typeof adapter.listRecordsPage !== 'function') throw new CloudContactError('unavailable');
+        const actorUid = await adapter.authorizeOwner();
+        if (!uid(actorUid)) invalid();
+        const values = pageRows(await adapter.listRecordsPage(prepared.afterId, prepared.limit), prepared.limit);
+        const records: CloudContactRecord[] = [];
+        let previousId = prepared.afterId;
+        for (const value of values) {
+          const fields = record(value, ['id', 'data']);
+          if (typeof fields.id !== 'string' || !UUID.test(fields.id) || previousId !== null && fields.id <= previousId) invalid();
+          records.push(await checkedRecord(fields.data, fields.id));
+          previousId = fields.id;
+        }
+        if (await adapter.authorizeOwner() !== actorUid) throw new CloudContactError('unavailable');
+        // Tombstones stay in the page: filtering would break cursor progress.
+        return { records, nextAfterId: records.length === prepared.limit ? previousId : null };
+      } catch (error) {
+        throw safeError(error);
+      }
+    },
     async commit(input: CloudContactCommand): Promise<CloudContactCommit> {
       try {
         // Clone, validate, and hash before a retried callback. Operation/record
         // IDs come from the caller and must be retained after an uncertain reply.
-        const prepared = command(input);
+        const prepared = prepareCloudContactCommand(input);
         const actorUid = await adapter.authorizeOwner();
         if (!uid(actorUid)) invalid();
         const requestHash = await hash(JSON.stringify([actorUid, prepared.operationId, prepared.recordId,
@@ -180,9 +258,10 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
         if (await adapter.authorizeOwner() !== actorUid) throw new CloudContactError('unavailable');
         return result;
       } catch (error) {
-        if (error instanceof CloudContactError) throw error;
-        throw new CloudContactError('unavailable');
+        throw safeError(error);
       }
     },
   };
 }
+
+export type CloudContactRepository = ReturnType<typeof createCloudContactRepository>;

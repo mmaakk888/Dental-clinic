@@ -20,7 +20,7 @@ test('candidate derives phone index hashes and denies physical record deletion a
   const rules = source('firestore.contacts-stage.rules');
   assert.match(rules, /hashing\.sha256\('contact-phone-v1:' \+ canonical/u);
   assert.match(rules, /toHexString\(\)\.lower\(\)/u);
-  assert.match(rules, /allow list, delete: if false/u);
+  assert.match(rules, /allow delete: if false/u);
   assert.match(rules, /allow list, update, delete: if false/u);
   assert.match(rules, /!exists\(operationPath\(after.lastOperationId\)\)/u);
   assert.match(rules, /data.phoneKey == phone.key/u);
@@ -29,7 +29,7 @@ test('candidate derives phone index hashes and denies physical record deletion a
 });
 
 test('emulator cases are synthetic, independent and have explicit allow and deny expectations', () => {
-  assert.equal(namedCases.length, 384);
+  assert.equal(namedCases.length, 416);
   assert.equal(new Set(namedCases.map((entry: any) => entry.name)).size, namedCases.length);
   const again = buildNamedCases();
   const create = again.find((entry: any) => entry.name === 'create/contactRecords/create valid atomic context');
@@ -91,4 +91,27 @@ test('control validation uses whole-string allowed sets, including multi-line no
   assert.doesNotMatch(rules, /!\w+(?:\.\w+)*\.matches\('\.\*/u);
   assert.ok(namedCases.some((entry: any) => entry.name === 'allows notes newline tab and carriage return'));
   assert.ok(namedCases.some((entry: any) => entry.name.startsWith('reject contact notes=') && entry.name.includes('u0001')));
+});
+
+test('only owner contact-record paging gains an integer 1–50 bound; companions and domains stay closed', () => {
+  const rules = source('firestore.contacts-stage.rules');
+  assert.match(rules, /allow list: if owner\(\) && 'limit' in request.query\s*&& request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50/u);
+  assert.equal((rules.match(/allow list: if owner\(\)/gu) || []).length, 1);
+  const names = new Set(namedCases.map((entry: any) => entry.name));
+  for (const name of ['owner bounded contact list 1', 'owner bounded contact list 25', 'owner bounded contact list 50',
+    'owner contact list with UUID cursor', 'owner empty bounded contact list', 'owner bounded contact list includes tombstones',
+    'contact list unbounded denied', 'contact list excessive limit denied', 'bounded contact list rejects anonymous',
+    'bounded contact list rejects secretary claim', 'bounded contact list rejects canonical secretary',
+    'bounded contact list rejects membership disabled', 'bounded contact list rejects stale auth_time',
+    'bounded nondefault database contact list denied', 'bounded other clinic contact list denied',
+    'bounded contactPhones list remains denied', 'bounded contactOperations list remains denied']) assert.ok(names.has(name), name);
+  const boundary = namedCases.filter((entry: any) => entry.state?.queryBoundary);
+  assert.equal(boundary.length, 5);
+  assert.ok(boundary.every((entry: any) => entry.expectation === 'DENY'));
+  const runner = source('scripts/test-cloud-contact-emulator.ts');
+  assert.match(runner, /rulesEngineCases: contactCases.length - queryBoundaryPassed/u);
+  assert.match(runner, /orderBy\(documentId\(\)\)/u);
+  assert.match(runner, /startAfter\(spec.afterId\)/u);
+  assert.match(runner, /stable document-ID cursor pages have no gap or duplicate/u);
+  assert.match(runner, /pages include tombstones rather than silently skipping cursors/u);
 });

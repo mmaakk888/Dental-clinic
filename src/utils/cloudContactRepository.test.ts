@@ -232,3 +232,139 @@ test('failed or malformed fingerprints never enter a transaction or expose input
     assert.equal(h.rows.size, 0); assert.equal(h.calls.some(call => call.startsWith('get:') || call.startsWith('set:')), false);
   }
 });
+
+function readHarness() {
+  const h = harness();
+  h.adapter.readRecord = async path => { h.calls.push(`read:${path}`); return h.rows.get(path) ?? null; };
+  h.adapter.listRecordsPage = async (afterId, count) => {
+    h.calls.push(`list:${afterId}:${count}`);
+    return [...h.rows.entries()].filter(([path]) => path.startsWith('clinics/main/contactRecords/') && (!afterId || path.slice(path.lastIndexOf('/') + 1) > afterId))
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).slice(0, count)
+      .map(([path, data]) => ({ id: path.slice(path.lastIndexOf('/') + 1), data }));
+  };
+  return h;
+}
+
+test('explicit contact reads are inert on creation and missing server-read adapters fail closed', async () => {
+  const h = harness(); assert.deepEqual(h.calls, []);
+  await assert.rejects(h.repo.get(ID), hasCode('unavailable'));
+  await assert.rejects(h.repo.listPage(), hasCode('unavailable'));
+  assert.deepEqual(h.calls, []);
+});
+
+test('get reads only its exact record, clones values, and returns null or a versioned tombstone honestly', async () => {
+  const h = readHarness();
+  assert.equal(await h.repo.get(ID), null);
+  await h.repo.commit(input());
+  const result = await h.repo.get(ID); result!.data!.name = 'تعديل نسخة القراءة'; result!.revision = 77;
+  const saved = parseCloudContactRecord(h.rows.get(rPath()));
+  assert.equal(saved.data!.name, input().contact!.name); assert.equal(saved.revision, 1);
+  await h.repo.commit(input({ operationId: OP2, expectedRevision: 1, action: 'delete', contact: null }));
+  const deleted = await h.repo.get(ID);
+  assert.equal(deleted!.deleted, true); assert.equal(deleted!.revision, 2); assert.equal(deleted!.data, null);
+  assert.ok(h.calls.includes(`read:${rPath()}`));
+});
+
+test('bounded contact pages default to 25 and advance only by an exact full-page final UUID', async () => {
+  const h = readHarness(); await h.repo.commit(input());
+  const second = input({ recordId: OTHER, operationId: OP2 }); second.contact = { ...second.contact!, id: OTHER, mobile: '01000000002' };
+  await h.repo.commit(second);
+  await h.repo.commit(input({ operationId: OP3, expectedRevision: 1, action: 'delete', contact: null }));
+  const all = await h.repo.listPage();
+  assert.deepEqual(all.records.map(row => row.recordId), [ID, OTHER]); assert.equal(all.records[0].deleted, true);
+  assert.equal(all.nextAfterId, null); assert.ok(h.calls.includes('list:null:25'));
+  const first = await h.repo.listPage({ limit: 1 }); assert.equal(first.nextAfterId, ID);
+  const next = await h.repo.listPage({ afterId: first.nextAfterId, limit: 1 });
+  assert.equal(next.records[0].recordId, OTHER); assert.equal(next.nextAfterId, OTHER);
+  assert.deepEqual(await h.repo.listPage({ afterId: next.nextAfterId, limit: 1 }), { records: [], nextAfterId: null });
+  assert.equal((await h.repo.listPage({ afterId: null, limit: 50 })).records.length, 2);
+  all.records[1].data!.name = 'تعديل نسخة الصفحة';
+  assert.equal(parseCloudContactRecord(h.rows.get(rPath(OTHER))).data!.name, second.contact!.name);
+});
+
+test('invalid record IDs, cursor inputs and page limits fail before authorization or SDK reads', async () => {
+  for (const value of ['', '../patients/private', 'A0000000-0000-4000-8000-000000000001', 7, null, {}]) {
+    const h = readHarness(); await assert.rejects(h.repo.get(value as any), hasCode('invalid')); assert.deepEqual(h.calls, []);
+  }
+  for (const value of [null, [], { afterId: '../private' }, { afterId: 1 }, { limit: 0 }, { limit: 51 }, { limit: 1.5 },
+    { limit: NaN }, { limit: Infinity }, { limit: '25' }, { extra: true }]) {
+    const h = readHarness(); await assert.rejects(h.repo.listPage(value as any), hasCode('invalid')); assert.deepEqual(h.calls, []);
+  }
+  let getterReads = 0;
+  const h = readHarness(), value = Object.defineProperty({}, 'afterId', { enumerable: true, get: () => { getterReads++; return ID; } });
+  await assert.rejects(h.repo.listPage(value), hasCode('invalid')); assert.equal(getterReads, 0); assert.deepEqual(h.calls, []);
+});
+
+test('pages reject sparse, oversized, accessor and extended arrays instead of silently dropping rows', async () => {
+  const values: unknown[] = [new Array(1), new Array(2).fill(null), { length: 0 }, Object.assign([], { extra: true })];
+  const accessor = new Array(1); let reads = 0;
+  Object.defineProperty(accessor, '0', { enumerable: true, get: () => { reads++; return null; } }); values.push(accessor);
+  const symbolArray: unknown[] = []; Object.defineProperty(symbolArray, Symbol('private'), { value: true }); values.push(symbolArray);
+  for (const value of values) {
+    const h = readHarness(); h.adapter.listRecordsPage = async () => value;
+    await assert.rejects(h.repo.listPage({ limit: 1 }), hasCode('invalid'));
+  }
+  assert.equal(reads, 0);
+});
+
+test('pages reject malformed envelopes, wrong document IDs, duplicate or unordered UUIDs and rows before cursor', async () => {
+  const h = readHarness(); await h.repo.commit(input());
+  const saved = h.rows.get(rPath());
+  for (const rows of [[{ id: OTHER, data: saved }], [{ id: ID, data: saved }, { id: ID, data: saved }],
+    [{ id: OTHER, data: { ...(saved as object), recordId: OTHER, data: { ...input().contact!, id: OTHER } } }, { id: ID, data: saved }],
+    [{ id: ID, data: { ...(saved as object), extra: 'PRIVATE' } }], [{ id: ID, data: saved, extra: 'PRIVATE' }], [{ id: '../private', data: saved }]]) {
+    h.adapter.listRecordsPage = async () => rows;
+    await assert.rejects(h.repo.listPage({ limit: 2 }), hasCode('invalid'));
+  }
+  h.adapter.listRecordsPage = async () => [{ id: ID, data: saved }];
+  await assert.rejects(h.repo.listPage({ afterId: ID }), hasCode('invalid'));
+  h.adapter.readRecord = async () => ({ ...(saved as object), recordId: OTHER, data: { ...input().contact!, id: OTHER } });
+  await assert.rejects(h.repo.get(ID), hasCode('invalid'));
+});
+
+test('every active get and page record verifies the canonical phone SHA-256 before publishing', async () => {
+  const h = readHarness(); await h.repo.commit(input());
+  (h.rows.get(rPath()) as any).phoneKey = 'f'.repeat(64);
+  await assert.rejects(h.repo.get(ID), hasCode('invalid')); await assert.rejects(h.repo.listPage(), hasCode('invalid'));
+  const repo = createCloudContactRepository(h.adapter, { digest: async () => { throw new Error('PRIVATE_HASH_DETAIL'); } });
+  await assert.rejects(repo.get(ID), error => hasCode('unavailable')(error) && !String(error).includes('PRIVATE'));
+  await assert.rejects(repo.listPage(), error => hasCode('unavailable')(error) && !String(error).includes('PRIVATE'));
+});
+
+test('read authorization is checked before server access and after reading and asynchronous phone validation', async () => {
+  for (const method of ['get', 'listPage'] as const) {
+    for (const boundary of [1, 2]) {
+      const h = readHarness(); await h.repo.commit(input()); h.calls.length = 0;
+      let checks = 0; h.adapter.authorizeOwner = async () => ++checks === boundary ? 'different-synthetic-owner' : OWNER;
+      if (boundary === 1) h.adapter.authorizeOwner = async () => { throw new Error('PRIVATE_AUTH_DETAIL'); };
+      await assert.rejects(method === 'get' ? h.repo.get(ID) : h.repo.listPage(), hasCode('unavailable'));
+      assert.equal(h.calls.some(call => call.startsWith('read:') || call.startsWith('list:')), boundary !== 1);
+    }
+    const h = readHarness(); await h.repo.commit(input());
+    let active = true;
+    h.adapter.authorizeOwner = async () => { if (!active) throw new Error('PRIVATE_REVOKED'); return OWNER; };
+    const repo = createCloudContactRepository(h.adapter, { digest: async text => { const result = await digest(text); active = false; return result; } });
+    await assert.rejects(method === 'get' ? repo.get(ID) : repo.listPage(), hasCode('unavailable'));
+  }
+});
+
+test('read transport failures and invalid owner identities never fabricate an empty successful page', async () => {
+  for (const method of ['get', 'listPage'] as const) {
+    const h = readHarness();
+    h.adapter.readRecord = h.adapter.listRecordsPage = async () => { throw new Error('PRIVATE_READ_DETAIL'); };
+    await assert.rejects(method === 'get' ? h.repo.get(ID) : h.repo.listPage(), error => hasCode('unavailable')(error) && !String(error).includes('PRIVATE'));
+    h.adapter.authorizeOwner = async () => '';
+    await assert.rejects(method === 'get' ? h.repo.get(ID) : h.repo.listPage(), hasCode('invalid'));
+  }
+});
+
+test('hostile and altered adapter exceptions cannot leak through fixed contact errors', async () => {
+  const altered = new CloudContactError('conflict'); altered.message = 'PRIVATE_ERROR_PAYLOAD';
+  const hostile = new Proxy({}, { getPrototypeOf: () => { throw new Error('PRIVATE_PROXY_PAYLOAD'); } });
+  for (const value of [altered, hostile]) {
+    const h = readHarness(); h.adapter.authorizeOwner = async () => { throw value; };
+    for (const action of [() => h.repo.get(ID), () => h.repo.listPage(), () => h.repo.commit(input())]) {
+      await assert.rejects(action(), error => error instanceof CloudContactError && !String(error).includes('PRIVATE'));
+    }
+  }
+});

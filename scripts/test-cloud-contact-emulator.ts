@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { initializeApp, deleteApp } from 'firebase/app';
-import { getFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, writeBatch, runTransaction, setLogLevel } from 'firebase/firestore/lite';
+import { getFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, query, orderBy, documentId, limit, startAfter, writeBatch, runTransaction, setLogLevel } from 'firebase/firestore/lite';
 import { createCloudContactRepository, CloudContactError, type CloudContactAdapter } from '../src/utils/cloudContactRepository';
 
 const require = createRequire(import.meta.url);
@@ -58,6 +58,15 @@ function mockToken(auth: any) {
 }
 const localPath = (path: string) => path.split('/documents/')[1];
 function databaseFromPath(path: string) { return path.split('/')[2]; }
+function queryConstraints(spec: any = {}) {
+  // This runner accepts only the synthetic contract, never arbitrary paths,
+  // filters, wire JSON or query operators supplied by command-line input.
+  assert.ok(spec && typeof spec === 'object' && !Array.isArray(spec));
+  assert.ok(Object.keys(spec).every(key => key === 'limit' || key === 'afterId'));
+  if ('limit' in spec && (typeof spec.limit !== 'number' || !Number.isSafeInteger(spec.limit) || spec.limit <= 0)) return null;
+  if ('afterId' in spec) assert.match(spec.afterId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+  return [orderBy(documentId()), ...('afterId' in spec ? [startAfter(spec.afterId)] : []), ...('limit' in spec ? [limit(spec.limit)] : [])];
+}
 async function evaluate(entry: any) {
   const state = entry.state || { path: entry.testCase.request.path, method: entry.testCase.request.method, auth: entry.testCase.request.auth,
     before: { [entry.testCase.request.path]: entry.testCase.resource }, after: {} };
@@ -71,7 +80,15 @@ async function evaluate(entry: any) {
     if (selected !== database) connectFirestoreEmulator(selected, '127.0.0.1', 8787, state.auth ? { mockUserToken: mockToken(state.auth) } : undefined);
     const target = localPath(state.path);
     if (state.method === 'get') await getDoc(doc(selected, target));
-    else if (state.method === 'list') await getDocs(collection(selected, target.split('/').length % 2 === 0 ? target.split('/').slice(0, -1).join('/') : target));
+    else if (state.method === 'list') {
+      const constraints = queryConstraints(state.query);
+      if (!constraints) {
+        assert.equal(state.queryBoundary, true, 'invalid query fixture must be labelled as a runner query boundary, not Rules');
+        return { allowed: false, queryBoundary: true };
+      }
+      const path = target.split('/').length % 2 === 0 ? target.split('/').slice(0, -1).join('/') : target;
+      await getDocs(query(collection(selected, path), ...constraints));
+    }
     else {
       const batch = writeBatch(selected);
       const paths = entry.state && !entry.name.startsWith('standalone')
@@ -97,6 +114,12 @@ async function integrationChecks() {
   const state = fixture('create'); await seed(state.before);
   const { app, database } = client(state.auth);
   const adapter: CloudContactAdapter = { authorizeOwner: async () => UID,
+    readRecord: async path => { const result = await getDoc(doc(database, path)); return result.exists() ? result.data() : null; },
+    listRecordsPage: async (afterId, maximum) => {
+      const result = await getDocs(query(collection(database, 'clinics', 'main', 'contactRecords'), orderBy(documentId()),
+        ...(afterId ? [startAfter(afterId)] : []), limit(maximum)));
+      return result.docs.map(row => ({ id: row.id, data: row.data() }));
+    },
     runTransaction: work => runTransaction(database, transaction => work({
       get: async path => { const result = await transaction.get(doc(database, path)); return result.exists() ? result.data() : null; },
       set: (path, value) => { transaction.set(doc(database, path), value); },
@@ -151,25 +174,72 @@ async function integrationChecks() {
     await assert.rejects(uncertain.commit(retryCommand), (error: any) => error instanceof CloudContactError && error.code === 'unavailable');
     assert.equal((await uncertain.commit(retryCommand)).status, 'already-committed');
     assert.equal((await getDoc(doc(database, 'clinics', 'main', 'contactRecords', newId))).data()?.revision, 1);
+    // Reset only this disposable DEMO namespace, then exercise actual SDK get
+    // and bounded ID pages. Authorization above is a synthetic owner stub;
+    // these checks do not prove live Auth, the production adapter or two devices.
+    await seed(state.before);
+    const records = collection(database, 'clinics', 'main', 'contactRecords');
+    const page = (maximum: number, afterId?: string) => getDocs(query(records, orderBy(documentId()),
+      ...(afterId ? [startAfter(afterId)] : []), limit(maximum)));
+    assert.equal((await page(3)).empty, true, 'empty database has a permitted bounded page');
+    assert.deepEqual(await repository.listPage({ limit: 3 }), { records: [], nextAfterId: null });
+    const ids = Array.from({ length: 7 }, (_, index) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`);
+    for (const [index, recordId] of ids.entries()) {
+      await repository.commit({ recordId, operationId: randomUUID(), action: 'create', expectedRevision: 0,
+        contact: { ...contact, id: recordId, name: `Synthetic page ${index + 1}`, mobile: `0101234500${index}` } });
+    }
+    for (const index of [1, 5]) await repository.commit({ recordId: ids[index], operationId: randomUUID(),
+      action: 'delete', expectedRevision: 1, contact: null });
+    const first = await page(3); const second = await page(3, first.docs.at(-1)!.id);
+    const third = await page(3, second.docs.at(-1)!.id); const empty = await page(3, third.docs.at(-1)!.id);
+    assert.deepEqual([first.size, second.size, third.size, empty.size], [3, 3, 1, 0]);
+    const loaded = [...first.docs, ...second.docs, ...third.docs];
+    assert.deepEqual(loaded.map(row => row.id), ids, 'stable document-ID cursor pages have no gap or duplicate');
+    assert.equal(loaded.filter(row => row.data().deleted).length, 2, 'pages include tombstones rather than silently skipping cursors');
+    assert.equal(loaded.filter(row => !row.data().deleted).length, 5, 'active rows are filtered only after page validation');
+    const publicFirst = await repository.listPage({ limit: 3 });
+    const publicSecond = await repository.listPage({ limit: 3, afterId: publicFirst.nextAfterId });
+    const publicThird = await repository.listPage({ limit: 3, afterId: publicSecond.nextAfterId });
+    assert.deepEqual([...publicFirst.records, ...publicSecond.records, ...publicThird.records].map(row => row.recordId), ids);
+    assert.equal(publicFirst.nextAfterId, ids[2]); assert.equal(publicSecond.nextAfterId, ids[5]);
+    assert.equal(publicThird.nextAfterId, null);
+    assert.equal(publicFirst.records[1].deleted, true); assert.equal(publicSecond.records[2].deleted, true);
+    assert.deepEqual(await repository.listPage({ limit: 3, afterId: ids.at(-1) }), { records: [], nextAfterId: null });
+    const tombstone = (await getDoc(doc(records, ids[1]))).data();
+    assert.equal(tombstone?.revision, 2); assert.equal(tombstone?.data, null); assert.equal(tombstone?.phoneKey, null);
+    assert.equal((await getDoc(doc(records, ids[0]))).data()?.revision, 1);
+    assert.equal((await getDoc(doc(records, 'ffffffff-ffff-4fff-8fff-ffffffffffff'))).exists(), false);
+    assert.equal((await repository.get(ids[1]))?.deleted, true);
+    assert.equal((await repository.get(ids[0]))?.revision, 1);
+    assert.equal(await repository.get('ffffffff-ffff-4fff-8fff-ffffffffffff'), null);
+    await assert.rejects(getDocs(records), (error: any) => error.code === 'permission-denied');
+    await assert.rejects(page(51), (error: any) => error.code === 'permission-denied');
+    for (const name of ['contactOperations', 'contactPhones']) {
+      await assert.rejects(getDocs(query(collection(database, 'clinics', 'main', name), orderBy(documentId()), limit(3))),
+        (error: any) => error.code === 'permission-denied');
+    }
     return ['create', 'idempotent retry', 'atomic rejection', 'concurrent CAS', 'equivalent phone uniqueness',
-      'versioned delete', 'tombstone contents', 'no resurrection', 'lost acknowledgement', 'resolved acknowledgement'];
+      'versioned delete', 'tombstone contents', 'no resurrection', 'lost acknowledgement', 'resolved acknowledgement',
+      'bounded empty page', 'stable multi-page cursors', 'page includes tombstones', 'get active/tombstone/missing',
+      'unbounded and excessive list denied', 'bounded companion lists denied'];
   } finally { await deleteApp(app); }
 }
 try {
   await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.contacts-stage.rules', content: readFileSync('firestore.contacts-stage.rules', 'utf8') }] } });
-  const failed: { name: string; expected: string; actual: string }[] = []; let passed = 0;
+  const failed: { name: string; expected: string; actual: string }[] = []; let passed = 0; let queryBoundaryPassed = 0;
   const sdkOnly = process.argv[3] === '--sdk-workflow';
   const contactCases = sdkOnly ? [] : namedCases.filter((entry: any) => entry.state && (!process.argv[3] || entry.name === process.argv[3]));
   if (!sdkOnly && !contactCases.length) throw new Error('No matching synthetic case.');
   for (const entry of contactCases) {
     const result = await evaluate(entry);
     const expected = entry.expectation || entry.testCase.expectation;
-    if (result.allowed === (expected === 'ALLOW')) passed++;
+    if (result.allowed === (expected === 'ALLOW')) { passed++; if (result.queryBoundary) queryBoundaryPassed++; }
     else failed.push({ name: entry.name, expected, actual: result.allowed ? 'ALLOW' : 'DENY' });
     if ((passed + failed.length) % 40 === 0) console.log(JSON.stringify({ evaluated: passed + failed.length, total: contactCases.length }));
   }
   const integrationPassed = failed.length || process.argv[3] && !sdkOnly ? [] : await integrationChecks();
-  console.log(JSON.stringify({ target: 'loopback-demo-emulator-only', cases: contactCases.length, passed, failed, sdkIntegrationChecks: integrationPassed }));
+  console.log(JSON.stringify({ target: 'loopback-demo-emulator-only', cases: contactCases.length, passed, failed,
+    rulesEngineCases: contactCases.length - queryBoundaryPassed, queryBoundaryChecks: queryBoundaryPassed, sdkIntegrationChecks: integrationPassed }));
   if (failed.length) process.exitCode = 1;
 } catch (error: any) {
   console.error(JSON.stringify({ status: 'demo-emulator-test-incomplete', detail: error instanceof Error ? error.message : 'unknown' })); process.exitCode = 1;

@@ -81,6 +81,40 @@ function buildNamedCases() {
     add(`deny list ${path.split('/').at(-2)}`, 'update', 'DENY', s => { s.path = path; s.method = 'list'; });
     add(`deny anonymous get ${path.split('/').at(-2)}`, 'update', 'DENY', s => { s.path = path; s.method = 'get'; s.auth = null; });
   }
+  const list = (name, expectation, query, mutate = () => {}) => add(name, 'update', expectation, s => {
+    s.path = `${ROOT}/contactRecords`; s.method = 'list'; s.query = clone(query); mutate(s);
+  });
+  for (const maximum of [1, 25, 50]) list(`owner bounded contact list ${maximum}`, 'ALLOW', { limit: maximum });
+  list('owner contact list with UUID cursor', 'ALLOW', { limit: 25, afterId: ID });
+  list('owner empty bounded contact list', 'ALLOW', { limit: 25 }, s => { delete s.before[recordPath]; });
+  list('owner bounded contact list includes tombstones', 'ALLOW', { limit: 25 }, s => {
+    s.before[recordPath].data.deleted = true; s.before[recordPath].data.phoneKey = null; s.before[recordPath].data.data = null;
+  });
+  list('contact list unbounded denied', 'DENY', {});
+  list('contact list excessive limit denied', 'DENY', { limit: 51 });
+  // Invalid specifications exercise the runner's query-contract boundary, not
+  // a Rules request that Firestore's integer wire limit cannot represent.
+  for (const invalid of [0, -1, 1.5, '25', null]) {
+    list(`contact list invalid query limit ${JSON.stringify(invalid)}`, 'DENY', { limit: invalid }, s => { s.queryBoundary = true; });
+  }
+  for (const [label, mutate] of Object.entries({
+    anonymous: s => { s.auth = null; },
+    'unverified email': s => { s.auth.token.email_verified = false; },
+    'non-password provider': s => { s.auth.token.firebase.sign_in_provider = 'anonymous'; },
+    'secretary claim': s => { s.auth.token.dentalClinicRole = 'secretary'; },
+    'other clinic claim': s => { s.auth.token.dentalClinicId = 'other'; },
+    'membership missing': s => { delete s.before[memberPath]; },
+    'membership disabled': s => { s.before[memberPath].data.status = 'disabled'; },
+    'canonical secretary': s => { s.before[memberPath].data.role = 'secretary'; },
+    'membership uid mismatch': s => { s.before[memberPath].data.uid = 'synthetic-other'; },
+    'membership extra field': s => { s.before[memberPath].data.extra = true; },
+    'stale auth_time': s => { s.auth.token.auth_time = 1799999998; },
+  })) list(`bounded contact list rejects ${label}`, 'DENY', { limit: 25 }, mutate);
+  for (const domain of ['contactPhones', 'contactOperations', 'members', 'patients', 'labPrivate', 'users']) {
+    list(`bounded ${domain} list remains denied`, 'DENY', { limit: 25 }, s => { s.path = `${ROOT}/${domain}`; });
+  }
+  list('bounded other clinic contact list denied', 'DENY', { limit: 25 }, s => { s.path = s.path.replace('/main/', '/other/'); });
+  list('bounded nondefault database contact list denied', 'DENY', { limit: 25 }, s => { s.path = s.path.replace('(default)', 'other'); });
   for (const [label, mutate] of Object.entries({
     'missing receipt': s => { delete s.after[operationPath]; },
     'reused receipt': s => { s.before[operationPath] = clone(s.after[operationPath]); },

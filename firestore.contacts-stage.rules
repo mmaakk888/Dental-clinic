@@ -167,8 +167,13 @@ service cloud.firestore {
     }
     match /clinics/main/contactRecords/{id} {
       allow get: if owner() && uuid(id);
+      // Bounded owner paging includes tombstones. The caller orders by document
+      // ID and filters deleted envelopes after validation; a list is not export
+      // permission and never opens phone indexes, receipts or other domains.
+      allow list: if owner() && 'limit' in request.query
+        && request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50;
       allow create, update: if owner() && contactWrite(resource, request.resource.data, id);
-      allow list, delete: if false;
+      allow delete: if false;
     }
     match /clinics/main/contactOperations/{id} {
       allow get: if owner() && uuid(id);
