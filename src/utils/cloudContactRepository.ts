@@ -103,10 +103,10 @@ function uid(value: unknown): value is string {
 export function parseCloudContactRecord(value: unknown): CloudContactRecord {
   try {
     const fields = record(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'deleted', 'lastOperationId', 'phoneKey', 'data']);
-    if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)
-      || !revision(fields.revision) || typeof fields.deleted !== 'boolean' || typeof fields.lastOperationId !== 'string' || !UUID.test(fields.lastOperationId)) invalid();
+    if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || typeof fields.recordId !== 'string' || fields.recordId.length !== 36 || !UUID.test(fields.recordId)
+      || !revision(fields.revision) || typeof fields.deleted !== 'boolean' || typeof fields.lastOperationId !== 'string' || fields.lastOperationId.length !== 36 || !UUID.test(fields.lastOperationId)) invalid();
     if (fields.deleted && fields.data !== null || !fields.deleted && fields.data === null) invalid();
-    if (fields.deleted ? fields.phoneKey !== null : typeof fields.phoneKey !== 'string' || !HASH.test(fields.phoneKey)) invalid();
+    if (fields.deleted ? fields.phoneKey !== null : typeof fields.phoneKey !== 'string' || fields.phoneKey.length !== 64 || !HASH.test(fields.phoneKey)) invalid();
     const data = fields.deleted ? null : contact(fields.data);
     if (data && data.id !== fields.recordId) invalid();
     return { schemaVersion: 1, clinicId: 'main', recordId: fields.recordId, revision: fields.revision,
@@ -116,7 +116,7 @@ export function parseCloudContactRecord(value: unknown): CloudContactRecord {
 /** Detached validated input; bind before an outer async authorization boundary. */
 export function prepareCloudContactCommand(value: unknown): CloudContactCommand {
   const fields = record(value, ['operationId', 'recordId', 'expectedRevision', 'action', 'contact']);
-  if (typeof fields.operationId !== 'string' || !UUID.test(fields.operationId) || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)
+  if (typeof fields.operationId !== 'string' || fields.operationId.length !== 36 || !UUID.test(fields.operationId) || typeof fields.recordId !== 'string' || fields.recordId.length !== 36 || !UUID.test(fields.recordId)
     || !revision(fields.expectedRevision, true) || fields.expectedRevision >= MAX_REVISION
     || !['create', 'update', 'delete'].includes(fields.action as string)
     || (fields.action === 'create') !== (fields.expectedRevision === 0)
@@ -137,14 +137,14 @@ const phonePath = (key: string) => `clinics/main/contactPhones/${key}`;
 function phoneIndex(value: unknown, key: string): string | null {
   if (value === null) return null;
   const fields = record(value, ['schemaVersion', 'clinicId', 'phoneKey', 'recordId']);
-  if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || fields.phoneKey !== key || typeof fields.recordId !== 'string' || !UUID.test(fields.recordId)) invalid();
+  if (fields.schemaVersion !== 1 || fields.clinicId !== 'main' || fields.phoneKey !== key || typeof fields.recordId !== 'string' || fields.recordId.length !== 36 || !UUID.test(fields.recordId)) invalid();
   return fields.recordId;
 }
 export function prepareCloudContactPageInput(value: unknown): { afterId: string | null; limit: number } {
   const fields: Record<string, unknown> = value === undefined ? {} : record(value, [], ['afterId', 'limit']);
   const afterId = fields.afterId ?? null;
   const limit = fields.limit === undefined ? 25 : fields.limit;
-  if (afterId !== null && (typeof afterId !== 'string' || !UUID.test(afterId))
+  if (afterId !== null && (typeof afterId !== 'string' || afterId.length !== 36 || !UUID.test(afterId))
     || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) invalid();
   return { afterId: afterId as string | null, limit };
 }
@@ -163,7 +163,7 @@ function pageRows(value: unknown, limit: number): unknown[] {
 
 export function createCloudContactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions = {}) {
   const digest = options.digest ?? sha256;
-  const hash = async (text: string) => { const value = await digest(text); if (!HASH.test(value)) invalid(); return value; };
+  const hash = async (text: string) => { const value = await digest(text); if (typeof value !== 'string' || value.length !== 64 || !HASH.test(value)) invalid(); return value; };
   const checkedRecord = async (value: unknown, id: string): Promise<CloudContactRecord> => {
     const checked = parseCloudContactRecord(value);
     if (checked.recordId !== id) invalid();
@@ -174,7 +174,7 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
   return {
     async get(recordId: string): Promise<CloudContactRecord | null> {
       try {
-        if (typeof recordId !== 'string' || !UUID.test(recordId)) invalid();
+        if (typeof recordId !== 'string' || recordId.length !== 36 || !UUID.test(recordId)) invalid();
         if (typeof adapter.readRecord !== 'function') throw new CloudContactError('unavailable');
         const actorUid = await adapter.authorizeOwner();
         if (!uid(actorUid)) invalid();
@@ -197,7 +197,7 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
         let previousId = prepared.afterId;
         for (const value of values) {
           const fields = record(value, ['id', 'data']);
-          if (typeof fields.id !== 'string' || !UUID.test(fields.id) || previousId !== null && fields.id <= previousId) invalid();
+          if (typeof fields.id !== 'string' || fields.id.length !== 36 || !UUID.test(fields.id) || previousId !== null && fields.id <= previousId) invalid();
           records.push(await checkedRecord(fields.data, fields.id));
           previousId = fields.id;
         }

@@ -1,0 +1,205 @@
+rules_version = '2';
+// UNDEPLOYED owner-only patient-profile candidate, not a full clinic ruleset.
+// No client bootstrap, clinical sessions, payments, lab costs or local migration.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function verifiedOwner(uid) {
+      return request.auth != null && request.auth.uid is string
+        && request.auth.uid.size() > 0 && request.auth.uid.size() <= 128
+        && request.auth.uid == uid && request.auth.token is map
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase is map
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.auth.token.dentalClinicId == 'main'
+        && request.auth.token.dentalClinicRole == 'owner'
+        && request.auth.token.auth_time is int
+        && request.auth.token.auth_time >= 0
+        && request.auth.token.auth_time <= 9007199254740991;
+    }
+    function activeOwner(data, uid) {
+      let fields = ['schemaVersion', 'clinicId', 'uid', 'role', 'status', 'identityVersion', 'verifiedAfter'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1
+        && data.clinicId == 'main' && data.uid == uid
+        && data.role == 'owner' && data.status == 'active'
+        && data.identityVersion is int && data.identityVersion >= 1
+        && data.identityVersion <= 9007199254740991
+        && data.verifiedAfter is int && data.verifiedAfter >= 0
+        && data.verifiedAfter <= 9007199254740991
+        && request.auth.token.auth_time >= data.verifiedAfter;
+    }
+    function owner() {
+      return database == '(default)' && verifiedOwner(request.auth.uid)
+        && activeOwner(get(/databases/$(database)/documents/clinics/main/members/$(request.auth.uid)).data, request.auth.uid);
+    }
+    function uuid(id) {
+      return id is string && id.matches('[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}');
+    }
+    function hash(value) { return value is string && value.matches('[0-9a-f]{64}'); }
+    function profilePath(id) { return /databases/$(database)/documents/clinics/main/patientProfiles/$(id); }
+    function operationPath(id) { return /databases/$(database)/documents/clinics/main/patientOperations/$(id); }
+    function filePath(number) { return /databases/$(database)/documents/clinics/main/patientFiles/$(string(number)); }
+    function counterPath() { return /databases/$(database)/documents/clinics/main/counters/patientFiles; }
+    function positiveNumber(value) { return value is int && value >= 1 && value <= 2000000000; }
+    function asciiDigits(value) {
+      return value.matches('[^٠-٩۰-۹]*') ? value : value.replace('[٠۰]', '0').replace('[١۱]', '1').replace('[٢۲]', '2')
+        .replace('[٣۳]', '3').replace('[٤۴]', '4').replace('[٥۵]', '5')
+        .replace('[٦۶]', '6').replace('[٧۷]', '7').replace('[٨۸]', '8').replace('[٩۹]', '9');
+    }
+    function trimSpaces(value) {
+      let spaces = '[\\x09-\\x0d\\x20\\x{00a0}\\x{1680}\\x{2000}-\\x{200a}\\x{2028}\\x{2029}\\x{202f}\\x{205f}\\x{3000}\\x{feff}]';
+      return value.replace('^' + spaces + '+|' + spaces + '+$', '');
+    }
+    function preparedPhone(value) {
+      let formatted = trimSpaces(asciiDigits(value));
+      let digits = formatted.replace('[^0-9]', '');
+      let international = digits.matches('00.*') ? digits[2:digits.size()] : digits;
+      let canonical = international.matches('01.*') ? '20' + international[1:international.size()] : international;
+      let valid = value.size() <= 60 && value == trimSpaces(value) && value.matches('[^\\x00-\\x1f\\x7f]*')
+        && (value == '' || (formatted.matches('[+]?[0-9 ().-]+')
+          && (!digits.matches('01.*') || digits.matches('01[0-9]{9}'))
+          && canonical.matches('[1-9][0-9]{7,14}')
+          && (!canonical.matches('20.*') || canonical.matches('201[0-9]{9}'))));
+      return { 'valid': valid, 'key': value == '' ? null : hashing.sha256('patient-phone-v1:' + canonical).toHexString().lower() };
+    }
+    function calendarDay(value) {
+      let year = int(value[0:4]);
+      let month = int(value[5:7]);
+      let day = int(value[8:10]);
+      let leap = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
+      let maximum = month == 2 ? (leap ? 29 : 28) : (month in [4, 6, 9, 11] ? 30 : 31);
+      return year >= 1900 && day <= maximum;
+    }
+    function validProfile(data, phone) {
+      let fields = ['name', 'mobile', 'age', 'gender', 'firstVisit', 'notes', 'allergy'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.name is string && data.name == trimSpaces(data.name)
+        && data.name.size() >= 1 && data.name.size() <= 200 && data.name.matches('[^\\x00-\\x1f\\x7f]*')
+        && data.mobile is string && phone.valid
+        && data.age is int && data.age >= 0 && data.age <= 120
+        && data.gender is string && data.gender == trimSpaces(data.gender)
+        && data.gender.size() <= 40 && data.gender.matches('[^\\x00-\\x1f\\x7f]*')
+        && data.firstVisit is string
+        && data.firstVisit.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+        && calendarDay(data.firstVisit)
+        && data.notes is string && data.notes.size() <= 4000
+        && data.notes.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*')
+        && data.allergy is string && data.allergy.size() <= 1000
+        && data.allergy.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*');
+    }
+    function validEnvelope(data, id, phone) {
+      let fields = ['schemaVersion', 'clinicId', 'recordId', 'fileNo', 'revision', 'lastOperationId', 'phoneKey', 'data'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.recordId == id && positiveNumber(data.fileNo)
+        && positiveNumber(data.revision) && uuid(data.lastOperationId)
+        && data.phoneKey == phone.key && validProfile(data.data, phone);
+    }
+    function validCounter(data) {
+      let fields = ['schemaVersion', 'clinicId', 'lastFileNo', 'lastOperationId'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && data.lastFileNo is int && data.lastFileNo >= 0 && data.lastFileNo <= 2000000000
+        && (data.lastFileNo == 0 ? data.lastOperationId == null : uuid(data.lastOperationId));
+    }
+    function validFile(data, key) {
+      let fields = ['schemaVersion', 'clinicId', 'fileNo', 'recordId'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && positiveNumber(data.fileNo) && key == string(data.fileNo) && uuid(data.recordId);
+    }
+    function validReceipt(data, id) {
+      // requestHash is a client retry fingerprint, NOT a server content signature.
+      let fields = ['schemaVersion', 'clinicId', 'operationId', 'actorUid', 'recordId', 'fileNo', 'action', 'expectedRevision', 'resultRevision', 'requestHash'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.operationId == id && uuid(data.recordId) && positiveNumber(data.fileNo)
+        && data.actorUid == request.auth.uid && data.action in ['create', 'update']
+        && data.expectedRevision is int && data.expectedRevision >= 0 && data.expectedRevision < 2000000000
+        && positiveNumber(data.resultRevision) && data.resultRevision == data.expectedRevision + 1
+        && ((data.action == 'create') == (data.expectedRevision == 0)) && hash(data.requestHash);
+    }
+    function newReceipt(after) {
+      let receipt = getAfter(operationPath(after.lastOperationId));
+      return !exists(operationPath(after.lastOperationId)) && receipt != null
+        && receipt.data.recordId == after.recordId;
+    }
+    function newAllocation(after) {
+      let beforeCounter = get(counterPath());
+      let afterCounter = getAfter(counterPath());
+      let afterFile = getAfter(filePath(after.fileNo));
+      // The changed counter's own rule validates both its schema and prior
+      // state. Repeating those checks across companions exceeds Rules' budget.
+      return beforeCounter != null
+        && afterCounter != null && afterCounter.data.lastFileNo == beforeCounter.data.lastFileNo + 1
+        && afterCounter.data.lastFileNo == after.fileNo && afterCounter.data.lastOperationId == after.lastOperationId
+        && !exists(filePath(after.fileNo)) && afterFile != null && afterFile.data.recordId == after.recordId;
+    }
+    function profileWrite(before, after, id) {
+      let phone = preparedPhone(after.data.mobile);
+      return validEnvelope(after, id, phone) && newReceipt(after)
+        && (before == null ? after.revision == 1 && newAllocation(after)
+          : after.fileNo == before.data.fileNo && after.revision == before.data.revision + 1
+            && after.lastOperationId != before.data.lastOperationId);
+    }
+    function profileChanged(before, after) {
+      return after != null && (before == null ? after.data.revision == 1
+        : after.data.revision == before.data.revision + 1);
+    }
+    function receiptTransition(data) {
+      let before = get(profilePath(data.recordId));
+      let after = getAfter(profilePath(data.recordId));
+      return profileChanged(before, after) && after.data.lastOperationId == data.operationId
+        && after.data.fileNo == data.fileNo && after.data.revision == data.resultRevision
+        && data.expectedRevision == (before == null ? 0 : before.data.revision)
+        && data.action == (before == null ? 'create' : 'update');
+    }
+    function fileTransition(data) {
+      let before = get(profilePath(data.recordId));
+      let after = getAfter(profilePath(data.recordId));
+      return before == null && after != null && after.data.revision == 1 && after.data.fileNo == data.fileNo;
+    }
+    function counterTransition(before, after) {
+      let receipt = getAfter(operationPath(after.lastOperationId));
+      let profile = receipt == null ? null : getAfter(profilePath(receipt.data.recordId));
+      return validCounter(before) && after.diff(before).affectedKeys().hasOnly(['lastFileNo', 'lastOperationId'])
+        && after.schemaVersion is int && after.lastFileNo is int
+        && after.lastFileNo == before.lastFileNo + 1 && after.lastOperationId != before.lastOperationId
+        && after.lastFileNo <= 2000000000
+        && receipt != null && !exists(operationPath(after.lastOperationId)) && receipt.data.action == 'create'
+        // The required create-only receipt rule already proves a new profile;
+        // the profile rule supplies the schema and all allocation companions.
+        && profile != null
+        && profile.data.lastOperationId == after.lastOperationId && profile.data.fileNo == after.lastFileNo;
+    }
+    match /clinics/main/members/{uid} {
+      allow get: if database == '(default)' && verifiedOwner(uid) && activeOwner(resource.data, uid);
+      allow list, create, update, delete: if false;
+    }
+    match /clinics/main/patientProfiles/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && 'limit' in request.query
+        && request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50;
+      allow create, update: if owner() && profileWrite(resource, request.resource.data, id);
+      allow delete: if false;
+    }
+    match /clinics/main/patientOperations/{id} {
+      allow get: if owner() && uuid(id) && (!exists(operationPath(id)) || resource.data.actorUid == request.auth.uid);
+      allow create: if owner() && validReceipt(request.resource.data, id) && receiptTransition(request.resource.data);
+      allow list, update, delete: if false;
+    }
+    match /clinics/main/patientFiles/{key} {
+      allow get: if owner() && key.matches('[1-9][0-9]{0,9}') && int(key) <= 2000000000;
+      allow create: if owner() && validFile(request.resource.data, key) && fileTransition(request.resource.data);
+      allow list, update, delete: if false;
+    }
+    match /clinics/main/counters/patientFiles {
+      allow get: if owner();
+      // Trusted setup must seed {lastFileNo:0,lastOperationId:null} separately.
+      // Missing/corrupt counters fail closed; a client never restarts numbering.
+      allow update: if owner() && counterTransition(resource.data, request.resource.data);
+      allow list, create, delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

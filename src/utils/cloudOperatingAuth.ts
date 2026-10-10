@@ -3,6 +3,7 @@ import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID, type CloudOwnerIdentity } f
 import { assessCloudOwnerMembership, type CloudOwnerMembership } from './cloudMembership';
 import { isLocalClinicHost } from './localRuntime';
 import type { CloudContactRepository } from './cloudContactRepository';
+import type { CloudPatientRepository } from './cloudPatientRepository';
 
 type OperatingErrorCode = 'invalid-input' | 'busy' | 'unavailable' | 'changed' | 'closed';
 
@@ -174,6 +175,8 @@ export type CloudOperatingAuthSession = ReturnType<typeof createCloudOperatingAu
 export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
   /** Explicit, owner-authorized capability. No SDK app/Auth object escapes. */
   getContacts(): Promise<CloudContactRepository>;
+  /** Prepared profile-only capability; does not activate patient UI or Rules. */
+  getPatients(): Promise<CloudPatientRepository>;
 };
 
 /**
@@ -235,11 +238,15 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
         const database = store.getFirestore(app, '(default)');
         const snapshot = await store.getDoc(store.doc(database, 'clinics', 'main', 'members', user.uid));
         requireSameUser();
-        if (!snapshot.exists()) throw new CloudOperatingAuthError('unavailable');
+        const exists = snapshot.exists();
+        requireSameUser();
+        if (!exists) throw new CloudOperatingAuthError('unavailable');
         const membership = snapshot.data() as CloudOwnerMembership;
+        requireSameUser();
         // The rules enforce this on the server too. Never substitute local
         // account flags, cached metadata or the previous setup diagnostic.
         assessCloudOwnerMembership(identity, membership, authTime);
+        requireSameUser();
         return { identity, membership, authTime };
       },
       signOut: async () => { trackedUser = null; await sdk.signOut(auth); },
@@ -253,16 +260,17 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
     // become valid again after logout/relogin, even for the same owner.
     let capabilityGeneration = 0;
     let contactsCreation: Promise<CloudContactRepository> | null = null;
-    const revokeContacts = () => { ++capabilityGeneration; contactsCreation = null; };
+    let patientsCreation: Promise<CloudPatientRepository> | null = null;
+    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; };
     session.subscribe(value => {
-      if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeContacts();
+      if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeCapabilities();
     });
     const operating: CloudOperatingFirebaseSession = Object.freeze({
       ...session,
-      signIn: (email: string, password: string) => { revokeContacts(); return session.signIn(email, password); },
-      invalidate: () => { revokeContacts(); session.invalidate(); },
-      signOut: () => { revokeContacts(); return session.signOut(); },
-      dispose: () => { revokeContacts(); return session.dispose(); },
+      signIn: (email: string, password: string) => { revokeCapabilities(); return session.signIn(email, password); },
+      invalidate: () => { revokeCapabilities(); session.invalidate(); },
+      signOut: () => { revokeCapabilities(); return session.signOut(); },
+      dispose: () => { revokeCapabilities(); return session.dispose(); },
       getContacts: async (): Promise<CloudContactRepository> => {
         try {
           const checked = session.getState();
@@ -274,12 +282,12 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
           const uid = checked.owner.uid;
           const requireActive = () => {
             try { requireRuntime(); }
-            catch { revokeContacts(); throw new CloudOperatingAuthError('changed'); }
+            catch { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
             const phase = session.getState().phase;
             if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
               || phase === 'signed-out' || phase === 'signing-out' || phase === 'closed') {
               // A missed/delayed SDK observer must not allow later resurrection.
-              if (generation === capabilityGeneration) revokeContacts();
+              if (generation === capabilityGeneration) revokeCapabilities();
               throw new CloudOperatingAuthError('changed');
             }
           };
@@ -287,7 +295,7 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
             requireActive();
             const owner = await session.authorizeOwner();
             requireActive();
-            if (owner.uid !== uid) { revokeContacts(); throw new CloudOperatingAuthError('changed'); }
+            if (owner.uid !== uid) { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
           };
           await authorize();
           requireActive();
@@ -351,6 +359,79 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
           // Initialization/authorization errors never expose provider payloads.
           throw new CloudOperatingAuthError('unavailable');
         }
+      },
+      getPatients: async (): Promise<CloudPatientRepository> => {
+        try {
+          const checked = session.getState(), user = auth.currentUser;
+          if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
+            throw new CloudOperatingAuthError('changed');
+          }
+          const generation = capabilityGeneration, uid = checked.owner.uid;
+          const requireActive = () => {
+            try { requireRuntime(); }
+            catch { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+            const phase = session.getState().phase;
+            if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
+              || phase === 'signed-out' || phase === 'signing-out' || phase === 'closed') {
+              if (generation === capabilityGeneration) revokeCapabilities();
+              throw new CloudOperatingAuthError('changed');
+            }
+          };
+          const authorize = async () => {
+            requireActive();
+            const owner = await session.authorizeOwner();
+            requireActive();
+            if (owner.uid !== uid) { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+          };
+          await authorize(); requireActive();
+          if (!patientsCreation) {
+            const creation = Promise.resolve().then(async () => {
+              requireActive();
+              const [patients, contract] = await Promise.all([
+                import('./firebaseCloudPatients'), import('./cloudPatientRepository'),
+              ]);
+              requireActive();
+              const repository = await patients.createFirebaseCloudPatients(auth, {
+                isActive: () => { try { requireActive(); return true; } catch { return false; } },
+              });
+              requireActive();
+              const run = async <T>(work: () => Promise<T>): Promise<T> => {
+                try {
+                  await authorize(); requireActive();
+                  const result = await work(); requireActive(); return result;
+                } catch (error) {
+                  let safe: Error = new CloudOperatingAuthError('unavailable');
+                  try {
+                    if (error instanceof CloudOperatingAuthError) safe = new CloudOperatingAuthError(error.code);
+                    if (error instanceof contract.CloudPatientError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) {
+                      safe = new contract.CloudPatientError(error.code);
+                    }
+                  } catch { /* Fixed errors, never provider/clinical payloads. */ }
+                  throw safe;
+                }
+              };
+              return Object.freeze({
+                commit: async input => {
+                  const prepared = contract.prepareCloudPatientCommand(input);
+                  return run(() => repository.commit(prepared));
+                },
+                get: recordId => run(() => repository.get(recordId)),
+                getByFileNo: fileNo => run(() => repository.getByFileNo(fileNo)),
+                listPage: async input => {
+                  const prepared = contract.prepareCloudPatientPageInput(input);
+                  return run(() => repository.listPage(prepared));
+                },
+                findByPhone: async input => {
+                  const prepared = contract.prepareCloudPatientPhoneInput(input);
+                  return run(() => repository.findByPhone(prepared));
+                },
+              } satisfies CloudPatientRepository);
+            });
+            patientsCreation = creation;
+            void creation.catch(() => { if (patientsCreation === creation) patientsCreation = null; });
+          }
+          const repository = await patientsCreation; requireActive(); return repository;
+        } catch { throw new CloudOperatingAuthError('unavailable'); }
       },
     });
     try {

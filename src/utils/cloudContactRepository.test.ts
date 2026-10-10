@@ -59,6 +59,19 @@ test('contact transaction core is inert until explicit commit and has no local/d
   const h = harness(); assert.deepEqual(h.calls, []); assert.equal(h.rows.size, 0);
 });
 
+test('contact UUID/cursor/hash fences reject final line terminators rather than relying on dollar anchors', async () => {
+  for (const ending of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    const h = harness();
+    await assert.rejects(h.repo.get(ID + ending), hasCode('invalid'));
+    await assert.rejects(h.repo.listPage({ afterId: ID + ending }), hasCode('invalid'));
+    await assert.rejects(h.repo.commit(input({ operationId: OP + ending })), hasCode('invalid'));
+    assert.deepEqual(h.calls, []);
+  }
+  const h = harness(); await h.repo.commit(input());
+  const saved = h.rows.get(rPath()) as any;
+  assert.throws(() => parseCloudContactRecord({ ...saved, phoneKey: saved.phoneKey + '\n' }), hasCode('invalid'));
+});
+
 test('create commits record, unique canonical phone and data-free receipt together', async () => {
   const h = harness(), command = input();
   assert.deepEqual(await h.repo.commit(command), { status: 'committed', recordId: ID, revision: 1 });

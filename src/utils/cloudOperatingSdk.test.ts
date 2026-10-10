@@ -24,7 +24,7 @@ async function until(check: () => boolean) {
 }
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -39,6 +39,10 @@ async function fixture(options: {
   contactsFactoryGate?: Promise<void>;
   contactsMethodGate?: Promise<void>;
   contactsFailure?: unknown;
+  patientsImportHook?: () => void;
+  patientsFactoryGate?: Promise<void>;
+  patientsMethodGate?: Promise<void>;
+  patientsFailure?: unknown;
   onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
@@ -48,6 +52,8 @@ async function fixture(options: {
   const contactCalls: string[] = [];
   const contactInputs: unknown[] = [];
   let contactsActive: (() => boolean) | null = null;
+  const patientCalls: string[] = [], patientInputs: unknown[] = [];
+  let patientsActive: (() => boolean) | null = null;
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -145,6 +151,27 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           return () => { step('unsubscribe'); observer = null; observerError = null; };
         },
       };
+      if (name === './firebaseCloudPatients') {
+        options.patientsImportHook?.();
+        return { createFirebaseCloudPatients: async (target: unknown, settings: { isActive: () => boolean }) => {
+          assert.equal(target, auth); assert.equal(settings.isActive(), true);
+          patientCalls.push('factory'); patientsActive = settings.isActive;
+          await options.patientsFactoryGate;
+          const work = async <T>(name: string, input: unknown, result: T) => {
+            patientCalls.push(name); patientInputs.push(input);
+            await options.patientsMethodGate;
+            if (options.patientsFailure !== undefined) throw options.patientsFailure;
+            return result;
+          };
+          return {
+            commit: (input: unknown) => work('commit', input, { status: 'committed', recordId: RECORD, revision: 1, fileNo: 1 }),
+            get: (input: unknown) => work('get', input, null),
+            getByFileNo: (input: unknown) => work('getByFileNo', input, null),
+            listPage: (input: unknown) => work('listPage', input, { records: [], nextAfterId: null }),
+            findByPhone: (input: unknown) => work('findByPhone', input, { records: [], nextAfterId: null }),
+          };
+        } };
+      }
       if (name === 'firebase/firestore/lite') return {
         getFirestore: (target: unknown, databaseId: string) => {
           assert.equal(target, app); assert.equal(databaseId, '(default)'); step('getFirestore'); return database;
@@ -157,11 +184,11 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           assert.equal(target, document); step('getDoc');
           await options.onGetDoc?.();
           return {
-            exists: () => options.membership !== null,
-            data: () => module.exports.__copy(options.membership ?? {
+            exists: () => { step('snapshotExists'); return options.membership !== null; },
+            data: () => { step('snapshotData'); return module.exports.__copy(options.membership ?? {
               schemaVersion: 1, clinicId: 'main', uid: UID, role: 'owner', status: 'active',
               identityVersion: 1, verifiedAfter: AUTH_TIME,
-            }),
+            }); },
           };
         },
       };
@@ -170,6 +197,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
   });
   return { api: module.exports, imports, calls, paths, forced, auth, location, contactCalls, contactInputs,
     contactsActive: () => contactsActive?.() ?? false,
+    patientCalls, patientInputs, patientsActive: () => patientsActive?.() ?? false,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
     replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
@@ -184,7 +212,7 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients'].sort());
 });
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
@@ -250,12 +278,12 @@ test('missing, disabled, pre-cutoff or malformed membership cannot produce owner
 });
 
 test('identity changes at each asynchronous boundary prevent any late owner result', async () => {
-  for (const switchAt of ['reload', 'getToken', 'getDoc']) {
+  for (const switchAt of ['reload', 'getToken', 'getDoc', 'snapshotExists', 'snapshotData']) {
     const h = await fixture({ switchAt });
     const session = await h.api.createFirebaseOperatingAuth();
     await assert.rejects(session.signIn(EMAIL, PASSWORD));
     assert.equal(session.getState().owner, null); assert.equal(h.auth.currentUser, null);
-    if (switchAt !== 'getDoc') assert.deepEqual(h.paths, []);
+    if (switchAt === 'reload' || switchAt === 'getToken') assert.deepEqual(h.paths, []);
     await session.dispose();
   }
 });
@@ -328,7 +356,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(again, repository);
   assert.equal(Object.isFrozen(repository), true);
   assert.equal(h.contactsActive(), true);
-  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getContacts', 'getState',
+  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getContacts', 'getPatients', 'getState',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
   assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);
@@ -552,4 +580,100 @@ test('contact method failures keep provider details and malformed Proxy exceptio
     });
     await session.dispose();
   }
+});
+
+test('patient capability is explicit, owner-only, lazy and exposes no SDK app or local data', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+  await assert.rejects(session.getPatients());
+  await session.signIn(EMAIL, PASSWORD);
+  assert.deepEqual(h.patientCalls, []); assert.equal(h.imports.includes('./firebaseCloudPatients'), false);
+  const repository = await session.getPatients();
+  assert.equal(repository, await session.getPatients()); assert.deepEqual(h.patientCalls, ['factory']);
+  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'findByPhone', 'get', 'getByFileNo', 'listPage']);
+  assert.equal(h.patientsActive(), true);
+  const before = h.paths.length;
+  await repository.get(RECORD); await repository.getByFileNo(1);
+  await repository.listPage(); await repository.findByPhone(h.api.__input({ mobile: '01000000001' }));
+  await repository.commit(h.api.__input({ operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create',
+    profile: { name: 'Synthetic profile', mobile: '', age: 0, gender: '', firstVisit: '2026-10-10', notes: '', allergy: '' } }));
+  assert.equal(h.paths.length, before + 5, 'fresh forced-token and membership authorization before every capability operation');
+  assert.deepEqual(h.contactCalls, []); await session.dispose(); assert.equal(h.patientsActive(), false);
+});
+
+test('retained patient methods cannot revive across same-UID relogin or actual identity/runtime loss', async () => {
+  for (const event of ['signOut', 'invalidate', 'replacement', 'hostname', 'emulator', 'dispose'] as const) {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getPatients();
+    if (event === 'signOut') { await session.signOut(); await session.signIn(EMAIL, PASSWORD); }
+    if (event === 'invalidate') session.invalidate();
+    if (event === 'replacement') h.replaceIdentity();
+    if (event === 'hostname') h.location.hostname = 'outside.invalid';
+    if (event === 'emulator') (h.auth as any).emulatorConfig = {};
+    if (event === 'dispose') await session.dispose();
+    await assert.rejects(repository.get(RECORD), undefined, event);
+    assert.equal(h.patientsActive(), false, event);
+    h.location.hostname = '127.0.0.1'; (h.auth as any).emulatorConfig = null;
+    await assert.rejects(repository.listPage(), undefined, 'restoring runtime never resurrects old capability');
+    assert.deepEqual(h.patientCalls, ['factory']); await session.dispose();
+  }
+});
+
+test('patient import/factory cancellation never yields a late usable repository', async () => {
+  let dispose!: () => Promise<void>, closing: Promise<void> | null = null;
+  const h = await fixture({ patientsImportHook: () => { closing = dispose(); } });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD); dispose = session.dispose;
+  await assert.rejects(session.getPatients()); await closing; assert.deepEqual(h.patientCalls, []);
+  const gate = deferred(), next = await fixture({ patientsFactoryGate: gate.promise });
+  const second = await next.api.createFirebaseOperatingAuth(); await second.signIn(EMAIL, PASSWORD);
+  const loading = second.getPatients(); await until(() => next.patientCalls.includes('factory'));
+  await second.signOut(); gate.resolve(); await assert.rejects(loading); assert.equal(next.patientsActive(), false); await second.dispose();
+});
+
+test('patient commands/pages/phone queries snapshot before delayed membership checks', async () => {
+  for (const method of ['commit', 'listPage', 'findByPhone'] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const repository = await session.getPatients(); enabled = true;
+    const command = h.api.__input({ operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create' as const,
+      profile: { name: 'Original synthetic profile', mobile: '01000000001', age: 20, gender: '', firstVisit: '2026-10-10', notes: '', allergy: '' } });
+    const query = h.api.__input({ limit: 2, afterId: RECORD, mobile: '01000000001' });
+    const page = h.api.__input({ limit: 2, afterId: RECORD });
+    const pending = method === 'commit' ? repository.commit(command) : method === 'findByPhone' ? repository.findByPhone(query) : repository.listPage(page);
+    await until(() => reached);
+    command.operationId = RECORD; command.profile.name = 'Changed'; query.mobile = '01000000002'; query.limit = 50; page.limit = 50;
+    gate.resolve(); await pending;
+    const received = h.patientInputs[0] as any;
+    if (method === 'commit') { assert.equal(received.operationId, INSTANCE); assert.equal(received.profile.name, 'Original synthetic profile'); }
+    else { assert.equal(received.limit, 2); if (method === 'findByPhone') assert.equal(received.mobile, '201000000001'); }
+    await session.dispose();
+  }
+});
+
+test('patient authorization/factory never proceeds after logout at membership boundary', async () => {
+  const gate = deferred(); let enabled = false, reached = false;
+  const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD); enabled = true;
+  const pending = session.getPatients(); await until(() => reached); const stopping = session.signOut();
+  gate.resolve(); await assert.rejects(pending); await stopping;
+  assert.deepEqual(h.patientCalls, []); await session.dispose();
+});
+
+test('server-accepted patient operation may finish after logout but its late result is rejected', async () => {
+  const gate = deferred(), h = await fixture({ patientsMethodGate: gate.promise });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD); const repository = await session.getPatients();
+  const pending = repository.get(RECORD); await until(() => h.patientCalls.includes('get'));
+  await session.signOut(); gate.resolve(); await assert.rejects(pending); assert.equal(h.patientsActive(), false); await session.dispose();
+});
+
+test('patient command/query validation and provider failures never expose payloads or load local fallback', async () => {
+  const h = await fixture({ patientsFailure: new Error(PASSWORD) }), session = await h.api.createFirebaseOperatingAuth();
+  await session.signIn(EMAIL, PASSWORD); const repository = await session.getPatients(); const before = h.paths.length;
+  const malicious = new Proxy({}, { ownKeys() { throw new Error(PASSWORD); } });
+  for (const value of [{}, malicious]) {
+    await assert.rejects(repository.commit(value as never), error => !String(error).includes(PASSWORD));
+    await assert.rejects(repository.findByPhone(value as never), error => !String(error).includes(PASSWORD));
+  }
+  assert.equal(h.paths.length, before); assert.deepEqual(h.patientCalls, ['factory']);
+  await assert.rejects(repository.get(RECORD), error => !String(error).includes(PASSWORD)); await session.dispose();
 });
