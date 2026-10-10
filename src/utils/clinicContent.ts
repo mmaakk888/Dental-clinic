@@ -40,6 +40,12 @@ export function normalizeNavigationOrder(input: unknown): NavigationSectionKey[]
   return result;
 }
 
+/** Missing desktop order inherits the old shared order without persisting it. */
+export function getDeviceNavigationOrder(labels: unknown, tileOrder: unknown, device: 'mobile' | 'desktop'): NavigationSectionKey[] {
+  const desktop = record(record(record(labels).dockAppearance).desktop);
+  return normalizeNavigationOrder(device === 'desktop' && Array.isArray(desktop.order) ? desktop.order : tileOrder);
+}
+
 export function getNavigationLabel(input: unknown, key: NavigationKey): string {
   const labels = record(input);
   const explicit = nonblank(record(labels.navigationLabels)[key]);

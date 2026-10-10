@@ -1,0 +1,40 @@
+.tooth-selection-control, .tooth-selection-board { min-width: 0; width: 100%; max-width: 100%; color: #334155; }
+.tooth-selection-board { container-type: inline-size; display: grid; gap: .7rem; }
+.tooth-selection-hint { margin: 0 0 .6rem; color: #64748b; font-size: .77rem; line-height: 1.8; }
+.tooth-selection-board .tooth-dentition-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem; width: min(100%, 23rem); padding: .25rem; margin-inline: auto; background: #edf2f4; border-radius: .85rem; }
+.tooth-selection-board .tooth-dentition-button { min-width: 0; min-height: 44px; padding: .5rem; border-radius: .65rem; color: #526272; font-weight: 800; font-size: .85rem; line-height: 1.6; }
+.tooth-selection-board .tooth-dentition-button[aria-pressed="true"] { color: #fff; background: #125c58; box-shadow: 0 2px 6px #125c581a; }
+.tooth-selection-map { display: grid; gap: 0; border: 1px solid #dce6e9; border-radius: 1rem; background: #fff; }
+.tooth-selection-jaw { min-width: 0; padding: .65rem .4rem .8rem; }
+.tooth-selection-jaw + .tooth-selection-jaw { border-top: 1px solid #dce6e9; background: #f8fafc; border-radius: 0 0 1rem 1rem; }
+.tooth-selection-jaw-heading { display: flex; align-items: center; justify-content: center; gap: .5rem; margin: 0 0 .55rem; color: #355b62; font-size: .82rem; font-weight: 900; line-height: 1.6; }
+.tooth-selection-jaw-heading::before, .tooth-selection-jaw-heading::after { content: ''; width: 1.5rem; height: 1px; background: #d3e2e2; }
+.tooth-selection-sides { display: grid; grid-template-columns: minmax(0, 1fr); gap: .65rem; }
+.tooth-selection-board .tooth-chart-quadrant { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.tooth-selection-board .tooth-chart-quadrant + .tooth-chart-quadrant { border-top: 1px dashed #d2dee3; padding-top: .65rem; }
+.tooth-selection-board .tooth-chart-quadrant h4 { margin: 0 0 .5rem; text-align: center; color: #738290; font-size: .7rem; font-weight: 700; line-height: 1.7; }
+.tooth-selection-board .tooth-square-grid[data-dentition] { display: grid; grid-template-columns: repeat(2, minmax(44px, 48px)); justify-content: center; gap: 5px; }
+.tooth-selection-board .tooth-square { position: relative; display: grid; place-items: center; width: 100%; min-width: 44px; min-height: 44px; aspect-ratio: 1; padding: .2rem; border: 1px solid #d3e0e4; border-radius: .6rem; background: #f8fafc; color: #344b5b; font-size: 1rem; line-height: 1; font-weight: 850; transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+.tooth-selection-board .tooth-square:hover:not(:disabled) { border-color: #5d9e94; background: #eaf5f1; }
+.tooth-selection-board .tooth-square[aria-pressed="true"] { border-color: #125c58; background: #e0f2ed; color: #104f4c; outline: 2px solid #125c58; outline-offset: 1px; box-shadow: 0 0 0 3px #fff; }
+.tooth-selection-board .tooth-selected-mark { position: absolute; right: 2px; top: 2px; width: 12px; height: 12px; padding: 1px; color: #fff; background: #125c58; border-radius: 50%; }
+.tooth-selection-board .tooth-history-mark { position: absolute; right: 4px; top: 4px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.tooth-grid-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .65rem .75rem; border-radius: .8rem; background: #f0f7f5; border: 1px solid #dfede8; }
+.tooth-grid-summary > div { flex: 1 1 11rem; min-width: 0; }
+.tooth-grid-summary strong { color: #285d55; font-size: .8rem; font-weight: 800; }
+.tooth-grid-summary p { margin: .2rem 0 0; color: #5c716d; font-size: .73rem; line-height: 1.9; overflow-wrap: anywhere; }
+.tooth-grid-summary > button { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; min-height: 44px; padding: .5rem .65rem; border: 1px solid #c4d9d3; border-radius: .65rem; background: #fff; color: #41665e; font-size: .75rem; font-weight: 800; }
+.tooth-grid-summary > button svg { width: 1rem; height: 1rem; }
+.tooth-selection-board button:focus-visible { outline: 3px solid #125c58; outline-offset: 3px; }
+.tooth-selection-board button:disabled { cursor: not-allowed; opacity: .55; }
+@container (min-width: 11rem) { .tooth-selection-board .tooth-square-grid[data-dentition] { grid-template-columns: repeat(3, minmax(44px, 48px)); } }
+@container (min-width: 12.75rem) { .tooth-selection-board .tooth-square-grid[data-dentition] { grid-template-columns: repeat(4, minmax(44px, 48px)); } }
+@container (min-width: 15rem) {
+  .tooth-selection-sides { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tooth-selection-board .tooth-chart-quadrant + .tooth-chart-quadrant { border-top: 0; padding-top: 0; border-left: 1px dashed #d2dee3; padding-left: .65rem; }
+  .tooth-selection-board .tooth-square-grid[data-dentition] { grid-template-columns: repeat(2, minmax(44px, 48px)); gap: 7px; }
+}
+@container (min-width: 29rem) { .tooth-selection-board .tooth-square-grid[data-dentition] { grid-template-columns: repeat(4, minmax(44px, 48px)); } }
+@container (min-width: 40rem) { .tooth-selection-board .tooth-square-grid[data-dentition="pediatric"] { grid-template-columns: repeat(5, minmax(44px, 48px)); } }
+@container (min-width: 55rem) { .tooth-selection-board .tooth-square-grid[data-dentition="adult"] { grid-template-columns: repeat(8, minmax(44px, 48px)); } }
+@media (prefers-reduced-motion: reduce) { .tooth-selection-board *, .tooth-selection-control * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

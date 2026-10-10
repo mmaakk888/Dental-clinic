@@ -141,6 +141,28 @@ test('Rx instructions and template tools do not erase the medication draft or mo
   h.clickLabel('تعليمات بعد العلاج'); assert.equal(h.find(item => item.props['aria-label'] === 'نص تعليمات العلاج للمريض').props.value, 'تعليمات اختبار كتبها الطبيب');
 });
 
+test('Rx image workflow is the primary output, explicit two-step sharing and bounded text alternative', () => {
+  const h = harness(compiled.exports.rx, { ...rxProps, canPrint: true, onAuthorizePrint() {}, canSendWhatsApp: true, onAuthorizeWhatsappSend() {} });
+  const output = h.find(item => item.props['aria-label'] === 'معاينة الروشتة وخيارات الصورة والطباعة');
+  const navigation: string[] = [];
+  output.props.ref.current = { scrollIntoView(options: any) { assert.equal(options.behavior, 'auto'); navigation.push('scroll'); }, focus(options: any) { assert.equal(options.preventScroll, true); navigation.push('focus'); } };
+  h.clickLabel('صورة الروشتة والطباعة');
+  assert.deepEqual(navigation, ['scroll', 'focus']);
+  const initial = h.find(item => item.props['aria-label'] === 'تجهيز صورة الروشتة');
+  assert.equal(initial.props.className, 'rx-primary-button');
+  assert.equal(initial.props.disabled, true);
+  h.clickAria('إضافة دواء اختبار 00 إلى الروشتة');
+  assert.equal(h.find(item => item.props['aria-label'] === 'تجهيز صورة الروشتة').props.disabled, false);
+  const workflow = h.find(item => item.props['aria-label'] === 'إرسال الروشتة كصورة');
+  assert.match(text(workflow), /بنفس تصميم الطباعة|جهّز الصورة وراجعها/);
+  assert.match(text(workflow), /لا ترسل تلقائيًا|تنزيل الصورة وإرفاقها يدويًا/);
+  const alternative = h.find(item => item.type === 'details' && item.props.className === 'rx-text-alternative');
+  assert.match(text(alternative), /خيارات الرسالة النصية|واتساب كنص/);
+  assert.equal(alternative.props.open, undefined);
+  const html = compiled.exports.renderRx({ ...rxProps, canPrint: false, onAuthorizePrint() {} });
+  assert.doesNotMatch(html, /class="rx-image-workflow"|aria-label="إرسال الروشتة كصورة"|class="rx-primary-button"/);
+});
+
 test('Rx print and WhatsApp controls respect denied/privacy-derived capabilities and fresh print revocation', () => {
   for (const props of [{}, { canPrint: false, onAuthorizePrint() {} }, { canPrint: true }]) {
     const html = compiled.exports.renderRx({ ...rxProps, ...props });

@@ -38,12 +38,9 @@
 .prosthetic-order-teeth > summary, .prosthetic-order-extra > summary { cursor: pointer; display: flex; align-items: center; gap: .5rem; color: #475569; font-size: .85rem; font-weight: 800; }
 .prosthetic-order-teeth > summary::before, .prosthetic-order-extra > summary::before { content: '+'; color: #0f766e; font-size: 1.15rem; }
 .prosthetic-order-teeth[open] > summary::before, .prosthetic-order-extra[open] > summary::before { content: '−'; }
-.prosthetic-order-teeth > summary span { margin-inline-start: auto; padding: .15rem .4rem; border-radius: .4rem; color: #0f766e; background: #f0fdfa; font-size: .7rem; }
+.prosthetic-order-teeth > summary > span:last-child { margin-inline-start: auto; padding: .15rem .4rem; border-radius: .4rem; color: #0f766e; background: #f0fdfa; font-size: .7rem; }
 .prosthetic-order-teeth .prosthetic-order-grid { margin-top: .6rem; }
-.prosthetic-order-selected-teeth { display: flex; flex-wrap: wrap; gap: .4rem; margin-block: .65rem; }
-.prosthetic-order-selected-teeth button { display: inline-flex; align-items: center; justify-content: space-between; gap: .4rem; max-width: 100%; padding: .45rem .65rem; border: 1px solid #99f6e4; border-radius: .6rem; color: #115e59; background: #f0fdfa; font-size: .75rem; }
-.prosthetic-order-selected-teeth span { min-width: 0; overflow-wrap: anywhere; }
-.prosthetic-order-selected-teeth svg { flex-shrink: 0; width: .85rem; height: .85rem; }
+.prosthetic-order-teeth .tooth-selection-control { margin-top: .65rem; }
 .prosthetic-order-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .65rem; margin-top: .85rem; padding: .75rem; border: 1px solid #e2e8f0; border-radius: .75rem; background: #f8fafc; }
 .prosthetic-order-totals dt { color: #64748b; font-size: .72rem; line-height: 1.8; }
 .prosthetic-order-totals dd { margin: .25rem 0 0; color: #0f3d3e; font-size: .9rem; font-weight: 900; overflow-wrap: anywhere; }

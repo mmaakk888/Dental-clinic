@@ -26,8 +26,8 @@ const options = Object.freeze([{ name: 'حشو اختبار', price: 600 }, { na
 
 function harness(overrides: Record<string, any> = {}) {
   const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
-  const slots: any[] = [], added: { name: string; price: number }[] = []; let tree: Element, custom = 0;
-  let props = { options, onAdd: (name: string, price: number) => added.push({ name, price }), onAddCustom: () => { custom++; }, ...overrides };
+  const slots: any[] = [], added: { name: string; price?: number }[] = []; let tree: Element, custom = 0;
+  let props = { options, onAdd: (name: string, price?: number) => added.push({ name, price }), onAddCustom: () => { custom++; }, ...overrides };
   const render = () => {
     let cursor = 0;
     const dispatcher = {
@@ -58,13 +58,13 @@ test('SSR is a closed inline disclosure with accessible buttons, not a native se
   assert.match(compiled.exports.render({ options: [], onAdd() {}, onAddCustom() {} }), /disabled="" aria-expanded="false"/);
 });
 
-test('selecting a visible service creates only a candidate; explicit confirmation adds name/price once and announces draft-only status', () => {
-  const h = harness(); h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار');
-  assert.equal(h.added.length, 0); assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '600');
-  assert.match(text(h.find(item => item.props['aria-label'] === 'الخدمة المختارة قبل الإضافة')), /حشو اختبار|السعر مقترح/);
-  const confirm = h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.onClick;
-  confirm(); confirm(); h.render();
-  assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 600 }]); assert.match(h.content, /أُضيفت للمسودة: حشو اختبار — ٦٠٠ ج\.م.*لم تُحفظ الزيارة بعد/);
+test('one service click immediately appends the configured draft row once, without a confirmation step or a clinic save', () => {
+  const h = harness(); h.click('اختيار خدمة من الفهرس');
+  const select = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
+  select(); select(); h.render();
+  assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 600 }]);
+  assert.match(h.content, /أُضيفت حشو اختبار للزيارة — ٦٠٠ ج\.م.*يمكنك تعديل السعر أو حذف الخدمة.*لم تُحفظ الزيارة بعد/);
+  assert.doesNotMatch(h.content, /إضافة الخدمة للمسودة|الخدمة المختارة قبل الإضافة/);
   assert.equal(h.find(item => item.type === 'button' && text(item) === 'اختيار خدمة من الفهرس').props['aria-expanded'], false);
 });
 
@@ -77,45 +77,46 @@ test('search uses normalized Arabic names and Arabic/Latin public prices', () =>
   h.change('بحث خدمات الزيارة', 'اسم غير موجود'); assert.match(h.content, /لا توجد خدمة مطابقة/);
 });
 
-test('explicit zero remains a valid configured price, while an unknown price stays blank until reviewed', () => {
+test('explicit zero is a configured price, while missing or invalid prices append undefined for the parent required field', () => {
   const h = harness(); h.click('اختيار خدمة من الفهرس');
-  assert.match(h.content, /خدمة اختبار صفر٠ ج\.م/); assert.match(h.content, /خدمة اختبار بدون سعرالسعر غير محدد/);
+  assert.match(h.content, /خدمة اختبار صفر٠ ج\.م/); assert.match(h.content, /خدمة اختبار بدون سعرأضف السعر بعد الاختيار/);
   h.clickAria('اختيار خدمة خدمة اختبار صفر');
-  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '0'); h.click('إضافة الخدمة للمسودة');
   assert.deepEqual(h.added[0], { name: 'خدمة اختبار صفر', price: 0 });
   h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة خدمة اختبار بدون سعر');
-  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '');
-  assert.equal(h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.disabled, true);
-  h.click('إضافة الخدمة للمسودة'); assert.equal(h.added.length, 1); assert.match(h.content, /اكتب سعرًا صحيحًا/);
-  h.change('سعر الخدمة المختارة', '0'); h.click('إضافة الخدمة للمسودة'); assert.deepEqual(h.added[1], { name: 'خدمة اختبار بدون سعر', price: 0 });
+  assert.deepEqual(h.added[1], { name: 'خدمة اختبار بدون سعر', price: undefined });
+  assert.match(h.content, /اكتب سعرها قبل الحفظ/);
+  for (const price of [-1, NaN, Infinity, 10.001, 10000001]) {
+    h.setProps({ options: [{ name: 'سعر غير صالح', price }] }); h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة سعر غير صالح');
+    assert.deepEqual(h.added.at(-1), { name: 'سعر غير صالح', price: undefined });
+  }
 });
 
-test('invalid editable price never adds a line; correction and explicit second selection work without stale-handler duplicates', () => {
-  const h = harness(); h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار');
-  const staleFirst = h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.onClick;
-  for (const price of ['', '-1', 'NaN', '10.001', '10000001']) { h.change('سعر الخدمة المختارة', price); h.click('إضافة الخدمة للمسودة'); }
-  assert.equal(h.added.length, 0);
-  h.change('سعر الخدمة المختارة', '550.5'); h.click('إضافة الخدمة للمسودة');
-  h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة أشعة اختبار'); staleFirst(); h.render();
-  assert.equal(h.added.length, 1); h.click('إضافة الخدمة للمسودة'); assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 550.5 }, { name: 'أشعة اختبار', price: 1200.5 }]);
-});
-
-test('cancel selection, close and Escape discard only the candidate without invoking add/save', () => {
-  const h = harness(); h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار'); h.clickAria('إلغاء اختيار الخدمة');
-  assert.ok(!h.elements.some(item => item.props['aria-label'] === 'الخدمة المختارة قبل الإضافة'));
-  h.clickAria('اختيار خدمة أشعة اختبار'); h.clickAria('إغلاق اختيار الخدمات'); assert.equal(h.added.length, 0);
+test('each intentional reopening permits a selection but old retained handlers cannot consume the new opening', () => {
+  const h = harness(); h.click('اختيار خدمة من الفهرس');
+  const staleFirst = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
+  staleFirst(); h.render();
+  h.click('اختيار خدمة من الفهرس'); staleFirst(); h.render();
+  assert.equal(h.added.length, 1); h.clickAria('اختيار خدمة أشعة اختبار');
+  assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 600 }, { name: 'أشعة اختبار', price: 1200.5 }]);
   h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار');
+  assert.deepEqual(h.added[2], { name: 'حشو اختبار', price: 600 });
+});
+
+test('close and Escape consume the opening without invoking a service callback or saving', () => {
+  const h = harness(); h.click('اختيار خدمة من الفهرس');
+  const stale = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
+  h.clickAria('إغلاق اختيار الخدمات'); stale(); assert.equal(h.added.length, 0);
+  h.click('اختيار خدمة من الفهرس');
   let prevented = false, stopped = false;
   h.find(item => item.props.className === 'walkin-picker-panel').props.onKeyDown({ key: 'Escape', preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } }); h.render();
   assert.equal(prevented, true); assert.equal(stopped, true); assert.equal(h.added.length, 0);
   assert.ok(!h.elements.some(item => item.props.className === 'walkin-picker-panel'));
 });
 
-test('Enter from search/candidate price is consumed, while Enter on explicit buttons keeps native button activation', () => {
+test('Enter from search is consumed without an implicit submit, while service buttons keep native activation', () => {
   const h = harness(); h.click('اختيار خدمة من الفهرس');
-  for (const label of ['بحث خدمات الزيارة', 'سعر الخدمة المختارة']) {
-    if (label === 'سعر الخدمة المختارة') h.clickAria('اختيار خدمة حشو اختبار');
-    const input = h.find(item => item.props['aria-label'] === label);
+  {
+    const input = h.find(item => item.props['aria-label'] === 'بحث خدمات الزيارة');
     let prevented = false, stopped = false;
     h.find(item => item.props.className === 'walkin-picker-panel').props.onKeyDown({ key: 'Enter', target: { tagName: String(input.type).toUpperCase() }, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
     assert.equal(prevented, true); assert.equal(stopped, true); assert.equal(h.added.length, 0);
@@ -123,24 +124,31 @@ test('Enter from search/candidate price is consumed, while Enter on explicit but
   let prevented = false, stopped = false;
   h.find(item => item.props.className === 'walkin-picker-panel').props.onKeyDown({ key: 'Enter', target: { tagName: 'BUTTON' }, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
   assert.equal(prevented, false); assert.equal(stopped, false);
-  h.click('إضافة الخدمة للمسودة'); assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 600 }]);
+  h.clickAria('اختيار خدمة حشو اختبار'); assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 600 }]);
 });
 
 test('latest disabled capability and removed catalog service block retained add handlers', () => {
-  const h = harness(); h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار');
-  const staleAdd = h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.onClick;
+  const h = harness(); h.click('اختيار خدمة من الفهرس');
+  const staleAdd = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
   h.setProps({ disabled: true }); staleAdd(); assert.equal(h.added.length, 0);
   h.setProps({ disabled: false, options: options.filter(item => item.name !== 'حشو اختبار') }); staleAdd(); h.render();
   assert.equal(h.added.length, 0); assert.match(h.content, /الخدمة لم تعد في الفهرس الحالي/);
 });
 
-test('failed draft append preserves chosen name/price and permits one explicit retry', () => {
+test('a retained choice uses the latest configured price, not the displayed stale suggestion', () => {
+  const h = harness(); h.click('اختيار خدمة من الفهرس');
+  const retained = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
+  h.setProps({ options: [{ name: 'حشو اختبار', price: 725.5 }] }); retained(); h.render();
+  assert.deepEqual(h.added, [{ name: 'حشو اختبار', price: 725.5 }]);
+});
+
+test('failed draft append keeps the picker available, hides private errors and permits a service-click retry', () => {
   let calls = 0; const received: any[] = [];
   const h = harness({ onAdd: (name: string, price: number) => { calls++; if (calls === 1) throw new Error('SYNTHETIC_PRIVATE_ERROR'); received.push({ name, price }); } });
-  h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار'); h.change('سعر الخدمة المختارة', '500'); h.click('إضافة الخدمة للمسودة');
-  assert.match(h.content, /تعذّرت إضافة الخدمة للمسودة/); assert.doesNotMatch(h.content, /SYNTHETIC_PRIVATE_ERROR/);
-  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '500');
-  h.click('إضافة الخدمة للمسودة'); assert.equal(calls, 2); assert.deepEqual(received, [{ name: 'حشو اختبار', price: 500 }]);
+  h.click('اختيار خدمة من الفهرس'); h.clickAria('اختيار خدمة حشو اختبار');
+  assert.match(h.content, /تعذّرت إضافة الخدمة للزيارة/); assert.doesNotMatch(h.content, /SYNTHETIC_PRIVATE_ERROR/);
+  assert.ok(h.elements.some(item => item.props.className === 'walkin-picker-panel'));
+  h.clickAria('اختيار خدمة حشو اختبار'); assert.equal(calls, 2); assert.deepEqual(received, [{ name: 'حشو اختبار', price: 600 }]);
 });
 
 test('large catalog is bounded and explicit load-more/search retain access to every configured service', () => {
@@ -148,7 +156,7 @@ test('large catalog is bounded and explicit load-more/search retain access to ev
   h.click('اختيار خدمة من الفهرس');
   const choices = () => h.elements.filter(item => item.props['aria-label']?.startsWith('اختيار خدمة '));
   assert.equal(choices().length, 20); h.click('عرض خدمات أخرى (280)'); assert.equal(choices().length, 40);
-  h.change('بحث خدمات الزيارة', 'خدمة اختبار 299'); assert.equal(choices().length, 1); h.clickAria('اختيار خدمة خدمة اختبار 299'); h.click('إضافة الخدمة للمسودة');
+  h.change('بحث خدمات الزيارة', 'خدمة اختبار 299'); assert.equal(choices().length, 1); h.clickAria('اختيار خدمة خدمة اختبار 299');
   assert.deepEqual(h.added, [{ name: 'خدمة اختبار 299', price: 299 }]);
 });
 

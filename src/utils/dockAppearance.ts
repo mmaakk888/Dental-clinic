@@ -1,4 +1,4 @@
-import type { DockAppearance } from '../types';
+import type { DesktopDockAppearance, DockAppearance } from '../types';
 
 export const DEFAULT_DOCK_APPEARANCE: Readonly<DockAppearance> = Object.freeze({
   size: 'comfortable', showLabels: true, mobileVisibleCount: 4, moreSections: [],
@@ -8,6 +8,17 @@ const configurableSections = ['patients', 'contacts', 'appointments', 'lab', 'su
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const readMoreSections = (value: unknown): string[] => Array.isArray(value)
   ? [...new Set(value.filter((key): key is string => typeof key === 'string' && configurableSections.includes(key)))] : [];
+const validSize = (value: unknown): value is DockAppearance['size'] => ['compact', 'comfortable', 'large'].includes(value as string);
+
+/** Read-only legacy fallback. Desktop never inherits mobile More placement. */
+export function getDesktopDockAppearance(labels: unknown): Pick<DesktopDockAppearance, 'size' | 'showLabels'> {
+  const mobile = getDockAppearance(labels);
+  const value = isRecord(labels) && isRecord(labels.dockAppearance) && isRecord(labels.dockAppearance.desktop) ? labels.dockAppearance.desktop : {};
+  return {
+    size: validSize(value.size) ? value.size : mobile.size,
+    showLabels: typeof value.showLabels === 'boolean' ? value.showLabels : mobile.showLabels,
+  };
+}
 
 /** Safe read-time fallback only; it never writes or changes persisted settings. */
 export function getDockAppearance(labels: unknown): DockAppearance {
@@ -28,7 +39,12 @@ export function isValidDockAppearance(value: unknown): boolean {
     && (value.mobileVisibleCount === 3 || value.mobileVisibleCount === 4)
     && (value.moreSections === undefined || Array.isArray(value.moreSections)
       && value.moreSections.every(key => typeof key === 'string' && configurableSections.includes(key))
-      && new Set(value.moreSections).size === value.moreSections.length));
+      && new Set(value.moreSections).size === value.moreSections.length)
+    && (value.desktop === undefined || isRecord(value.desktop)
+      && validSize(value.desktop.size) && typeof value.desktop.showLabels === 'boolean'
+      && Array.isArray(value.desktop.order) && value.desktop.order.length <= configurableSections.length
+      && value.desktop.order.every(key => typeof key === 'string' && configurableSections.includes(key))
+      && new Set(value.desktop.order).size === value.desktop.order.length));
 }
 
 /** Permission filtering happens first. Forced More items never backfill direct links. */

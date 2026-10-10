@@ -17,8 +17,8 @@ const compiled = { exports: {} as { component: (props: any) => any; picker: (pro
 new Function('require', 'module', 'exports', built.outputFiles[0].text)(createRequire(import.meta.url), compiled, compiled.exports);
 type Element = { type: unknown; props: Record<string, any> };
 const children = (node: any): any[] => node == null ? [] : Array.isArray(node) ? node.flatMap(children) : [node];
-const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(item.props.children)] : []);
-const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(item.props.children) : '').join('');
+const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children)] : []);
+const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children) : '').join('');
 const patient = { id: '501', name: 'مريض اختبار مصطنع', mobile: '01000000000', age: 30, firstVisit: '2026-10-10', notes: '', allergy: '', sessions: [], payments: [] };
 
 /** Actual component handlers with deterministic hooks. Effects do not run and
@@ -58,10 +58,12 @@ function harness(overrides: Record<string, unknown> = {}) {
   const addCatalogService = (name: string) => {
     click('اختيار خدمة من الفهرس');
     find(item => item.props['aria-label'] === `اختيار خدمة ${name}`).props.onClick(); render();
-    click('إضافة الخدمة للمسودة');
   };
   render();
   return { render, saved, toasts, find, click, change, addCatalogService, get closed() { return closed; }, get content() { return text(tree); },
+    tooth: (value: string, service = 1) => { find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.onChange(value ? [value] : []); render(); },
+    dentition: (value: string, service = 1) => { find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.onDentitionChange(value); render(); },
+    toothValue: (service = 1) => find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.value as string[],
     toggleExam: () => { find(item => item.props['aria-label'] === 'تسجيل الكشف').props.onClick(); render(); },
     selectPatient: () => { find(item => item.type === 'button' && text(item).includes(patient.name)).props.onClick(); render(); },
     submit: () => find(item => item.type === 'form').props.onSubmit({ preventDefault() {} }) as Promise<void>,
@@ -92,7 +94,7 @@ test('one examination button uses the configured price without a manual override
   const h = harness({ defaultExamFee: 125 }); h.selectPatient(); h.toggleExam();
   assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف').props['aria-pressed'], true);
   h.addCatalogService('حشو اختبار');
-  h.change('سعر الخدمة 1', '550'); h.change('السن للخدمة 1', 'ur6'); h.input('المدفوع الآن', '150');
+  h.change('سعر الخدمة 1', '550'); h.tooth('ur6'); h.input('المدفوع الآن', '150');
   await h.submit(); const visit = h.saved[0].visit;
   assert.equal(visit.examinationFee, 125); assert.equal(visit.treatmentFee, 550); assert.equal(visit.totalFee, 675); assert.equal(visit.paidAmount, 150); assert.equal(visit.discountAmount, 0); assert.equal(visit.services[0].tooth, 'ur6');
   assert.doesNotMatch(h.content, /خصم أو إعفاء/);
@@ -101,17 +103,17 @@ test('one examination button uses the configured price without a manual override
 test('switching to primary teeth clears previous selection and disabling examination removes its charge', async () => {
   const h = harness(); h.selectPatient(); h.toggleExam();
   assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف').props['aria-pressed'], true);
-  h.addCatalogService('حشو اختبار'); h.change('السن للخدمة 1', 'lr8'); h.change('نوع الأسنان للخدمة 1', 'pediatric');
-  assert.equal(h.find(item => item.props['aria-label'] === 'السن للخدمة 1').props.value, '');
-  assert.ok(all(h.find(item => item.props['aria-label'] === 'السن للخدمة 1')).some(item => item.type === 'option' && item.props.value === 'ulA'));
-  h.change('السن للخدمة 1', 'ulA'); h.toggleExam(); await h.submit();
+  h.addCatalogService('حشو اختبار'); h.tooth('lr8'); h.dentition('pediatric');
+  assert.deepEqual(h.toothValue(), []);
+  assert.equal(h.find(item => item.props.ariaLabel === 'أسنان الخدمة 1').props.dentition, 'pediatric');
+  h.tooth('ulA'); h.toggleExam(); await h.submit();
   assert.equal(h.saved[0].visit.examinationFee, 0); assert.equal(h.saved[0].visit.totalFee, 600); assert.equal(h.saved[0].visit.services[0].tooth, 'ulA');
 });
 
 test('invalid tooth and overpayment are rejected before save and retain the draft for correction', async () => {
-  const h = harness(); h.selectPatient(); h.addCatalogService('حشو اختبار'); h.change('السن للخدمة 1', 'zz9'); await h.submit();
+  const h = harness(); h.selectPatient(); h.addCatalogService('حشو اختبار'); h.tooth('zz9'); await h.submit();
   assert.equal(h.saved.length, 0); assert.match(h.toasts.at(-1) || '', /سنًا صحيحًا/);
-  h.change('السن للخدمة 1', ''); h.input('المدفوع الآن', '601'); await h.submit(); assert.equal(h.saved.length, 0);
+  h.tooth(''); h.input('المدفوع الآن', '601'); await h.submit(); assert.equal(h.saved.length, 0);
   h.input('المدفوع الآن', '100'); await h.submit(); assert.equal(h.saved.length, 1); assert.ok(!Object.hasOwn(h.saved[0].visit.services[0], 'tooth'));
 });
 
@@ -119,33 +121,31 @@ test('pending save blocks duplicate submit and close, failure retains service/to
   let reject!: (error: Error) => void; let calls = 0;
   const pending = new Promise<void>((_, no) => { reject = no; });
   const h = harness({ onSaveWalkInVisit: () => ++calls === 1 ? pending : Promise.resolve() });
-  h.selectPatient(); h.addCatalogService('حشو اختبار'); h.change('السن للخدمة 1', 'll4');
+  h.selectPatient(); h.addCatalogService('حشو اختبار'); h.tooth('ll4');
   const first = h.submit(); h.render(); await h.submit();
   h.find(item => item.props['aria-label'] === 'إلغاء وإغلاق الزيارة').props.onClick();
   assert.equal(calls, 1); assert.equal(h.closed, 0);
   assert.equal(h.find(item => item.props.role === 'dialog').props['aria-busy'], true);
   reject(new Error('synthetic save failed')); await first; h.render();
-  assert.equal(h.closed, 0); assert.equal(h.find(item => item.props['aria-label'] === 'السن للخدمة 1').props.value, 'll4');
+  assert.equal(h.closed, 0); assert.deepEqual(h.toothValue(), ['ll4']);
   await h.submit(); assert.equal(calls, 2); assert.equal(h.closed, 1);
 });
 
-test('picker selection alone cannot append or save; two rapid confirmations create exactly one visit service', async () => {
+test('one selection immediately appends without a confirmation button; stale double-click cannot duplicate or save', async () => {
   const h = harness(); h.selectPatient(); h.click('اختيار خدمة من الفهرس');
-  h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick(); h.render();
-  assert.ok(!h.content.includes('الخدمة 1')); assert.equal(h.saved.length, 0);
-  const confirm = h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.onClick;
-  confirm(); confirm(); h.render();
+  const select = h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick;
+  select(); select(); h.render();
   assert.equal(h.find(item => item.props['aria-label'] === 'اسم الخدمة 1').props.value, 'حشو اختبار');
   assert.ok(!h.content.includes('الخدمة 2')); assert.equal(h.saved.length, 0);
+  assert.doesNotMatch(h.content, /إضافة الخدمة للمسودة/);
   await h.submit(); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].visit.services.length, 1);
   assert.equal(h.saved[0].visit.examinationFee, 0); assert.equal(h.saved[0].visit.paidAmount, 0); assert.equal(h.saved[0].visit.discountAmount, 0);
 });
 
-test('Enter in inline service search/price cannot implicitly submit the parent visit form', () => {
+test('Enter in service search cannot implicitly select or submit the parent visit form', () => {
   const h = harness(); h.selectPatient(); h.click('اختيار خدمة من الفهرس');
-  for (const label of ['بحث خدمات الزيارة', 'سعر الخدمة المختارة']) {
-    if (label === 'سعر الخدمة المختارة') { h.find(item => item.props['aria-label'] === 'اختيار خدمة حشو اختبار').props.onClick(); h.render(); }
-    const input = h.find(item => item.props['aria-label'] === label);
+  {
+    const input = h.find(item => item.props['aria-label'] === 'بحث خدمات الزيارة');
     let prevented = false, stopped = false;
     h.find(item => item.props.className === 'walkin-picker-panel').props.onKeyDown({ key: 'Enter', target: { tagName: String(input.type).toUpperCase() }, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
     assert.equal(prevented, true); assert.equal(stopped, true); assert.equal(h.saved.length, 0); assert.ok(!h.content.includes('الخدمة 1'));
@@ -154,14 +154,14 @@ test('Enter in inline service search/price cannot implicitly submit the parent v
   assert.equal(h.closed, 0); assert.equal(h.saved.length, 0); assert.ok(!h.content.includes('الخدمة 1'));
 });
 
-test('parent picker distinguishes explicit zero from missing price and adds unknown-price service only after entering a price', async () => {
+test('unknown-price service appends immediately with a required blank price, not an invented free charge', async () => {
   const h = harness({ serviceTypes: ['خدمة مجانية', 'خدمة غير مسعّرة'], clinicalPrices: { 'خدمة مجانية': 0 } }); h.selectPatient();
   h.click('اختيار خدمة من الفهرس'); h.find(item => item.props['aria-label'] === 'اختيار خدمة خدمة مجانية').props.onClick(); h.render();
-  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '0'); h.click('إضافة الخدمة للمسودة');
+  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة 1').props.value, 0);
   h.click('اختيار خدمة من الفهرس'); h.find(item => item.props['aria-label'] === 'اختيار خدمة خدمة غير مسعّرة').props.onClick(); h.render();
-  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة المختارة').props.value, '');
-  assert.equal(h.find(item => item.type === 'button' && text(item) === 'إضافة الخدمة للمسودة').props.disabled, true);
-  h.change('سعر الخدمة المختارة', '300'); h.click('إضافة الخدمة للمسودة'); await h.submit();
+  assert.equal(h.find(item => item.props['aria-label'] === 'سعر الخدمة 2').props.value, '');
+  await h.submit(); assert.equal(h.saved.length, 0); assert.match(h.toasts.at(-1) || '', /اكتب سعر كل خدمة/);
+  h.change('سعر الخدمة 2', '300'); await h.submit();
   assert.deepEqual(h.saved[0].visit.services.map((service: any) => service.price), [0, 300]);
   assert.equal(h.saved[0].visit.totalFee, 300); assert.equal(h.saved[0].visit.paidAmount, 0);
 });

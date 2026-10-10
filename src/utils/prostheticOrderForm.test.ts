@@ -24,8 +24,8 @@ new Function('require', 'module', 'exports', built.outputFiles[0].text)(createRe
 
 type Element = { type: unknown; props: Record<string, any> };
 const children = (node: any): any[] => node == null ? [] : Array.isArray(node) ? node.flatMap(children) : [node];
-const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(item.props.children)] : []);
-const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(item.props.children) : '').join('');
+const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children)] : []);
+const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children) : '').join('');
 const patient = Object.freeze({ id: '501', name: 'اسم اختبار مصطنع', mobile: '01000000000', age: 30, firstVisit: '2026-10-10', notes: '', allergy: '', sessions: [], payments: [] });
 const prices = Object.freeze({ 'خامة اختبار أ': 600, 'خامة اختبار مجانية': 0, 'خامة اختبار ب': 1250.5 });
 const props = { patient, crownPrices: prices, canRegisterPayment: true, onSave() {}, onClose() {} };
@@ -66,7 +66,7 @@ test('SSR form exposes only public patient prices, bounded dialog and explicit u
   assert.doesNotMatch(html, /تكلفة المعمل|ربح|اسم المعمل|labTotal|labPaid|labServiceId/);
   const h = harness();
   assert.equal(h.find(item => item.props['aria-label'] === 'المبلغ المحصّل للتركيبة').props.value, '');
-  assert.equal(h.find(item => item.type === 'button' && text(item) === 'بدون كشف').props['aria-pressed'], true);
+  assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف').props['aria-pressed'], false);
   assert.ok(!h.elements.some(item => item.props['aria-label'] === 'رسوم كشف التركيبة'));
   const empty = harness({ ...props, crownPrices: {} });
   assert.equal(empty.find(item => item.type === 'button' && text(item).includes('حفظ التركيبة')).props.disabled, true);
@@ -87,12 +87,13 @@ test('actual save uses catalog unit price and chosen units, without inventing ex
 test('explicit examination, actual partial cash, removable type and optional dates/notes reach the callback', async () => {
   const saved: ProstheticOrderInput[] = [];
   const h = harness({ ...props, examinationFee: 100, initialKind: 'removable', onSave: (input: ProstheticOrderInput) => { saved.push(input); } });
-  h.change('خامة التركيبة', 'خامة اختبار ب'); h.clickLabel('بكشف');
-  assert.equal(h.find(item => item.props['aria-label'] === 'رسوم كشف التركيبة').props.value, '100');
-  h.change('رسوم كشف التركيبة', '125'); h.change('المبلغ المحصّل للتركيبة', '150');
+  h.change('خامة التركيبة', 'خامة اختبار ب'); h.clickAria('تسجيل الكشف');
+  assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف').props['aria-pressed'], true);
+  assert.ok(!h.elements.some(item => item.props['aria-label'] === 'رسوم كشف التركيبة'));
+  h.change('المبلغ المحصّل للتركيبة', '150');
   h.change('تاريخ تسجيل التركيبة', '2026-10-10'); h.change('تاريخ استلام التركيبة المتوقع', '2026-10-20'); h.change('ملاحظات التركيبة', '  ملاحظة مصطنعة للطبيب  ');
   await h.submit();
-  assert.equal(saved[0].kind, 'removable'); assert.equal(saved[0].examinationFee, 125); assert.equal(saved[0].paid, 150);
+  assert.equal(saved[0].kind, 'removable'); assert.equal(saved[0].examinationFee, 100); assert.equal(saved[0].paid, 150);
   assert.equal(saved[0].expectedUnitPrice, 1250.5); assert.equal(saved[0].deliveryExpectedDate, '2026-10-20'); assert.equal(saved[0].note, 'ملاحظة مصطنعة للطبيب');
 });
 
@@ -110,7 +111,7 @@ test('fixed optional teeth validate unit count, deduplicate canonical IDs and su
   const h = harness({ ...props, initialToothId: 'ur1', onSave: (input: ProstheticOrderInput) => { saved.push(input); } });
   h.change('خامة التركيبة', 'خامة اختبار أ'); h.change('عدد وحدات التركيبة', '2');
   await h.submit(); assert.equal(saved.length, 0); assert.match(h.toasts.at(-1) || '', /عدد المواضع/);
-  h.change('إضافة سن للتركيبة', 'ur2'); h.change('إضافة سن للتركيبة', 'ur2');
+  h.find(item => item.props.ariaLabel === 'أسنان التركيبة').props.onChange(['ur1', 'ur2', 'ur2']); h.render();
   await h.submit(); assert.deepEqual(saved[0].teethIds, ['ur1', 'ur2']);
   h.clickLabel('إلغاء تحديد الأسنان'); await h.submit(); assert.deepEqual(saved[1].teethIds, []);
   assert.equal(saved[0].operationId, saved[1].operationId);
@@ -119,8 +120,8 @@ test('fixed optional teeth validate unit count, deduplicate canonical IDs and su
 test('primary teeth keep canonical letters and invalid initial tooth is not persisted or displayed as a selected tooth', async () => {
   const saved: ProstheticOrderInput[] = [];
   const h = harness({ ...props, initialToothId: 'ulA', onSave: (input: ProstheticOrderInput) => { saved.push(input); } });
-  assert.equal(h.find(item => item.props['aria-label'] === 'نوع الأسنان للتركيبة').props.value, 'pediatric');
-  assert.equal(h.elements.filter(item => item.type === 'option' && /^(?:ur|ul|lr|ll)[A-E]$/.test(item.props.value)).length, 20);
+  assert.equal(h.find(item => item.props.ariaLabel === 'أسنان التركيبة').props.dentition, 'pediatric');
+  assert.deepEqual(h.find(item => item.props.ariaLabel === 'أسنان التركيبة').props.value, ['ulA']);
   h.change('خامة التركيبة', 'خامة اختبار أ'); await h.submit(); assert.deepEqual(saved[0].teethIds, ['ulA']);
   const invalid = harness({ ...props, initialToothId: 'ur99' });
   assert.ok(!invalid.elements.some(item => item.type === 'button' && /^إزالة /.test(item.props['aria-label'] || '')));
@@ -179,8 +180,8 @@ test('valid zero price is not replaced and invalid catalog prices are excluded r
   const h = harness({ ...props, crownPrices: { ...prices, 'خامة غير صالحة': -10, 'خامة غير رقمية': Number.NaN }, examinationFee: 0, onSave: (input: ProstheticOrderInput) => { saved.push(input); } });
   assert.ok(!h.elements.some(item => item.type === 'option' && item.props.value === 'خامة غير صالحة'));
   assert.ok(!h.elements.some(item => item.type === 'option' && item.props.value === 'خامة غير رقمية'));
-  h.change('خامة التركيبة', 'خامة اختبار مجانية'); h.clickLabel('بكشف');
-  assert.equal(h.find(item => item.props['aria-label'] === 'رسوم كشف التركيبة').props.value, '0');
+  h.change('خامة التركيبة', 'خامة اختبار مجانية'); h.clickAria('تسجيل الكشف');
+  assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف').props['aria-pressed'], true);
   await h.submit(); assert.equal(saved[0].expectedUnitPrice, 0); assert.equal(saved[0].examinationFee, 0); assert.equal(saved[0].paid, 0);
 });
 

@@ -4,11 +4,13 @@ import type { Patient } from '../types';
 import type { ProstheticKind } from '../utils/prostheticRouting';
 import { getPatientProstheticPrice, validateProstheticOrder, type ProstheticOrderInput } from '../utils/prostheticWorkflow';
 import { buildHomePatientSearch, searchHomePatients } from '../utils/homePatientSearch';
-import { getToothLabel, parseCompositeToothId } from '../utils/toothUtils';
-import { getWalkInToothOptions, walkInExaminationDefault } from '../utils/walkInDraft';
+import { parseCompositeToothId } from '../utils/toothUtils';
+import { walkInExaminationDefault } from '../utils/walkInDraft';
 import { useAppointmentDialog } from './appointments/useAppointmentDialog';
 import { useToastAndConfirm } from './common/ToastAndConfirm';
 import { useConfirmedAction } from './common/useConfirmedAction';
+import { ExaminationFeeToggle } from './common/ExaminationFeeToggle';
+import { ToothSelectionGrid } from './common/ToothSelectionGrid';
 import './ProstheticOrderForm.css';
 
 export interface ProstheticOrderFormProps {
@@ -53,22 +55,21 @@ export function ProstheticOrderForm({ patient, patients = [], crownPrices, exami
   const [teethIds, setTeethIds] = useState<string[]>(initialToothId && parseCompositeToothId(initialToothId) ? [initialToothId] : []);
   const [toothKind, setToothKind] = useState<'adult' | 'pediatric'>(initialToothId && /[A-E]$/.test(initialToothId) ? 'pediatric' : 'adult');
   const [withExamination, setWithExamination] = useState(false);
-  const [exam, setExam] = useState(String(walkInExaminationDefault(examinationFee)));
   const [paidText, setPaidText] = useState('');
   const [date, setDate] = useState(today);
   const [deliveryExpectedDate, setDeliveryExpectedDate] = useState('');
   const [note, setNote] = useState('');
   const unitPrice = getPatientProstheticPrice(material, { crownPrices });
-  const examAmount = withExamination ? Number(exam || 0) : 0;
+  const configuredExamFee = walkInExaminationDefault(examinationFee);
+  const examAmount = withExamination ? configuredExamFee : 0;
   const treatmentTotal = cents((unitPrice ?? 0) * Number(units));
   const total = cents(treatmentTotal + examAmount);
   const paid = canRegisterPayment ? Number(paidText || 0) : 0;
   const remaining = cents(Math.max(0, total - paid));
 
-  const addTooth = (value: string) => {
-    if (!value || !parseCompositeToothId(value) || teethIds.includes(value)) return;
-    if (teethIds.length >= 32) { showToast('الحد الأقصى ٣٢ موضعًا. راجع الأسنان المحددة.', 'warning'); return; }
-    setTeethIds(previous => previous.includes(value) ? previous : [...previous, value]);
+  const selectTeeth = (values: string[]) => {
+    if (values.length > 32) { showToast('الحد الأقصى ٣٢ موضعًا. راجع الأسنان المحددة.', 'warning'); return; }
+    setTeethIds([...new Set(values)]);
   };
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -103,9 +104,9 @@ export function ProstheticOrderForm({ patient, patients = [], crownPrices, exami
           <div className="prosthetic-order-grid"><label>الخامة أو نوع التركيبة<select aria-label="خامة التركيبة" value={material} onChange={event => setMaterial(event.target.value)} required><option value="">اختر من فهرس العيادة…</option>{materials.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{kind === 'fixed' ? 'عدد الكراونات' : 'عدد الوحدات'}<input aria-label="عدد وحدات التركيبة" type="number" min="1" max="100" step="1" value={units} onChange={event => setUnits(event.target.value)} inputMode="numeric" required /></label></div>
           {!materials.length && <p className="prosthetic-order-warning" role="status">لا توجد خامات بأسعار مريض صالحة. جهّز أسعار التركيبات من لوحة التحكم أولًا.</p>}
           <p className="prosthetic-order-hint">سعر {kind === 'fixed' ? 'الكراون' : 'الوحدة'} للمريض: <bdi>{unitPrice === undefined ? 'اختر الخامة' : money(unitPrice)}</bdi> · السعر من فهرس العيادة.</p>
-          <details className="prosthetic-order-teeth"><summary>تحديد الأسنان (اختياري){teethIds.length > 0 && <span>{teethIds.length} محدد</span>}</summary><p className="prosthetic-order-hint">يمكن ترك الأسنان غير محددة مؤقتًا.{kind === 'fixed' && ' عند تحديدها يجب أن يساوي عددها عدد الكراونات.'}</p><div className="prosthetic-order-grid"><label>الأسنان<select aria-label="نوع الأسنان للتركيبة" value={toothKind} onChange={event => setToothKind(event.target.value as 'adult' | 'pediatric')}><option value="adult">أسنان دائمة</option><option value="pediatric">أسنان لبنية</option></select></label><label>إضافة موضع<select aria-label="إضافة سن للتركيبة" value="" onChange={event => addTooth(event.target.value)}><option value="">غير محدد / اختر سنًا لإضافته…</option>{getWalkInToothOptions(toothKind).map(group => <optgroup key={group.label} label={group.label}>{group.options.map(option => <option key={option.value} value={option.value} disabled={teethIds.includes(option.value)}>{option.label}</option>)}</optgroup>)}</select></label></div><div className="prosthetic-order-selected-teeth">{teethIds.map(value => <button type="button" key={value} onClick={() => setTeethIds(previous => previous.filter(item => item !== value))} aria-label={`إزالة ${getToothLabel(value)}`}><span>{getToothLabel(value)}</span><X aria-hidden="true" /></button>)}</div>{teethIds.length > 0 && <button type="button" className="prosthetic-order-secondary" onClick={() => setTeethIds([])}>إلغاء تحديد الأسنان</button>}</details>
+          <details className="prosthetic-order-teeth"><summary><span>تحديد الأسنان (اختياري)</span><span>{teethIds.length > 0 ? `${teethIds.length} محدد · تعديل` : 'اختيار من الخريطة'}</span></summary><p className="prosthetic-order-hint">يمكن ترك الأسنان غير محددة مؤقتًا.{kind === 'fixed' && ' عند تحديدها يجب أن يساوي عددها عدد الكراونات.'}</p><ToothSelectionGrid ariaLabel="أسنان التركيبة" mode="multiple" value={teethIds} onChange={selectTeeth} dentition={toothKind} onDentitionChange={setToothKind} disabled={saving} />{teethIds.length > 0 && <button type="button" className="prosthetic-order-secondary" onClick={() => setTeethIds([])}>إلغاء تحديد الأسنان</button>}</details>
         </section>
-        <section className="prosthetic-order-section"><h3>٣. الكشف والتحصيل النقدي</h3><div className="prosthetic-order-kind" role="group" aria-label="اختيار الكشف للتركيبة"><button type="button" aria-pressed={!withExamination} onClick={() => setWithExamination(false)}>بدون كشف</button><button type="button" aria-pressed={withExamination} onClick={() => setWithExamination(true)}>بكشف</button></div><div className="prosthetic-order-grid">{withExamination && <label>رسوم الكشف لهذه الزيارة<input aria-label="رسوم كشف التركيبة" type="number" min="0" step="0.01" value={exam} onChange={event => setExam(event.target.value)} inputMode="decimal" /><small>المقترح {money(walkInExaminationDefault(examinationFee))}، قابل للتعديل لهذه الزيارة.</small></label>}{canRegisterPayment && <label>المدفوع الآن نقدًا<input aria-label="المبلغ المحصّل للتركيبة" type="number" min="0" step="0.01" value={paidText} onChange={event => setPaidText(event.target.value)} placeholder="0" inputMode="decimal" /><small>اكتب المبلغ الذي استلمته فعلًا؛ لا يُملأ تلقائيًا.</small></label>}</div>{!canRegisterPayment && <p className="prosthetic-order-hint">هذا الحساب يسجّل التركيبة دون تحصيل؛ تُسجّل الدفعة لاحقًا بواسطة صاحب الصلاحية.</p>}
+        <section className="prosthetic-order-section"><h3>٣. الكشف والتحصيل النقدي</h3><ExaminationFeeToggle selected={withExamination} fee={configuredExamFee} onChange={setWithExamination} disabled={saving} /><div className="prosthetic-order-grid">{canRegisterPayment && <label>المدفوع الآن نقدًا<input aria-label="المبلغ المحصّل للتركيبة" type="number" min="0" step="0.01" value={paidText} onChange={event => setPaidText(event.target.value)} placeholder="0" inputMode="decimal" /><small>اكتب المبلغ الذي استلمته فعلًا؛ لا يُملأ تلقائيًا.</small></label>}</div>{!canRegisterPayment && <p className="prosthetic-order-hint">هذا الحساب يسجّل التركيبة دون تحصيل؛ تُسجّل الدفعة لاحقًا بواسطة صاحب الصلاحية.</p>}
           <dl className="prosthetic-order-totals"><div><dt>التركيبة</dt><dd><bdi>{unitPrice === undefined ? '—' : money(treatmentTotal)}</bdi></dd></div><div><dt>الكشف</dt><dd><bdi>{money(examAmount)}</bdi></dd></div><div><dt>الإجمالي</dt><dd><bdi>{unitPrice === undefined ? '—' : money(total)}</bdi></dd></div><div><dt>المحصّل الآن</dt><dd><bdi>{money(paid)}</bdi></dd></div><div><dt>المتبقي للمريض</dt><dd><bdi>{unitPrice === undefined ? '—' : money(remaining)}</bdi></dd></div></dl>
         </section>
         <details className="prosthetic-order-section prosthetic-order-extra"><summary>التاريخ والملاحظات</summary><div className="prosthetic-order-grid"><label>تاريخ التسجيل<input aria-label="تاريخ تسجيل التركيبة" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label>الاستلام المتوقع (اختياري)<input aria-label="تاريخ استلام التركيبة المتوقع" type="date" min={date} value={deliveryExpectedDate} onChange={event => setDeliveryExpectedDate(event.target.value)} /></label></div><label>ملاحظات (اختياري)<textarea aria-label="ملاحظات التركيبة" rows={2} maxLength={2000} value={note} onChange={event => setNote(event.target.value)} /></label></details>

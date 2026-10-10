@@ -117,6 +117,16 @@
 .cl-count-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .cl-count-choices button { min-width: 0; min-height: 46px; padding: 9px; border: 1px solid #d5e1d9; border-radius: 11px; background: #fff; color: #466551; font-size: 12px; font-weight: 750; cursor: pointer; }
 .cl-appearance-preview { margin-top: 16px; }
+.cl-device-editor { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 13px 16px; border: 1px solid #d8e5dd; border-radius: 15px; background: #f5faf7; }
+.cl-device-editor > div:first-child { flex: 1 1 220px; min-width: 0; }
+.cl-device-editor strong { display: block; color: #315e49; font-size: 13px; line-height: 1.8; }
+.cl-device-editor p { margin: 4px 0 0; color: #657b6e; font-size: 11px; line-height: 1.9; }
+.cl-device-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 4px; border-radius: 12px; border: 1px solid #dae7de; background: #fff; }
+.cl-device-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid transparent; border-radius: 9px; color: #61796c; font-size: 12px; font-weight: 800; cursor: pointer; }
+.cl-device-switch button[aria-pressed='true'] { color: #fff; background: #235e49; border-color: #235e49; }
+.cl-device-switch svg { width: 19px; height: 19px; flex-shrink: 0; }
+.cl-dock-details[data-device='desktop'] { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 599px) { .cl-device-switch { width: 100%; } }
 .cl-home-controls { display: grid; gap: 20px; min-width: 0; }
 .cl-home-fixed { display: flex; flex-wrap: wrap; gap: 9px 16px; padding: 13px; border: 1px solid #dce7df; border-radius: 13px; color: #466551; background: #f5f9f6; }
 .cl-home-fixed > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 750; }

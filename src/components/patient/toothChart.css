@@ -1,0 +1,18 @@
+.tooth-chart .tooth-chart-toolbar { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.tooth-chart .tooth-chart-hint { text-align: center; font-size: .75rem; }
+.tooth-chart .tooth-selection-board [data-tooth-status="filled"] { color: #854d0e; background: #fef3c7; border-color: #fcd34d; }
+.tooth-chart .tooth-selection-board [data-tooth-status="crown"] { color: #fff; background: #0f766e; border-color: #0f766e; }
+.tooth-chart .tooth-selection-board [data-tooth-status="endodontic"] { color: #9f1239; background: #ffe4e6; border-color: #fda4af; }
+.tooth-chart .tooth-selection-board [data-tooth-status="extracted"] { color: #64748b; background: #e2e8f0; border-color: #cbd5e1; text-decoration: line-through; }
+.tooth-chart .tooth-selection-board .tooth-square[aria-pressed="true"] { outline: 2px solid #125c58; outline-offset: 1px; box-shadow: 0 0 0 3px #fff; }
+.tooth-chart .tooth-selection-strip { border-color: #c9e6dd; background: #eff8f4; }
+.tooth-chart .tooth-selection-actions button { min-height: 44px; }
+.tooth-chart-legend-panel { border: 1px solid #e2e8f0; border-radius: .75rem; background: #f8fafc; }
+.tooth-chart-legend-panel summary { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-height: 44px; padding: .55rem .75rem; cursor: pointer; list-style: none; color: #64748b; font-size: .75rem; font-weight: 750; }
+.tooth-chart-legend-panel summary::-webkit-details-marker { display: none; }
+.tooth-chart-legend-panel summary svg { width: 1rem; height: 1rem; transition: transform 120ms ease; }
+.tooth-chart-legend-panel[open] summary svg { transform: rotate(180deg); }
+.tooth-chart-legend-panel .tooth-chart-legend { padding: 0 .75rem .75rem; justify-content: flex-start; }
+.tooth-chart-legend .tooth-legend-history { width: .35rem; height: .35rem; margin-inline: .17rem; border: 0; border-radius: 50%; background: #64748b; }
+.tooth-chart-legend-panel summary:focus-visible { outline: 3px solid #125c58; outline-offset: 2px; border-radius: .75rem; }
+@media (prefers-reduced-motion: reduce) { .tooth-chart-legend-panel summary svg { transition: none; } }

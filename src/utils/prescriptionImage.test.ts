@@ -47,6 +47,24 @@ test('canonical print paper includes logo, banner, watermark, full clinical text
   const escaped = compiled.exports.render({ ...data, patientName: '<script>synthetic</script>' });
   assert.doesNotMatch(escaped, /<script>/); assert.match(escaped, /&lt;script&gt;/);
 });
+test('canonical Rx separates Arabic identity, unchanged logo and numbered mixed-language content without mirroring', () => {
+  const data = fixture();
+  data.items = [
+    { id: 'rtl-test', drugName: 'دواء مصطنع 250 mg', dosage: 'جرعة اختبار 1/2 — ليست وصفة', duration: 'Synthetic 5 days' },
+    { id: 'ltr-test', drugName: 'Synthetic medicine 500 mg', dosage: 'Synthetic only مرتان يوميًا', duration: '٣ أيام مصطنعة' },
+  ];
+  data.clinicLogo = 'data:image/png;base64,c3ludGhldGlj';
+  const html = compiled.exports.render(data);
+  assert.match(html, /data-prescription-header="arabic-right-logo-left"/);
+  assert.ok(html.indexOf(data.doctorName) < html.indexOf('class="rx-identity-logo"'));
+  assert.match(html, /object-fit:contain;transform:none/);
+  assert.match(html, /unicode-bidi:isolate/);
+  assert.match(html, /<bdi dir="ltr">#501<\/bdi>/);
+  assert.match(html, /<bdi dir="ltr"[^>]+>2026-10-10<\/bdi>/);
+  assert.match(html, /<bdi dir="auto"[^>]+>دواء مصطنع 250 mg<\/bdi>/);
+  for (const item of data.items) for (const value of [item.drugName, item.dosage, item.duration]) assert.ok(html.includes(value));
+  assert.doesNotMatch(html, /scaleX|rotateY|transform:scale\(-/);
+});
 test('image validation rejects empty drugs, remote logos and excessive text instead of dropping it', () => {
   assert.throws(() => validatePrescriptionImageData({ ...fixture(), items: [] }), /أضف الأدوية/);
   assert.throws(() => validatePrescriptionImageData({ ...fixture(), items: [{ ...fixture().items[0], drugName: ' ' }] }));

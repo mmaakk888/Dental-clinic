@@ -27,8 +27,8 @@ const compiled = { exports: {} as {
 new Function('require', 'module', 'exports', built.outputFiles[0].text)(createRequire(import.meta.url), compiled, compiled.exports);
 type Element = { type: unknown; props: Record<string, any> };
 const children = (value: any): any[] => value == null ? [] : Array.isArray(value) ? value.flatMap(children) : [value];
-const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(item.props.children)] : []);
-const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(item.props.children) : '').join('');
+const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children)] : []);
+const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(typeof item.type === 'function' && item.type.name === 'ExaminationFeeToggle' ? item.type(item.props) : item.props.children) : '').join('');
 const fakePatient = () => ({ id: '501', name: 'مريض اختبار مصطنع', mobile: '01000000000', age: 30, firstVisit: '2026-10-10', notes: '', allergy: '', sessions: [], payments: [] });
 const props = (overrides: Record<string, unknown> = {}) => ({ patient: fakePatient(), origin: 'patients',
   serviceTypes: ['تركيبات - ثابتة', 'حشو اختبار', 'علاج عصب اختبار'], clinicalPrices: { 'حشو اختبار': 600, 'علاج عصب اختبار': 900, 'تركيبات - ثابتة': 9999 }, examinationFee: 100,
@@ -100,14 +100,19 @@ test('changing clinical selection resets the proposed price and manual price/cas
   assert.equal(session.paymentsLog[0].paymentMethod, 'cash');
 });
 
-test('exam is opt-in with configured default100, accepts explicit override, and retains saved zero', async () => {
-  const h = harness({ examinationFee: undefined }); h.open(); h.click('إضافة كشف', h.modal());
-  assert.equal(h.field('input-examination-fee').props.value, 100);
-  h.change('input-examination-fee', '125'); await h.submit();
-  assert.equal(h.saved[0].session.examinationFee, 125); assert.equal(h.saved[0].session.amount, 725);
-  const zero = harness({ examinationFee: 0 }); zero.open(); zero.click('إضافة كشف', zero.modal());
-  assert.equal(zero.field('input-examination-fee').props.value, 0);
+test('same exam toggle is opt-in at configured fee, records it once, preserves zero and can remove it', async () => {
+  const toggle = (h: ReturnType<typeof harness>) => { h.find(item => item.props['aria-label'] === 'تسجيل الكشف', h.modal()).props.onClick(); h.render(); };
+  const h = harness({ examinationFee: undefined }); h.open(); toggle(h);
+  assert.equal(h.find(item => item.props['aria-label'] === 'تسجيل الكشف', h.modal()).props['aria-pressed'], true);
+  assert.ok(!all(h.modal()).some(item => item.props.id === 'input-examination-fee'));
+  await h.submit();
+  assert.equal(h.saved[0].session.examinationFee, 100); assert.equal(h.saved[0].session.amount, 700); assert.equal(h.saved[0].session.paid, 0);
+  const configured = harness({ examinationFee: 125 }); configured.openTooth('ur2'); toggle(configured); await configured.submit();
+  assert.equal(configured.saved[0].session.examinationFee, 125); assert.equal(configured.saved[0].session.amount, 725);
+  const zero = harness({ examinationFee: 0 }); zero.open(); toggle(zero);
   await zero.submit(); assert.equal(zero.saved[0].session.examinationFee, 0); assert.equal(zero.saved[0].session.amount, 600);
+  const removed = harness(); removed.open(); toggle(removed); toggle(removed); await removed.submit();
+  assert.equal(removed.saved[0].session.examinationFee, 0); assert.equal(removed.saved[0].session.amount, 600);
 });
 
 test('overpayment is rejected without saving or clearing service price', async () => {
@@ -115,6 +120,28 @@ test('overpayment is rejected without saving or clearing service price', async (
   assert.equal(h.saved.length, 0); assert.match(h.validations.at(-1) || '', /أكبر من إجمالي/);
   assert.equal(h.field('input-service-amount').props.value, 600); assert.equal(h.hasModal, true);
   h.change('input-paid-now', '100'); await h.submit(); assert.equal(h.saved.length, 1);
+});
+
+test('explicit zero service stays visible and saves as free, while blank price with exam never saves an exam-only substitute', async () => {
+  const free = harness({ serviceTypes: ['خدمة مجانية'], clinicalPrices: { 'خدمة مجانية': 0 } }); free.open();
+  assert.equal(free.field('input-service-amount').props.value, 0); await free.submit();
+  assert.equal(free.saved[0].session.amount, 0); assert.equal(free.saved[0].session.paid, 0);
+  assert.deepEqual(free.saved[0].session.paymentsLog, []); assert.equal(free.saved[0].session.services[0].price, 0);
+  assert.equal(free.saved[0].session.services[0].name, 'خدمة مجانية');
+  const blank = harness(); blank.open(); blank.change('input-service-amount', '');
+  blank.find(item => item.props['aria-label'] === 'تسجيل الكشف', blank.modal()).props.onClick(); blank.render();
+  await blank.submit(); assert.equal(blank.saved.length, 0); assert.match(blank.validations.at(-1) || '', /اكتب سعر الخدمة/);
+  assert.equal(blank.hasModal, true);
+  const unknown = harness({ serviceTypes: ['خدمة غير مسعّرة'], clinicalPrices: {} }); unknown.open();
+  assert.equal(unknown.field('input-service-amount').props.value, ''); await unknown.submit();
+  assert.equal(unknown.saved.length, 0); assert.match(unknown.validations.at(-1) || '', /اكتب سعر الخدمة/);
+});
+
+test('header honors Arabic gender and never invents male for an unspecified gender', () => {
+  const female = compiled.exports.render(props({ patient: { ...fakePatient(), gender: 'أنثى' } }));
+  assert.match(female, /سنة · أنثى/);
+  const unknown = compiled.exports.render(props({ patient: { ...fakePatient(), gender: '' } }));
+  assert.doesNotMatch(unknown, /سنة · ذكر/);
 });
 
 test('tooth service records its own tooth alongside legacy tooth without altering historical multi-tooth services', async () => {
@@ -126,6 +153,15 @@ test('tooth service records its own tooth alongside legacy tooth without alterin
   await h.submit(); const session = h.saved[0].session;
   assert.equal(session.tooth, 'ulA'); assert.equal(session.services[0].tooth, 'ulA');
   assert.deepEqual(patient, before);
+});
+
+test('general service offers the same single tooth board without navigating away or recording on selection', async () => {
+  const h = harness(); h.open();
+  const grid = () => h.find(item => item.props.ariaLabel === 'أسنان الخدمة في ملف المريض', h.modal());
+  assert.deepEqual(grid().props.value, []); assert.equal(grid().props.mode, 'single');
+  grid().props.onChange(['ll6']); h.render(); assert.equal(h.saved.length, 0);
+  assert.deepEqual(grid().props.value, ['ll6']);
+  await h.submit(); assert.equal(h.saved[0].session.tooth, 'll6'); assert.equal(h.saved[0].session.services[0].tooth, 'll6');
 });
 
 test('pending service save blocks duplicate submit and close; failure retains draft and permits explicit retry', async () => {

@@ -185,6 +185,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   const paperRef = useRef<HTMLDivElement>(null);
   const paperWrapper = useRef<HTMLDivElement>(null);
   const paperScale = useRef<HTMLDivElement>(null);
+  const outputPanel = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
   const imageData = { clinicName, clinicLogo, doctorTitle: rxDocTitle, doctorName: rxDocName, doctorEnglish: rxDocEnglish,
     specialties: [rxSpecialty1, rxSpecialty2], phone: rxPhone, address: rxAddress, patientName: patient.name,
@@ -264,6 +265,8 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
         </div>
 
         {subTab === 'prescription' && (
+          <div className="rx-toolbar-actions">
+          {canPrint && onAuthorizePrint && <button type="button" className="rx-secondary-button" onClick={() => { outputPanel.current?.scrollIntoView({ block: 'start', behavior: 'auto' }); outputPanel.current?.focus({ preventScroll: true }); }}><ImageDown aria-hidden="true" />صورة الروشتة والطباعة</button>}
           <button
             type="button"
             onClick={() => setIsTemplateEditorOpen(!isTemplateEditorOpen)}
@@ -273,6 +276,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
             <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
             <span>بيانات ورقة الروشتة</span>
           </button>
+          </div>
         )}
       </div>
 
@@ -374,7 +378,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
           
           {/* Left Form: Catalog + Inputs (6 Cols) */}
           <div className="rx-composer print:hidden">
-            <p className="rx-draft-note">مسودة الروشتة في هذه الشاشة؛ راجع الأدوية والجرعات قبل الطباعة أو فتح واتساب.</p>
+            <p className="rx-draft-note">أضف الأدوية وراجع الجرعات، ثم جهّز صورة الروشتة من المعاينة لمشاركتها في واتساب بنفس ورقة الطباعة.</p>
             {/* Catalog Quick Add Deck */}
             <section className="rx-card" aria-label="اختيار دواء من الفهرس">
               <h3 className="rx-card-heading">
@@ -494,27 +498,35 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
 
           {/* Right Live Printable A5 Prescription Preview (6 Cols) */}
           <div className="rx-preview-section">
-            <div className="rx-preview-heading print:hidden">
+            <div ref={outputPanel} tabIndex={-1} className="rx-preview-heading print:hidden" aria-label="معاينة الروشتة وخيارات الصورة والطباعة">
               <h3 className="text-sm font-bold text-slate-800 font-tajawal flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-[#1a4388]" />
                 معاينة الروشتة (A5)
               </h3>
 
+              {canPrint && onAuthorizePrint && <div className="rx-image-workflow" aria-label="إرسال الروشتة كصورة">
+                <div className="rx-image-workflow-title"><ImageDown aria-hidden="true" /><div><strong>الروشتة صورة بنفس تصميم الطباعة</strong><p>١. جهّز الصورة وراجعها. ٢. شاركها في واتساب أو نزّلها وأرفقها بالمحادثة.</p></div></div>
+                <button type="button" aria-label={currentImage ? (canSendWhatsApp && onAuthorizeWhatsappSend ? 'مشاركة صورة الروشتة في واتساب' : 'تنزيل صورة الروشتة') : 'تجهيز صورة الروشتة'} onClick={currentImage ? (canSendWhatsApp && onAuthorizeWhatsappSend ? shareImage : downloadImage) : prepareImage} disabled={imageBusy || !rxItems.length} className="rx-primary-button" aria-busy={imageBusy}>
+                  {currentImage && canSendWhatsApp && onAuthorizeWhatsappSend ? <Share2 aria-hidden="true" /> : <ImageDown aria-hidden="true" />}
+                  {imageBusy ? (currentImage ? 'جارٍ فتح المشاركة…' : 'جارٍ تجهيز الصورة…') : currentImage ? (canSendWhatsApp && onAuthorizeWhatsappSend ? 'مشاركة الصورة في واتساب' : 'تنزيل صورة الروشتة') : 'تجهيز صورة الروشتة'}
+                </button>
+                <small>المشاركة لا ترسل تلقائيًا: اختر واتساب ثم محادثة المريض بنفسك. قد يتطلب الكمبيوتر تنزيل الصورة وإرفاقها يدويًا.</small>
+              </div>}
+
               <div className="rx-output-actions">
-              {canPrint && onAuthorizePrint && <button type="button" onClick={prepareImage} disabled={imageBusy || !rxItems.length} className="rx-secondary-button"><ImageDown aria-hidden="true" />{imageBusy ? 'جارٍ التجهيز…' : 'تجهيز صورة الروشتة'}</button>}
-              {canSendWhatsApp && onAuthorizeWhatsappSend && <button type="button" onClick={handleSendPrescription} className="rx-secondary-button"><MessageCircle className="w-4 h-4" />واتساب كنص</button>}
               {canPrint && onAuthorizePrint && <button
                 type="button"
                 onClick={handlePrintPrescription}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md cursor-pointer transition-all active:scale-95"
+                className="rx-secondary-button"
               >
                 <Printer className="w-4 h-4" />
                 <span>طباعة الروشتة (A5)</span>
               </button>}
+              {canSendWhatsApp && onAuthorizeWhatsappSend && <details className="rx-text-alternative"><summary>خيارات الرسالة النصية</summary><button type="button" onClick={handleSendPrescription} className="rx-secondary-button"><MessageCircle aria-hidden="true" />واتساب كنص</button></details>}
               </div>
             </div>
 
-            {currentImage && <section className="rx-image-ready print:hidden" aria-label="صورة الروشتة الجاهزة"><strong>صورة الروشتة جاهزة</strong><p>راجع الصورة، ثم اختر واتساب من نافذة المشاركة وحدّد المريض بنفسك. لا يتم إرسالها تلقائيًا.</p><img src={currentImage.url} alt="معاينة صورة الروشتة الجاهزة للمشاركة" /><div className="rx-output-actions"><button type="button" className="rx-secondary-button" onClick={downloadImage} disabled={imageBusy}><ImageDown aria-hidden="true" />تنزيل الصورة</button>{canSendWhatsApp && onAuthorizeWhatsappSend && <button type="button" className="rx-secondary-button" onClick={shareImage} disabled={imageBusy}><Share2 aria-hidden="true" />مشاركة الصورة — واتساب</button>}{canSendWhatsApp && onAuthorizeWhatsappSend && <button type="button" className="rx-secondary-button" onClick={() => openWhatsApp('')}>فتح محادثة المريض</button>}</div></section>}
+            {currentImage && <section className="rx-image-ready print:hidden" aria-label="صورة الروشتة الجاهزة"><strong>الصورة جاهزة للمراجعة</strong><p>بعد اختيار واتساب من نافذة المشاركة، تأكد من اسم المريض قبل الإرسال. فتح المحادثة وحده لا يرفق الصورة.</p><img src={currentImage.url} alt="معاينة صورة الروشتة الجاهزة للمشاركة" /><div className="rx-output-actions"><button type="button" className="rx-secondary-button" onClick={downloadImage} disabled={imageBusy}><ImageDown aria-hidden="true" />تنزيل الصورة</button>{canSendWhatsApp && onAuthorizeWhatsappSend && <button type="button" className="rx-secondary-button" onClick={() => openWhatsApp('')}><MessageCircle aria-hidden="true" />فتح محادثة المريض</button>}</div></section>}
 
             <div id="printable-prescription-wrapper" ref={paperWrapper} className="rx-paper-viewport">
               <div ref={paperScale} className="rx-paper-scale">

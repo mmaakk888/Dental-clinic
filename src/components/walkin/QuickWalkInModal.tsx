@@ -3,13 +3,16 @@ import { CheckCircle2, Stethoscope, Trash2, X } from 'lucide-react';
 import type { ClinicContact, DrugCatalogItem, Patient, SessionServiceItem } from '../../types';
 import { canonicalFileNumber } from '../../utils/clinicMutations';
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
-import { getWalkInServiceOptions, getWalkInToothOptions, nextWalkInFileNumber, validateWalkInAmounts, walkInExaminationDefault } from '../../utils/walkInDraft';
+import { getWalkInServiceOptions, nextWalkInFileNumber, validateWalkInAmounts, walkInExaminationDefault } from '../../utils/walkInDraft';
+import { getToothLabel } from '../../utils/toothUtils';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { createPatientRegistrationIndex, findPatientRegistrationMatches } from '../../utils/patientRegistration';
 import { parseCatalogPrice } from '../../utils/serviceCatalog';
 import { WalkInServicePicker } from './WalkInServicePicker';
+import { ExaminationFeeToggle } from '../common/ExaminationFeeToggle';
+import { ToothSelectionGrid } from '../common/ToothSelectionGrid';
 import '../common/ActionDialog.css';
 import './walkInServicePicker.css';
 
@@ -59,6 +62,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const registrationIndex = useMemo(() => createPatientRegistrationIndex(patients, contacts), [patients, contacts]);
   const registrationMatches = useMemo(() => findPatientRegistrationMatches(registrationIndex, { name, mobile }, { limit: 4 }), [registrationIndex, name, mobile]);
   const [services, setServices] = useState<SessionServiceItem[]>([]);
+  const [draftPrices, setDraftPrices] = useState<Record<string, string>>({});
   const configuredExamFee = walkInExaminationDefault(defaultExamFee);
   const serviceOptions = useMemo(() => getWalkInServiceOptions(serviceTypes, clinicalPrices), [serviceTypes, clinicalPrices]);
   const pickerOptions = useMemo(() => serviceOptions.map(item => ({ name: item.name,
@@ -79,10 +83,12 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const total = exam + treatment;
   const remaining = Math.max(0, total - paid - discount);
   const updateService = (id: string, patch: Partial<SessionServiceItem>) => setServices(previous => previous.map(item => item.id === id ? { ...item, ...patch } : item));
-  const addService = (name = '', price = 0) => {
+  const addService = (name = '', price?: number) => {
     if (committingRef.current) return;
+    const id = crypto.randomUUID();
+    if (price === undefined) setDraftPrices(previous => ({ ...previous, [id]: '' }));
     setServices(previous => !name && previous.some(item => !item.name.trim())
-      ? previous : [...previous, { id: crypto.randomUUID(), name, price }]);
+      ? previous : [...previous, { id, name, price: price ?? 0 }]);
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -95,6 +101,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
       if (patients.some(item => canonicalFileNumber(item.id) === canonicalFileNumber(newId))) { showToast('رقم الملف مستخدم. اختر المريض المسجل أو رقمًا آخر.', 'warning'); return; }
       if (age && (!Number.isInteger(Number(age)) || Number(age) < 0 || Number(age) > 120)) { showToast('أدخل عمرًا صحيحًا من صفر إلى ١٢٠ سنة، أو اتركه فارغًا.', 'warning'); return; }
     }
+    if (services.some(item => draftPrices[item.id] === '')) { showToast('اكتب سعر كل خدمة قبل حفظ الزيارة؛ الصفر مقبول إذا كانت مجانية.', 'warning'); return; }
     const error = validateWalkInAmounts(exam, services, paid, discount);
     if (error) { showToast(error, 'warning'); return; }
     const patient = patientMode === 'existing' && selectedPatient
@@ -141,12 +148,12 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
           {!serviceOptions.length && <p className="walkin-hint">لا توجد خدمات علاجية في الفهرس. أضف خدمة مخصصة هنا، أو جهّز الخدمات والأسعار من لوحة التحكم.</p>}
           <div className="walkin-service-list">{services.map((item, index) => {
             const toothMode = toothModes[item.id] || (item.tooth && /[A-E]$/.test(item.tooth) ? 'pediatric' : 'adult');
-            return <div key={item.id} className="walkin-service-card"><div className="walkin-service"><label>الخدمة {index + 1}<input aria-label={`اسم الخدمة ${index + 1}`} value={item.name} onChange={event => updateService(item.id, { name: event.target.value })} required /></label><label>السعر (ج.م)<input aria-label={`سعر الخدمة ${index + 1}`} type="number" min="0" step="0.01" value={item.price} onChange={event => updateService(item.id, { price: Number(event.target.value) })} required inputMode="decimal" /></label><button type="button" aria-label={`حذف الخدمة ${index + 1}`} onClick={() => setServices(previous => previous.filter(service => service.id !== item.id))}><Trash2 aria-hidden="true" className="mx-auto h-4 w-4" /></button></div>
-              <details className="walkin-tooth-details"><summary>{item.tooth ? getWalkInToothOptions(toothMode).flatMap(group => group.options).find(option => option.value === item.tooth)?.label : 'تحديد السن (اختياري)'}</summary><div className="walkin-tooth-grid"><label>الأسنان<select aria-label={`نوع الأسنان للخدمة ${index + 1}`} value={toothMode} onChange={event => { setToothModes(previous => ({ ...previous, [item.id]: event.target.value as 'adult' | 'pediatric' })); updateService(item.id, { tooth: undefined }); }}><option value="adult">أسنان دائمة</option><option value="pediatric">أسنان لبنية</option></select></label><label>السن<select aria-label={`السن للخدمة ${index + 1}`} value={item.tooth || ''} onChange={event => updateService(item.id, { tooth: event.target.value || undefined })}><option value="">غير محدد / خدمة غير مرتبطة بسن</option>{getWalkInToothOptions(toothMode).map(group => <optgroup key={group.label} label={group.label}>{group.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</optgroup>)}</select></label></div></details>
-              {item.price === 0 && <p className="walkin-hint">سعر الخدمة صفر؛ راجعه أو اتركه إذا كانت الخدمة مجانية.</p>}
+            return <div key={item.id} className="walkin-service-card"><div className="walkin-service"><label>الخدمة {index + 1}<input aria-label={`اسم الخدمة ${index + 1}`} value={item.name} onChange={event => updateService(item.id, { name: event.target.value })} required /></label><label>السعر (ج.م)<input aria-label={`سعر الخدمة ${index + 1}`} type="number" min="0" step="0.01" value={draftPrices[item.id] ?? item.price} onChange={event => { const value = event.target.value; setDraftPrices(previous => ({ ...previous, [item.id]: value })); updateService(item.id, { price: Number(value) }); }} required inputMode="decimal" /></label><button type="button" aria-label={`حذف الخدمة ${index + 1}`} onClick={() => setServices(previous => previous.filter(service => service.id !== item.id))}><Trash2 aria-hidden="true" className="mx-auto h-4 w-4" /></button></div>
+              <details className="walkin-tooth-details"><summary><span>{item.tooth ? getToothLabel(item.tooth) : 'تحديد السن (اختياري)'}</span><span className="tooth-picker-open-label">اختيار من الخريطة</span></summary><ToothSelectionGrid ariaLabel={`أسنان الخدمة ${index + 1}`} mode="single" value={item.tooth ? [item.tooth] : []} onChange={ids => updateService(item.id, { tooth: ids[0] || undefined })} dentition={toothMode} onDentitionChange={type => { setToothModes(previous => ({ ...previous, [item.id]: type })); updateService(item.id, { tooth: undefined }); }} disabled={saving} /><p className="walkin-hint">اختيار السن يربطه بهذه الخدمة فقط؛ اضغط عليه مرة أخرى لإلغاء تحديده.</p></details>
+              {draftPrices[item.id] === '' ? <p className="walkin-hint" role="status">لا يوجد سعر محدد؛ اكتب سعر هذه الخدمة قبل حفظ الزيارة.</p> : item.price === 0 && <p className="walkin-hint">سعر الخدمة صفر؛ راجعه أو اتركه إذا كانت الخدمة مجانية.</p>}
             </div>;
           })}</div>
-          <div className="walkin-exam-inline"><button type="button" aria-label="تسجيل الكشف" aria-pressed={hasExamination} onClick={() => setHasExamination(value => !value)}><CheckCircle2 aria-hidden="true" /><span>كشف <bdi>{amountText(configuredExamFee)}</bdi></span><strong>{hasExamination ? 'مُضاف ✓' : 'إضافة'}</strong></button><small>{hasExamination ? 'اضغط لإلغاء الكشف. التحصيل يُسجّل منفصلًا.' : 'غير مُضاف. اضغط لتسجيل الكشف بالسعر المحدد في الإعدادات.'}</small></div>
+          <ExaminationFeeToggle selected={hasExamination} fee={configuredExamFee} onChange={setHasExamination} disabled={saving} />
         </section>
         <details className="walkin-section walkin-details walkin-medical-details"><summary>تفاصيل طبية وملاحظات (اختياري)</summary><div className="walkin-grid">
           <label>الشكوى الرئيسية<input value={chiefComplaint} onChange={event => setChiefComplaint(event.target.value)} /></label><label>التشخيص<input value={diagnosis} onChange={event => setDiagnosis(event.target.value)} /></label>

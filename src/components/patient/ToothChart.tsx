@@ -1,8 +1,10 @@
 import React, { useId, useState } from 'react';
 import { getToothLabel, getToothStatusForPatient, ToothStatusType } from '../../utils/toothUtils';
 import { Patient } from '../../types';
-import { Check, Plus, X } from 'lucide-react';
+import { ChevronDown, Plus, X } from 'lucide-react';
+import { createToothSelectionGrid, TOOTH_STATUS_LABELS } from '../common/ToothSelectionGrid';
 import './patientClinicalTools.css';
+import './toothChart.css';
 
 export interface ToothChartProps {
   patient: Patient;
@@ -10,16 +12,6 @@ export interface ToothChartProps {
   selectedToothId?: string | null;
   onSelectTooth?: (toothId: string | null) => void;
 }
-
-const STATUS_LABELS: Record<ToothStatusType, string> = {
-  normal: 'بدون علامة علاجية', filled: 'حشو', crown: 'تركيبة', endodontic: 'علاج عصب', extracted: 'مخلوع / مفقود'
-};
-const QUADRANTS = [
-  { id: 'ur', label: 'العلوي الأيمن', reverse: true },
-  { id: 'ul', label: 'العلوي الأيسر', reverse: false },
-  { id: 'lr', label: 'السفلي الأيمن', reverse: true },
-  { id: 'll', label: 'السفلي الأيسر', reverse: false }
-];
 
 export const ToothChart: React.FC<ToothChartProps> = ({
   patient, onOpenAddSessionModal, selectedToothId: externalSelectedToothId, onSelectTooth
@@ -31,19 +23,6 @@ export const ToothChart: React.FC<ToothChartProps> = ({
   const selectTooth = (id: string | null) => {
     if (onSelectTooth) onSelectTooth(id);
     else setInternalSelectedToothId(id);
-  };
-  const items: (string | number)[] = dentitionType === 'adult' ? [1, 2, 3, 4, 5, 6, 7, 8] : ['A', 'B', 'C', 'D', 'E'];
-  const moveFocus = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Escape') { selectTooth(null); return; }
-    const grid = event.currentTarget.parentElement;
-    if (!grid || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-    const buttons: HTMLButtonElement[] = Array.from(grid.querySelectorAll<HTMLButtonElement>('button[data-tooth-id]'));
-    const current = buttons.indexOf(event.currentTarget);
-    const columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(Boolean).length);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
-      : current + (event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' ? -columns : columns);
-    event.preventDefault();
-    buttons[Math.max(0, Math.min(buttons.length - 1, next))]?.focus();
   };
 
   return (
@@ -58,36 +37,11 @@ export const ToothChart: React.FC<ToothChartProps> = ({
             </button>
           ))}
         </div>
-        <div className="tooth-chart-legend" aria-label="دليل ألوان الأسنان">
-          {(Object.keys(STATUS_LABELS) as ToothStatusType[]).map(status => (
-            <span key={status}>
-              <i aria-hidden="true" data-tooth-status={status} />{STATUS_LABELS[status]}
-            </span>
-          ))}
-        </div>
       </div>
       <p id={hintId} className="tooth-chart-hint">اختر السن لعرض سجله وتسجيل خدمة. اليمين واليسار حسب جهة المريض.</p>
-      <div className="tooth-chart-quadrants">
-        {QUADRANTS.map(quadrant => (
-          <section key={quadrant.id} className="tooth-chart-quadrant" aria-label={quadrant.label}>
-            <h3>{quadrant.label}</h3>
-            <div dir="ltr" className="tooth-square-grid" data-dentition={dentitionType}>
-              {(quadrant.reverse ? [...items].reverse() : items).map(item => {
-                const id = `${quadrant.id}${item}`;
-                const status = getToothStatusForPatient(patient.sessions, id);
-                const selected = selectedToothId === id;
-                return <button key={id} type="button" aria-pressed={selected} data-tooth-id={id} data-tooth-status={status.status} aria-describedby={hintId}
-                  aria-label={`${getToothLabel(id)}، ${STATUS_LABELS[status.status]}${status.hasHistory ? '، له سجل خدمات' : ''}`}
-                  onClick={() => selectTooth(selected ? null : id)}
-                  onKeyDown={moveFocus} className="tooth-square">
-                  {item}
-                  {selected ? <Check aria-hidden="true" className="tooth-selected-mark" /> : status.hasHistory && <span aria-hidden="true" className="tooth-history-mark" />}
-                </button>;
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
+      {createToothSelectionGrid({ value: selectedToothId ? [selectedToothId] : [], onChange: ids => selectTooth(ids[0] ?? null),
+        mode: 'single', dentition: dentitionType, showSummary: false, showDentitionToggle: false, escapeClearsSelection: true, ariaDescribedBy: hintId,
+        getToothState: id => getToothStatusForPatient(patient.sessions, id) })}
       {selectedToothId && (
         <div className="tooth-selection-strip">
           <span role="status">{getToothLabel(selectedToothId)}</span>
@@ -97,6 +51,15 @@ export const ToothChart: React.FC<ToothChartProps> = ({
           </div>
         </div>
       )}
+      <details className="tooth-chart-legend-panel">
+        <summary>دليل ألوان وسجل الأسنان<ChevronDown aria-hidden="true" /></summary>
+        <div className="tooth-chart-legend" aria-label="دليل ألوان الأسنان">
+          {(Object.keys(TOOTH_STATUS_LABELS) as ToothStatusType[]).map(status => (
+            <span key={status}><i aria-hidden="true" data-tooth-status={status} />{TOOTH_STATUS_LABELS[status]}</span>
+          ))}
+          <span><i aria-hidden="true" className="tooth-legend-history" />النقطة تعني وجود سجل خدمات</span>
+        </div>
+      </details>
     </div>
   );
 };

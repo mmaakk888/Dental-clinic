@@ -5,11 +5,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import React from 'react';
-import { DEFAULT_DOCK_APPEARANCE, getDockAppearance, isValidDockAppearance, splitDesktopNavigation, splitMobileNavigation } from './dockAppearance';
-import { cloneContentDraft, getNavigationItems, validateContentDraft } from './clinicContent';
+import { DEFAULT_DOCK_APPEARANCE, getDesktopDockAppearance, getDockAppearance, isValidDockAppearance, splitDesktopNavigation, splitMobileNavigation } from './dockAppearance';
+import { cloneContentDraft, getDeviceNavigationOrder, getNavigationItems, validateContentDraft } from './clinicContent';
 import { DEFAULT_UI_LABELS } from '../data/initialData';
 import { assertClinicBackup, validateClinicBackup } from './backupValidation';
 import type { DockAppearance } from '../types';
+import { readFileSync } from 'node:fs';
 
 test('legacy or malformed dock reads use safe defaults without adding settings or mutating input', () => {
   for (const labels of [undefined, null, [], 1, {}, { dockAppearance: null }, { dockAppearance: [] }, { dockAppearance: { size: 'huge', showLabels: 'false', mobileVisibleCount: 100 } }]) {
@@ -107,6 +108,37 @@ test('content validation and backup preserve dock choices and unknown legacy fie
   }
 });
 
+test('desktop appearance/order are independent, inherit legacy values read-only and preserve mobile More placement', () => {
+  const order = ['settings', 'lab', 'patients', 'contacts', 'summary', 'appointments'];
+  const legacy = { dockAppearance: { size: 'compact', showLabels: false, mobileVisibleCount: 3, moreSections: ['lab'] } };
+  const before = JSON.stringify(legacy);
+  assert.deepEqual(getDesktopDockAppearance(legacy), { size: 'compact', showLabels: false });
+  assert.deepEqual(getDeviceNavigationOrder(legacy, order, 'desktop'), order);
+  assert.equal(JSON.stringify(legacy), before);
+  const labels = { ...legacy, dockAppearance: { ...legacy.dockAppearance, desktop: { size: 'large', showLabels: true, order: ['appointments', 'patients', 'contacts', 'lab', 'summary', 'settings'] } } };
+  assert.deepEqual(getDesktopDockAppearance(labels), { size: 'large', showLabels: true });
+  assert.equal(getDockAppearance(labels).size, 'compact'); assert.equal(getDockAppearance(labels).showLabels, false);
+  assert.deepEqual(getDeviceNavigationOrder(labels, order, 'mobile'), order);
+  assert.deepEqual(getDeviceNavigationOrder(labels, order, 'desktop'), labels.dockAppearance.desktop.order);
+  assert.deepEqual(getDockAppearance(labels).moreSections, ['lab']);
+  assert.equal(getNavigationItems(labels, getDeviceNavigationOrder(labels, order, 'desktop'))[0].key, 'home');
+});
+
+test('backup and content validation round trip independent desktop settings and reject malformed explicit values', () => {
+  const desktop = { size: 'large' as const, showLabels: false, order: ['settings', 'contacts', 'patients', 'appointments', 'lab', 'summary'], future: { retained: true } };
+  const labels = { ...DEFAULT_UI_LABELS, dockAppearance: { ...DEFAULT_DOCK_APPEARANCE, desktop } };
+  const backup = assertClinicBackup({ labels, tileOrder: ['patients', 'contacts', 'appointments', 'lab', 'summary', 'settings'] });
+  assert.deepEqual(backup.labels?.dockAppearance?.desktop, desktop);
+  assert.notEqual(backup.labels?.dockAppearance?.desktop, desktop);
+  assert.equal(validateContentDraft({ labels, tileOrder: [] }).valid, true);
+  for (const invalid of [null, [], {}, { ...desktop, size: 'enormous' }, { ...desktop, showLabels: 'false' }, { ...desktop, order: 'patients' }, { ...desktop, order: ['home'] }, { ...desktop, order: ['patients', 'patients'] }, { ...desktop, order: ['unknown'] }]) {
+    const bad = { labels: { ...labels, dockAppearance: { ...labels.dockAppearance, desktop: invalid } }, tileOrder: [] };
+    assert.equal(validateContentDraft(bad).valid, false);
+    assert.equal(validateClinicBackup(bad).valid, false);
+  }
+  assert.equal(isValidDockAppearance({ ...DEFAULT_DOCK_APPEARANCE, desktop: { ...desktop, order: [] } }), true);
+});
+
 // Actual React markup with CSS ignored only by this test: no browser or stored clinic records.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const built = buildSync({
@@ -123,27 +155,49 @@ const built = buildSync({
       const user = { id:'dock-test', role: restricted ? 'secretary' : 'doctor', permissions: restricted ? {...getDefaultPermissionsForRole('secretary'), patientView:false, summary:false, lab:false, controlPanel:false} : getDefaultPermissionsForRole('doctor') };
       return renderToStaticMarkup(<MobileBottomNav activeView={view} labels={{...DEFAULT_UI_LABELS,dockAppearance:appearance}} tileOrder={['lab','settings','patients','contacts','summary','appointments']} currentUser={user} onNavigate={()=>{}} />);
     }
-    export const renderControls = value => renderToStaticMarkup(<DockAppearanceControls value={value} onChange={()=>{}} />);
+    export const renderControls = (value, mode = 'mobile') => renderToStaticMarkup(<DockAppearanceControls value={value} mode={mode} onChange={()=>{}} />);
     export const renderPreview = (appearance, mode) => renderToStaticMarkup(<ContentPreview draft={{labels:{...DEFAULT_UI_LABELS,dockAppearance:appearance},tileOrder:[]}} clinicName='عيادة تجريبية' mode={mode} onModeChange={()=>{}} />);
     export const renderContent = appearance => renderToStaticMarkup(<ToastAndConfirmProvider><ContentLayout labels={{...DEFAULT_UI_LABELS,dockAppearance:appearance}} tileOrder={[]} clinicName='عيادة تجريبية' onSaveContent={()=>{}} /></ToastAndConfirmProvider>);
     export const contentComponent = ContentLayout;
   ` }, bundle: true, write: false, format: 'cjs', platform: 'node', packages: 'external', loader: { '.css': 'empty' }, logLevel: 'silent',
 });
-const compiled = { exports: {} as { renderDock: (appearance: DockAppearance, restricted?: boolean, view?: string) => string; renderControls: (appearance: DockAppearance) => string; renderPreview: (appearance: DockAppearance, mode: string) => string; renderContent: (appearance: DockAppearance) => string; contentComponent: (props: any) => any } };
+const compiled = { exports: {} as { renderDock: (appearance: DockAppearance, restricted?: boolean, view?: string) => string; renderControls: (appearance: DockAppearance, mode?: 'mobile' | 'desktop') => string; renderPreview: (appearance: DockAppearance, mode: string) => string; renderContent: (appearance: DockAppearance) => string; contentComponent: (props: any) => any } };
 new Function('require', 'module', 'exports', built.outputFiles[0].text)(createRequire(import.meta.url), compiled, compiled.exports);
 
 test('real dock applies custom size, labels and count while preserving accessible names and active patient/lab aliases', () => {
   const markup = compiled.exports.renderDock({ size: 'large', showLabels: false, mobileVisibleCount: 3 });
   assert.match(markup, /data-dock-size="large" data-show-labels="false"/);
-  assert.equal((markup.match(/clinic-dock-desktop/g) || []).length, 4);
+  const mobile = markup.match(/class="clinic-dock-mobile-set"([\s\S]*?)<\/div><div class="clinic-dock-web-set"/)![1];
+  const desktop = markup.match(/class="clinic-dock-web-set"([\s\S]*?)<\/div><\/nav>/)![1];
+  assert.equal((mobile.match(/<button /g) || []).length, 4); // 3 direct + More
+  assert.equal((desktop.match(/<button /g) || []).length, 7);
   assert.match(markup, /aria-label="المزيد من الأقسام"/);
   assert.match(markup, /aria-current="page" title="التركيبات" aria-label="التركيبات"/);
   const patientFile = compiled.exports.renderDock(DEFAULT_DOCK_APPEARANCE, false, 'patient-file');
   assert.match(patientFile, /aria-current="page" title="المرضى" aria-label="المرضى"/);
-  assert.equal((patientFile.match(/clinic-dock-desktop/g) || []).length, 3);
+  assert.equal((patientFile.match(/class="clinic-dock-mobile-set"([\s\S]*?)<\/div><div class="clinic-dock-web-set"/)![1].match(/<button /g) || []).length, 5);
   const restricted = compiled.exports.renderDock(DEFAULT_DOCK_APPEARANCE, true);
   assert.doesNotMatch(restricted, /clinic-dock-more|title="المرضى"|title="الإعدادات"|title="التركيبات"|title="الماليات"/);
   assert.match(restricted, /aria-label="المواعيد"/);
+});
+
+test('real dock has one responsive navigation landmark, independent visual settings and matching DOM order for keyboard use', () => {
+  const desktopOrder = ['appointments', 'contacts', 'patients', 'settings', 'summary', 'lab'];
+  const markup = compiled.exports.renderDock({ ...DEFAULT_DOCK_APPEARANCE, size: 'compact', showLabels: false, desktop: { size: 'large', showLabels: true, order: desktopOrder } });
+  assert.equal((markup.match(/<nav /g) || []).length, 1);
+  assert.match(markup, /data-dock-size="compact" data-show-labels="false" data-desktop-dock-size="large" data-desktop-show-labels="true"/);
+  const mobile = markup.match(/class="clinic-dock-mobile-set"([\s\S]*?)<\/div><div class="clinic-dock-web-set"/)![1];
+  const desktop = markup.match(/class="clinic-dock-web-set"([\s\S]*?)<\/div><\/nav>/)![1];
+  assert.ok(mobile.indexOf('title="التركيبات"') < mobile.indexOf('title="المواعيد"') || !mobile.includes('title="المواعيد"'));
+  assert.ok(desktop.indexOf('title="الرئيسية"') < desktop.indexOf('title="المواعيد"'));
+  assert.ok(desktop.indexOf('title="المواعيد"') < desktop.indexOf('title="جهات الاتصال"'));
+  assert.ok(desktop.indexOf('title="جهات الاتصال"') < desktop.indexOf('title="المرضى"'));
+  assert.doesNotMatch(desktop, /المزيد من الأقسام/);
+  const css = readFileSync(resolve(root, 'src/components/navigation/dockAppearance.css'), 'utf8');
+  assert.match(css, /\.clinic-dock-web-set \{ display: none; \}/);
+  assert.match(css, /@media \(min-width: 768px\)[\s\S]*\.clinic-dock-mobile-set \{ display: none; \}[\s\S]*\.clinic-dock-web-set \{ display: contents; \}/);
+  assert.match(css, /data-desktop-show-labels='false'/);
+  assert.doesNotMatch(css, /\border\s*:/); // Visual order must not disagree with Tab order.
 });
 
 test('real appearance controls expose selected size, checked label toggle and both bounded mobile choices', () => {
@@ -151,6 +205,20 @@ test('real appearance controls expose selected size, checked label toggle and bo
   assert.equal((markup.match(/aria-pressed="true"/g) || []).length, 2);
   assert.match(markup, /type="checkbox" checked=""/);
   for (const text of ['مدمج', 'متوازن', 'كبير', '٣ أقسام + المزيد', '٤ أقسام + المزيد', 'هذا المتصفح']) assert.ok(markup.includes(text), text);
+});
+
+test('desktop appearance editor excludes mobile-only count/More choices and previews only its own settings', () => {
+  const appearance: DockAppearance = { ...DEFAULT_DOCK_APPEARANCE, size: 'compact', showLabels: false,
+    desktop: { size: 'large', showLabels: true, order: ['settings', 'lab', 'patients', 'contacts', 'appointments', 'summary'] } };
+  const controls = compiled.exports.renderControls(appearance, 'desktop');
+  assert.match(controls, /حجم شريط الكمبيوتر/);
+  assert.doesNotMatch(controls, /cl-count-choices|الاختيارات المباشرة على الموبايل|٣ أقسام \+ المزيد/);
+  const mobile = compiled.exports.renderPreview(appearance, 'mobile');
+  const desktop = compiled.exports.renderPreview(appearance, 'desktop');
+  assert.match(mobile, /class="cl-demo-dock" data-dock-size="compact" data-show-labels="false"/);
+  assert.match(desktop, /class="cl-demo-dock" data-dock-size="large" data-show-labels="true"/);
+  const desktopDock = desktop.match(/class="cl-demo-dock"([\s\S]*?)<\/div>/)![1];
+  assert.ok(desktopDock.indexOf('aria-label="الإعدادات"') < desktopDock.indexOf('aria-label="المرضى"'));
 });
 
 test('real dock keeps desktop links and only the mobile preview moves configured links to More', () => {
@@ -205,6 +273,35 @@ test('real content placement and rename callbacks keep drafts local until save a
     all(tree).find(node => node.props['aria-label'] === 'ملفات العيادة: في الشريط').props.onClick();
     tree = render(); await tree.props.onSubmit({ preventDefault() {} });
     assert.deepEqual(saved[1].labels.dockAppearance.moreSections, []);
+    tree = render();
+    all(tree).find(node => node.props['aria-label'] === 'تعديل شريط الكمبيوتر').props.onClick();
+    tree = render();
+    assert.ok(!all(tree).some(node => node.props['aria-label'] === 'ملفات العيادة: داخل المزيد'));
+    all(tree).find(node => node.props['aria-label'] === 'تقديم التركيبات في الترتيب').props.onClick();
+    tree = render();
+    await tree.props.onSubmit({ preventDefault() {} });
+    assert.deepEqual(saved[2].tileOrder, props.tileOrder);
+    assert.deepEqual(saved[2].labels.dockAppearance.desktop.order, ['patients', 'contacts', 'lab', 'appointments', 'summary', 'settings']);
+    tree = render();
+    all(tree).find(node => node.props.role === 'tab' && node.props.id.endsWith('-appearance')).props.onClick();
+    tree = render();
+    const controls = all(tree).find(node => node.props.mode === 'desktop' && typeof node.props.onChange === 'function');
+    assert.ok(controls); controls.props.onChange({ ...controls.props.value, size: 'large', showLabels: false });
+    assert.equal(saved.length, 3);
+    tree = render(); await tree.props.onSubmit({ preventDefault() {} });
+    assert.equal(saved[3].labels.dockAppearance.desktop.size, 'large'); assert.equal(saved[3].labels.dockAppearance.desktop.showLabels, false);
+    assert.equal(saved[3].labels.dockAppearance.size, 'comfortable'); assert.equal(saved[3].labels.dockAppearance.showLabels, true);
+    assert.deepEqual(saved[3].tileOrder, props.tileOrder);
+    assert.deepEqual(saved[3].labels.dockAppearance.moreSections, []);
+    tree = render();
+    all(tree).find(node => node.props['aria-label'] === 'تعديل شريط الموبايل').props.onClick();
+    tree = render();
+    const mobileControls = all(tree).find(node => node.props.mode === 'mobile' && typeof node.props.onChange === 'function');
+    mobileControls.props.onChange({ ...mobileControls.props.value, size: 'compact', showLabels: false });
+    tree = render(); await tree.props.onSubmit({ preventDefault() {} });
+    assert.deepEqual(saved[4].labels.dockAppearance.desktop, saved[3].labels.dockAppearance.desktop);
+    assert.equal(saved[4].labels.dockAppearance.size, 'compact'); assert.equal(saved[4].labels.dockAppearance.showLabels, false);
+    assert.equal(saved[4].labels.navigationLabels.patients, 'ملفات العيادة');
   } finally { internals.H = previous; }
 });
 

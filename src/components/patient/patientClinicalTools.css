@@ -34,9 +34,26 @@
 .tooth-chart button:focus-visible, .rx-workspace :is(button, input, select, textarea, summary):focus-visible { outline: 3px solid #0f766e; outline-offset: 3px; }
 .rx-workspace { display: grid; gap: 1rem; font-size: .875rem; }
 .rx-workspace-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .65rem; }
+.rx-toolbar-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.rx-toolbar-actions > button { flex: 1 1 10rem; }
 .rx-workspace-tabs { flex: 1 1 19rem; max-width: 28rem; }
 .rx-secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 44px; padding: .55rem .8rem; border: 1px solid #cbd5e1; border-radius: .7rem; background: #fff; color: #475569; font-size: .8rem; font-weight: 800; }
 .rx-secondary-button svg { width: 1rem; height: 1rem; flex-shrink: 0; }
+.rx-primary-button { display: inline-flex; align-items: center; justify-content: center; gap: .55rem; width: 100%; min-height: 48px; padding: .65rem .9rem; border: 1px solid #0f766e; border-radius: .8rem; background: #0f766e; color: #fff; font-size: .9rem; font-weight: 800; transition: background-color 140ms ease; }
+.rx-primary-button:hover:not(:disabled) { background: #115e59; }
+.rx-primary-button:disabled { opacity: .6; cursor: not-allowed; }
+.rx-primary-button svg { width: 1.15rem; height: 1.15rem; flex-shrink: 0; }
+.rx-image-workflow { display: grid; gap: .65rem; padding: .85rem; border: 1px solid #b7d9cd; border-radius: 1rem; background: #f0faf5; }
+.rx-image-workflow-title { display: flex; align-items: flex-start; gap: .55rem; min-width: 0; color: #115e59; }
+.rx-image-workflow-title > svg { width: 1.25rem; height: 1.25rem; margin-top: .15rem; flex-shrink: 0; }
+.rx-image-workflow-title > div { min-width: 0; }
+.rx-image-workflow-title strong { display: block; font-size: .88rem; line-height: 1.8; }
+.rx-image-workflow :is(p, small) { margin: 0; font-size: .76rem; line-height: 1.9; color: #475569; overflow-wrap: anywhere; }
+.rx-text-alternative { flex: 1 1 10rem; min-width: 0; }
+.rx-text-alternative summary { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: .55rem .8rem; border: 1px solid #e2e8f0; border-radius: .7rem; color: #64748b; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.rx-text-alternative summary::after { content: '+'; margin-inline-start: .5rem; }
+.rx-text-alternative[open] summary::after { content: '−'; }
+.rx-text-alternative > button { width: 100%; margin-top: .4rem; }
 .rx-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 1rem; }
 .rx-composer, .rx-preview-section { display: grid; min-width: 0; gap: .85rem; }
 .rx-draft-note { margin: 0; padding: .7rem .85rem; border-inline-start: 3px solid #0f766e; border-radius: .4rem; color: #475569; background: #f0fdfa; font-size: .78rem; line-height: 1.9; }
@@ -67,7 +84,8 @@
 .rx-remove-drug svg { width: 1rem; height: 1rem; }
 .rx-dose-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; margin-top: .55rem; }
 .rx-doctor-notes { display: grid; gap: .75rem; }
-.rx-preview-heading { display: grid; gap: .65rem; }
+.rx-preview-heading { display: grid; gap: .65rem; scroll-margin-block-start: 1rem; border-radius: .85rem; }
+.rx-preview-heading:focus { outline: 2px solid #0f766e; outline-offset: 4px; }
 .rx-output-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .rx-output-actions button { flex: 1 1 10rem; justify-content: center; }
 .rx-paper-viewport { position: relative; width: 100%; min-width: 0; overflow: hidden; border: 1px solid #e2e8f0; border-radius: 1rem; background: #fff; }
@@ -96,7 +114,7 @@
   body:has(#printable-prescription) #root { visibility: hidden; }
   #printable-prescription, #printable-prescription * { visibility: visible; }
   .rx-workspace { display: block; container-type: normal; }
-  .rx-workspace-toolbar, .rx-composer, .rx-preview-heading, .rx-template-editor, .rx-instructions { display: none !important; }
+  .rx-workspace-toolbar, .rx-composer, .rx-preview-heading, .rx-template-editor, .rx-instructions, .rx-image-ready { display: none !important; }
   .rx-layout, .rx-preview-section { display: block; }
   .rx-paper-scale { transform: none !important; margin: 0 !important; }
   #printable-prescription-wrapper { position: absolute !important; height: auto !important; min-height: 210mm; overflow: visible !important; }

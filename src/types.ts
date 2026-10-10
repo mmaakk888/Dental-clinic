@@ -301,13 +301,22 @@ export interface ThemeSettings {
   customFontUrl?: string;
 }
 
+export interface DesktopDockAppearance {
+  size: 'compact' | 'comfortable' | 'large';
+  showLabels: boolean;
+  /** Home is pinned first; legacy configurations inherit the mobile order. */
+  order: string[];
+}
+
 export interface DockAppearance {
   size: 'compact' | 'comfortable' | 'large';
   showLabels: boolean;
   /** Direct mobile links, excluding the More button. Permissions are filtered first. */
   mobileVisibleCount: 3 | 4;
-  /** Explicit More placement on every screen; home is always direct. */
+  /** Explicit More placement on mobile only; home is always direct. */
   moreSections?: string[];
+  /** Optional independent desktop settings; missing values retain legacy behavior. */
+  desktop?: DesktopDockAppearance;
 }
 
 export type HomeSectionKey = 'actions' | 'metrics' | 'schedule' | 'followUp';
