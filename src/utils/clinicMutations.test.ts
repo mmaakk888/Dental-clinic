@@ -34,11 +34,22 @@ test('editing requires explicit existing identity and preserves financial histor
 test('import retains full session/receipt history and rejects canonical duplicate numbers without partial changes', () => {
   const original = [patient()]; const imported = { ...patient(), id: '٤٠٢', name: 'ملف مستورد' };
   const next = importPatientRecords(original, [imported]);
-  assert.equal(next[0].id, '402');
+  assert.equal(next[0].id, imported.id);
   assert.deepEqual(next[0].sessions, imported.sessions); assert.deepEqual(next[0].payments, imported.payments);
   assert.equal(original.length, 1);
   assert.throws(() => importPatientRecords(original, [imported, { ...patient(), id: '٤٠١' }]), /لم يبدأ الاستيراد/);
   assert.throws(() => importPatientRecords(original, [imported, { ...imported, id: '۴۰۲' }]), /لم يبدأ الاستيراد/);
+});
+
+test('historical imports keep source file identities, phone formatting and financial history unchanged', () => {
+  for (const id of ['٠٠٤٠٢', '۰۰۴۰۲', 'ملف-٤٠٢']) {
+    const imported = { ...patient(), id, mobile: '٠١٠ ٠٠٠٠ ٠٠٠٠' };
+    const before = structuredClone(imported);
+    const result = importPatientRecords([], [imported]);
+    assert.deepEqual(result[0], before);
+    assert.deepEqual(imported, before);
+  }
+  assert.throws(() => importPatientRecords([{ ...patient(), id: '٠٠٤٠٢' }], [{ ...patient(), id: '۰۰۴۰۲' }]), /لم يبدأ الاستيراد/);
 });
 
 test('patient deletion removes both appointment identity aliases and preserves unrelated domain records', () => {
@@ -153,6 +164,28 @@ test('cent-valued receipts are not rejected due to floating-point balance residu
   const before = patient();
   before.sessions[0] = { ...session(), amount: 0.3, paid: 0.1, remain: 0.2, paymentsLog: [{ id: 'decimal-prior', date: '2026-10-06', amount: 0.1 }] };
   const after = addPatientReceipt([before], before.id, 's1', { id: 'decimal-settle', date: '2026-10-06', amount: 0.2 })[0];
+  assert.equal(after.sessions[0].remain, 0);
+});
+
+test('patient receipt boundaries reject sub-cent cash, invalid dates and reserved legacy identities without modifying history', () => {
+  const before = patient(), original = structuredClone(before);
+  for (const amount of [0.001, 1.999, Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => addPatientReceipt([before], before.id, 's1', { id: 'invalid-money', date: '2026-10-06', amount }));
+  }
+  for (const date of ['', '2026-02-30', '2026-13-01', '2026-10-6']) {
+    assert.throws(() => addPatientReceipt([before], before.id, 's1', { id: 'invalid-date', date, amount: 1 }), /تاريخًا صحيحًا/);
+  }
+  assert.deepEqual(before, original);
+  const legacy = { ...patient(), sessions: [{ ...session(), paymentsLog: [] }] };
+  assert.throws(() => addPatientReceipt([legacy], legacy.id, 's1', { id: 'legacy_s1', date: '2026-10-06', amount: 1 }), /معرّف إيصال/);
+  assert.deepEqual(legacy.sessions[0].paymentsLog, []);
+});
+
+test('new computed cash residue is canonicalized to the same cent amount before the debt comparison', () => {
+  const before = { ...patient(), sessions: [{ ...session(), amount: 0.3, paid: 0, remain: 0.3, paymentsLog: [] }] };
+  const after = addPatientReceipt([before], before.id, 's1', { id: 'computed-sum', date: '2026-10-06', amount: 0.1 + 0.2 })[0];
+  assert.equal(after.sessions[0].paymentsLog[0].amount, 0.3);
+  assert.equal(after.sessions[0].paid, 0.3);
   assert.equal(after.sessions[0].remain, 0);
 });
 

@@ -1,6 +1,6 @@
 import type { Appointment, Patient, Session } from '../types';
 import type { ClinicDomainData } from './storage';
-import { appendSessionReceipt } from './financials';
+import { appendSessionReceipt, financialMoneyCents } from './financials';
 import { getPatientSessionReceiptLimit } from './patientCollection';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
 
@@ -38,7 +38,7 @@ export function importPatientRecords(patients: Patient[], imported: Patient[]): 
     const id = canonicalFileNumber(patient.id);
     if (!id || ids.has(id)) throw new Error(`رقم الملف (${id}) موجود بالفعل؛ لم يبدأ الاستيراد.`);
     ids.add(id);
-    return { ...patient, id };
+    return { ...patient };
   });
   return [...additions, ...patients];
 }
@@ -78,12 +78,14 @@ export function addPatientReceipt(patients: Patient[], patientId: string, sessio
   const session = patient?.sessions.find(record => record.id === sessionId);
   if (!patient || !session) throw new Error('الخدمة المطلوب سدادها غير موجودة.');
   const remaining = getPatientSessionReceiptLimit(patient, session);
-  if (!Number.isFinite(receipt.amount) || receipt.amount <= 0 || receipt.amount > remaining) throw new Error('الدفعة أكبر من المستحق الحالي أو غير صالحة. راجع حساب المريض ثم أعد المحاولة.');
+  if (!Number.isFinite(receipt.amount) || receipt.amount <= 0) throw new Error('الدفعة أكبر من المستحق الحالي أو غير صالحة. راجع حساب المريض ثم أعد المحاولة.');
+  const amount = financialMoneyCents(receipt.amount) / 100;
+  if (amount <= 0 || amount > remaining) throw new Error('الدفعة أكبر من المستحق الحالي أو غير صالحة. راجع حساب المريض ثم أعد المحاولة.');
   if (!receipt.id || patient.sessions.some(item => item.paymentsLog?.some(payment => payment.id === receipt.id)) || patient.payments?.some(payment => payment.id === receipt.id)) {
     throw new Error('معرّف إيصال التحصيل مستخدم بالفعل. لم تُسجل دفعة مكررة.');
   }
   return patients.map(record => record.id !== patientId ? record : { ...record,
-    sessions: record.sessions.map(item => item.id === sessionId ? appendSessionReceipt(item, receipt) : item) });
+    sessions: record.sessions.map(item => item.id === sessionId ? appendSessionReceipt(item, { ...receipt, amount }) : item) });
 }
 
 /** A scheduling edit must preserve status changes and reminder history from other tabs. */

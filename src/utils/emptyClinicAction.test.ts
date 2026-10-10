@@ -24,6 +24,7 @@ type SyntheticAccount = { id: string; role: string };
 type Call = { name: string; args: unknown[] };
 const clearedViews: Record<string, unknown> = {
   setLabs: [],
+  setProstheticRouting: { defaultLabs: {}, overrides: [] },
   setSelectedPatientId: null,
   setLabPricingTarget: undefined,
   setEndoPatientName: '',
@@ -65,6 +66,10 @@ function createHarness(options: { currentUser?: SyntheticAccount; users?: Synthe
       clearOperationalDataConfirmed: () => {
         record('clearOperationalDataConfirmed')();
         if (options.clearError) throw options.clearError;
+      },
+      getProstheticRouting: () => {
+        record('getProstheticRouting')();
+        return { defaultLabs: {}, overrides: [] };
       },
       resetAll: record('forbidden-resetAll'),
     },

@@ -1,5 +1,5 @@
 import { LabCase, Patient } from '../types';
-import { getPatientFinancialSummary, getSessionCollected } from './financials';
+import { getPatientFinancialSummary, getSessionCollected, sumFinancialAmounts } from './financials';
 
 /** Supplier cash writes use integer piastres, accepting only negligible binary
  * residue from addition, never silently rounding a user-entered sub-cent amount. */
@@ -20,12 +20,12 @@ export function getLabCaseFinancials(item: LabCase, patients: Patient[]) {
   const paid = Math.max(0, item.labPaid);
   return {
     linked: Boolean(session),
-    patientTotal: session && Number.isFinite(session.amount) ? Math.max(0, session.amount - (session.discount || 0)) : null,
+    patientTotal: session && Number.isFinite(session.amount) ? Math.max(0, sumFinancialAmounts([session.amount, -(session.discount || 0)])) : null,
     patientFileRemaining: patient ? getPatientFinancialSummary(patient).totalRemaining : null,
     collected,
-    reserved: Math.max(0, Math.min(collected, cost) - paid),
-    remaining: Math.max(0, cost - paid),
-    availableToClinic: Math.max(0, collected - cost),
+    reserved: Math.max(0, sumFinancialAmounts([Math.min(collected, cost), -paid])),
+    remaining: Math.max(0, sumFinancialAmounts([cost, -paid])),
+    availableToClinic: Math.max(0, sumFinancialAmounts([collected, -cost])),
   };
 }
 

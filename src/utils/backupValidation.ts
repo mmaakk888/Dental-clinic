@@ -60,7 +60,9 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     seen.add(value);
     if (Array.isArray(value)) {
       if (value.length > MAX_ROWS) { fail(path, 'عدد السجلات يتجاوز ٥٠ ألفًا'); seen.delete(value); return []; }
-      const result = value.map((entry, index) => cloneJson(entry, `${path}[${index}]`, depth + 1));
+      // Array.map skips holes, but JSON.stringify turns them into null. Visit
+      // every slot so an accepted in-memory snapshot is actually restorable.
+      const result = Array.from({ length: value.length }, (_, index) => cloneJson(value[index], `${path}[${index}]`, depth + 1));
       seen.delete(value); return result;
     }
     const result: RecordValue = {};
@@ -104,7 +106,14 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     if (typeof record[key] !== 'string' || !isValidAppointmentDate(record[key])) fail(`${path}.${key}`);
   };
   const timestamp = (record: RecordValue, key: string, path: string) => {
-    if (record[key] !== undefined && (typeof record[key] !== 'string' || record[key].length > 100 || !Number.isFinite(Date.parse(record[key])))) fail(`${path}.${key}`);
+    if (record[key] === undefined) return;
+    const value = record[key];
+    // Date.parse alone accepts February 31, 24:00 and even strings such as
+    // "1". Keep valid legacy date-only values, but never normalize a receipt's
+    // invalid recorded/voided date into a different day without telling its owner.
+    const match = typeof value === 'string' && value.length <= 100
+      ? /^(\d{4}-\d{2}-\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?)?$/i.exec(value) : null;
+    if (!match || !isValidAppointmentDate(match[1]) || !Number.isFinite(Date.parse(value))) fail(`${path}.${key}`);
   };
   const list = (record: RecordValue, key: string, path: string, validator: (row: RecordValue, path: string) => void, options: { required?: boolean; defaults?: boolean; limit?: number; uniqueId?: boolean } = {}) => {
     if (record[key] === undefined && options.defaults) record[key] = [];

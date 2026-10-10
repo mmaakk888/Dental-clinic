@@ -20,6 +20,32 @@ export function mergeExpenseUpdate(existing: Expense, update: Partial<Expense>):
   return { ...existing, ...update, id: existing.id };
 }
 
+export function isExpenseInvoiceTotalLocked(expense: Expense): boolean {
+  return Boolean(expense.items?.length) || expense.subtotal !== undefined
+    || expense.tax !== undefined || expense.discount !== undefined
+    || expense.paidAmount !== undefined || expense.remainingAmount !== undefined
+    || expense.paymentMethod === 'credit' || expense.paymentMethod === 'deferred';
+}
+
+const basicExpenseFields = ['title', 'category', 'expenseType', 'amount', 'date', 'note',
+  'isFixed', 'recurringPeriod', 'invoiceImageUrl', 'invoiceDate'] as const;
+
+/** Basic edits never submit an old invoice ledger over the freshly read one. */
+export function prepareBasicExpenseUpdate(existing: Expense, update: Partial<Expense>, baseline?: Expense): Expense {
+  if (!baseline || baseline.id !== existing.id || update.id !== existing.id) {
+    throw new Error('أعد فتح المصروف قبل تعديله لمراجعة أحدث البيانات.');
+  }
+  if (basicExpenseFields.some(field => baseline[field] !== existing[field])) {
+    throw new Error('تغيّرت بيانات المصروف أثناء التعديل. المسودة لم تُحذف؛ أعد فتح المصروف لمراجعة أحدث البيانات.');
+  }
+  if (isExpenseInvoiceTotalLocked(existing) && update.amount !== undefined && update.amount !== existing.amount) {
+    throw new Error('إجمالي الفاتورة مرتبط بالأصناف والمدفوعات، ولا يمكن تغييره من نموذج البيانات الأساسية.');
+  }
+  const changes = Object.fromEntries(basicExpenseFields.filter(field => Object.hasOwn(update, field))
+    .map(field => [field, update[field]]));
+  return { ...existing, ...changes, id: existing.id };
+}
+
 const invoiceKey = (value: string | undefined) => (value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 
 /** A supplier may reuse another supplier's invoice number, but not its own. */

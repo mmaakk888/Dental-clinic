@@ -3,6 +3,7 @@ import { canonicalFileNumber } from './clinicMutations';
 import { getClinicalServicePrice, getServiceGroup, normalizeServiceName } from './serviceCatalog';
 import { getToothLabel, PEDIATRIC_LETTERS, QUADRANTS } from './toothUtils';
 import { getNextPatientFileNo } from './patientRegistration';
+import { financialMoneyCents } from './financials';
 
 export function getWalkInServiceOptions(serviceTypes: readonly string[] = [], clinicalPrices: Record<string, number> = {}) {
   const seen = new Set<string>();
@@ -34,9 +35,16 @@ export function nextWalkInFileNumber(patients: readonly Pick<Patient, 'id'>[]): 
 
 export function validateWalkInAmounts(examinationFee: number, services: readonly SessionServiceItem[], paid: number, discount: number): string | null {
   if ([examinationFee, paid, discount, ...services.map(item => item.price)].some(value => !Number.isFinite(value) || value < 0)) return 'أدخل مبالغ صحيحة لا تقل عن صفر.';
+  let totalCents: number, paidCents: number, discountCents: number;
+  try {
+    totalCents = financialMoneyCents(examinationFee) + services.reduce((sum, item) => sum + financialMoneyCents(item.price), 0);
+    paidCents = financialMoneyCents(paid); discountCents = financialMoneyCents(discount);
+  } catch {
+    return 'أدخل مبالغ صحيحة بمنزلتين عشريتين على الأكثر.';
+  }
   if (services.some(item => !item.name.trim())) return 'اكتب اسم كل خدمة أو احذف السطر الفارغ.';
   if (services.some(item => item.tooth !== undefined && item.tooth !== null && (typeof item.tooth !== 'string' || !/^(?:ur|ul|lr|ll)(?:[1-8]|[A-E])$/.test(item.tooth)))) return 'اختَر سنًا صحيحًا لكل خدمة، أو اترك تحديد السن فارغًا.';
-  const total = examinationFee + services.reduce((sum, item) => sum + item.price, 0);
-  if (!Number.isFinite(total) || paid + discount > total + 0.000001) return 'الدفعة والخصم أكبر من إجمالي الزيارة. راجع المبالغ.';
+  if (!Number.isSafeInteger(totalCents) || !Number.isSafeInteger(paidCents + discountCents)
+    || paidCents + discountCents > totalCents) return 'الدفعة والخصم أكبر من إجمالي الزيارة. راجع المبالغ.';
   return null;
 }

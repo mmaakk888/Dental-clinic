@@ -49,6 +49,8 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const [patientMode, setPatientMode] = useState<'existing' | 'new'>('existing');
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
+  const patientSearch = useRef({ query, deferredQuery, patients, isOpen });
+  patientSearch.current = { query, deferredQuery, patients, isOpen };
   const [selectedId, setSelectedId] = useState('');
   const searchIndex = useMemo(() => buildHomePatientSearch(patients), [patients]);
   const results = useMemo(() => searchHomePatients(searchIndex, deferredQuery, deferredQuery.trim() ? 8 : 4, true), [searchIndex, deferredQuery]);
@@ -83,6 +85,13 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const total = exam + treatment;
   const remaining = Math.max(0, total - paid - discount);
   const updateService = (id: string, patch: Partial<SessionServiceItem>) => setServices(previous => previous.map(item => item.id === id ? { ...item, ...patch } : item));
+  const selectSearchPatient = (id: string, resultQuery: string) => {
+    const current = patientSearch.current;
+    if (committingRef.current || !current.isOpen || current.query !== current.deferredQuery
+      || current.query !== resultQuery
+      || !current.patients.some(patient => patient.id === id)) return;
+    setSelectedId(id);
+  };
   const addService = (name = '', price?: number) => {
     if (committingRef.current) return;
     const id = crypto.randomUUID();
@@ -116,7 +125,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
           services: services.map(({ tooth, ...item }) => ({ ...item, name: item.name.trim(), ...(tooth ? { tooth } : {}) })), prescriptionNotes: prescriptionNotes.trim(), visitNotes: visitNotes.trim(), visitStatus,
           examinationFee: exam, treatmentFee: treatment, totalFee: total, paidAmount: paid, discountAmount: discount, paymentMethod: 'cash', isPaid: remaining === 0,
         } });
-      }, () => { showToast('تم حفظ الزيارة والدفعة المسجلة ضمن تحصيل اليوم.', 'success'); onClose(); });
+      }, () => { showToast(paid > 0 ? 'تم حفظ الزيارة والدفعة المسجلة ضمن تحصيل اليوم.' : 'تم حفظ الزيارة دون تسجيل دفعة.', 'success'); onClose(); });
     } finally { committingRef.current = false; }
   };
 
@@ -132,8 +141,8 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
         <section className="walkin-section"><h4>١. المريض</h4>
           <div className="walkin-mode"><button type="button" aria-pressed={patientMode === 'existing'} onClick={() => setPatientMode('existing')}>مريض مسجل</button><button type="button" aria-pressed={patientMode === 'new'} onClick={() => setPatientMode('new')}>مريض جديد</button></div>
           {patientMode === 'existing' ? selectedPatient ? <div className="flex items-center justify-between gap-3 flex-wrap"><div><strong className="block">{selectedPatient.name}</strong><small className="text-slate-500">ملف <bdi>#{selectedPatient.id}</bdi> · <bdi>{selectedPatient.mobile}</bdi></small></div><button type="button" className="clinic-action-cancel" onClick={() => setSelectedId('')}>تغيير المريض</button></div> : <>
-            <label>ابحث بالاسم أو رقم الملف أو الهاتف<input data-dialog-autofocus value={query} onChange={event => setQuery(event.target.value)} placeholder="اسم المريض، #رقم الملف أو الهاتف" autoComplete="off" /></label>
-            <div className="walkin-results" aria-busy={query !== deferredQuery}>{results.map(item => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)}><strong>{item.name} <bdi>#{item.id}</bdi></strong><small><bdi>{item.mobile}</bdi></small></button>)}{!results.length && <p className="p-3 text-sm text-slate-500">لا يوجد ملف مطابق. يمكنك اختيار «مريض جديد».</p>}</div>
+            <label>ابحث بالاسم أو رقم الملف أو الهاتف<input data-dialog-autofocus value={query} onChange={event => { patientSearch.current.query = event.target.value; setQuery(event.target.value); }} placeholder="اسم المريض، #رقم الملف أو الهاتف" autoComplete="off" /></label>
+            <div className="walkin-results" aria-busy={query !== deferredQuery}>{results.map(item => <button type="button" key={item.id} disabled={query !== deferredQuery} onClick={() => selectSearchPatient(item.id, deferredQuery)}><strong>{item.name} <bdi>#{item.id}</bdi></strong><small><bdi>{item.mobile}</bdi></small></button>)}{!results.length && <p className="p-3 text-sm text-slate-500">لا يوجد ملف مطابق. يمكنك اختيار «مريض جديد».</p>}</div>
           </> : <div className="walkin-grid">
             <label>اسم المريض<input value={name} onChange={event => setName(event.target.value)} required autoComplete="name" /></label>
             <label>رقم الهاتف<input type="tel" value={mobile} onChange={event => setMobile(event.target.value)} required autoComplete="tel" placeholder="01xxxxxxxxx" /></label>

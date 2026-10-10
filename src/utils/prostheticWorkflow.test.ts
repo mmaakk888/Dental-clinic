@@ -303,6 +303,22 @@ test('later patient receipts update the linked account from its source session w
   assert.equal(getLinkedPatientAccount({ ...item, patientId: 'missing' }, updated), null);
 });
 
+test('linked account uses exact cent totals and preserves imported fractional history rather than rounding it', () => {
+  const result = create(), item = result.labCases[0], session = result.patients[0].sessions[0];
+  Object.assign(session, { amount: 0.8, discount: 0.1, paid: 0.7, paymentsLog: [
+    { id: 'test-cent-first', amount: 0.3, date: '2026-10-10' }, { id: 'test-cent-second', amount: 0.4, date: '2026-10-11' },
+  ] });
+  const before = structuredClone(result), account = getLinkedPatientAccount(item, result)!;
+  assert.equal(account.total, 0.7);
+  assert.equal(account.paid, 0.7);
+  assert.equal(account.remaining, 0);
+  assert.deepEqual(result, before);
+  session.amount = 1.234; session.discount = 0.001;
+  assert.equal(getLinkedPatientAccount(item, result)!.total, 1.234 - 0.001);
+  assert.equal(session.amount, 1.234);
+  assert.equal(session.discount, 0.001);
+});
+
 test('patient-side session and services never contain supplier identity, private laboratory cost or profit', () => {
   const result = create(), session = result.patients[0].sessions[0];
   const forbidden = ['lab', 'labId', 'labName', 'labServiceId', 'labTotal', 'labPaid', 'labCost', 'cost', 'profit', 'creationFingerprint'];

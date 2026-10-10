@@ -26,9 +26,9 @@ import type { RBACAction } from './utils/rbac';
 import { canUserLoginNow, matchesSessionIdentity, matchesRememberedSession } from './utils/accessControl';
 import { allocateLabPayment, labMoneyCents } from './utils/labFinancials';
 import { prepareLabMetadataSave, prepareLabPricingSave, mergeLabCaseWorkflowUpdate, assertLabCaseSessionLink } from './utils/labManagement';
-import { mergeExpenseUpdate, assertUniqueSupplierInvoice } from './utils/expenseUtils';
+import { prepareBasicExpenseUpdate, assertUniqueSupplierInvoice } from './utils/expenseUtils';
 import { getInventory } from './utils/inventory';
-import { appendSessionReceipt } from './utils/financials';
+import { appendSessionReceipt, financialMoneyCents } from './utils/financials';
 import { isValidAppointmentDate, localDateISO } from './components/appointments/appointmentScheduling';
 import { ToastAndConfirmProvider, useToastAndConfirm } from './components/common/ToastAndConfirm';
 import { HeaderNavbar } from './components/common/HeaderNavbar';
@@ -322,15 +322,18 @@ export function AppContent() {
     if (!Number.isFinite(payload.visit.treatmentFee) || !Number.isFinite(payload.visit.totalFee)
       || Math.abs(calculatedTreatmentFee - payload.visit.treatmentFee) > 0.000001
       || Math.abs(payload.visit.examinationFee + calculatedTreatmentFee - payload.visit.totalFee) > 0.000001) throw new Error('إجمالي الزيارة لا يطابق الكشف والخدمات؛ راجع المسودة.');
+    // Each source amount has already passed cent-precision validation. Store
+    // canonical totals, not floating-point residue from their UI aggregation.
+    const treatmentFee = Math.round(calculatedTreatmentFee * 100) / 100;
+    const totalFee = Math.round((payload.visit.examinationFee + treatmentFee) * 100) / 100;
     const visitTeeth = [...new Set(serviceItems.map(service => service.tooth).filter((tooth): tooth is string => !!tooth))];
-    if ([payload.visit.totalFee, payload.visit.paidAmount, payload.visit.discountAmount ?? 0].some(amount => !Number.isFinite(amount) || amount < 0) || payload.visit.paidAmount + (payload.visit.discountAmount ?? 0) > payload.visit.totalFee) throw new Error('راجع مبالغ الزيارة والدفعة والخصم.');
     const todayStr = localDateISO();
     const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
     const sessionId = `s_${crypto.randomUUID()}`;
     const apptId = `a_${crypto.randomUUID()}`;
 
     const discountAmt = payload.visit.discountAmount || 0;
-    const remainBal = Math.max(0, payload.visit.totalFee - payload.visit.paidAmount - discountAmt);
+    const remainBal = (Math.round(totalFee * 100) - Math.round(payload.visit.paidAmount * 100) - Math.round(discountAmt * 100)) / 100;
 
     // 1. Session object
     const newSession: import('./types').Session = {
@@ -339,7 +342,7 @@ export function AppContent() {
       tooth: visitTeeth.length === 1 ? visitTeeth[0] : null,
       teethIds: visitTeeth.length ? visitTeeth : undefined,
       toothLabel: visitTeeth.length ? visitTeeth.map(getToothLabel).join('، ') : undefined,
-      amount: payload.visit.totalFee,
+      amount: totalFee,
       paid: payload.visit.paidAmount,
       discount: discountAmt,
       remain: remainBal,
@@ -353,7 +356,7 @@ export function AppContent() {
       prescriptionNotes: payload.visit.prescriptionNotes,
       visitNotes: payload.visit.visitNotes,
       examinationFee: payload.visit.examinationFee,
-      treatmentFee: payload.visit.treatmentFee,
+      treatmentFee,
       paymentMethod: 'cash',
       isWalkIn: true,
       visitStatus: payload.visit.visitStatus
@@ -626,10 +629,21 @@ export function AppContent() {
 
   const handleSaveSession = (patientId: string, sessionData: Omit<import('./types').Session, 'id'>) => {
     if (sessionData.prosthetic || getServiceGroup(sessionData.type) === 'prosthetic' || sessionData.services?.some(item => getServiceGroup(item.name) === 'prosthetic')) throw new Error('سجّل التركيبة من زر «تركيبة جديدة» لربطها بالمعمل والحساب مرة واحدة.');
-    if (!isValidAppointmentDate(sessionData.date) || !Number.isFinite(sessionData.amount) || sessionData.amount < 0 || !Number.isFinite(sessionData.paid) || sessionData.paid < 0 || !Number.isFinite(sessionData.discount ?? 0) || (sessionData.discount ?? 0) < 0 || (sessionData.discount ?? 0) > sessionData.amount || sessionData.paid > sessionData.amount - (sessionData.discount ?? 0)) throw new Error('راجع تاريخ الخدمة والتكلفة والخصم والدفعة.');
+    const amountCents = financialMoneyCents(sessionData.amount);
+    const paidCents = financialMoneyCents(sessionData.paid);
+    const discountCents = financialMoneyCents(sessionData.discount ?? 0);
+    if (!isValidAppointmentDate(sessionData.date) || discountCents > amountCents || paidCents > amountCents - discountCents) throw new Error('راجع تاريخ الخدمة والتكلفة والخصم والدفعة.');
     const sessionId = `s_${crypto.randomUUID()}`;
     const newSession: import('./types').Session = {
       ...sessionData,
+      amount: amountCents / 100,
+      paid: paidCents / 100,
+      discount: sessionData.discount === undefined ? undefined : discountCents / 100,
+      remain: (amountCents - discountCents - paidCents) / 100,
+      examinationFee: sessionData.examinationFee === undefined ? undefined : financialMoneyCents(sessionData.examinationFee) / 100,
+      treatmentFee: sessionData.treatmentFee === undefined ? undefined : financialMoneyCents(sessionData.treatmentFee) / 100,
+      services: sessionData.services?.map(item => ({ ...item, price: financialMoneyCents(item.price) / 100 })),
+      paymentsLog: sessionData.paymentsLog?.map(receipt => ({ ...receipt, amount: financialMoneyCents(receipt.amount) / 100 })),
       id: sessionId
     };
 
@@ -952,14 +966,14 @@ export function AppContent() {
     setProstheticRouting(cloneProstheticRouting(checked));
   });
 
-  const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }) => {
+  const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }, baseline?: import('./types').Expense) => {
     return commitDomain(['view_expenses'], data => {
     if (Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل تعديل المصروفات.');
     if (!Number.isFinite(expenseData.amount) || expenseData.amount < 0 || !isValidAppointmentDate(expenseData.date) || !expenseData.title?.trim()) throw new Error('راجع اسم المصروف ومبلغه وتاريخه.');
     if (expenseData.id) {
       const current = data.expenses.find(expense => expense.id === expenseData.id);
       if (!current) throw new Error('المصروف لم يعد موجودًا.');
-      const next = mergeExpenseUpdate(current, expenseData);
+      const next = prepareBasicExpenseUpdate(current, expenseData, baseline);
       assertUniqueSupplierInvoice(data.expenses, next);
       return { ...data, expenses: data.expenses.map(e => e.id === next.id ? next : e) };
     } else {
@@ -1136,6 +1150,7 @@ export function AppContent() {
     Storage.clearOperationalDataConfirmed();
     publishDomain({ patients: [], contacts: [], appointments: [], labCases: [], expenses: [], materialUsages: [] });
     setLabs([]);
+    setProstheticRouting(Storage.getProstheticRouting());
     setSelectedPatientId(null); setLabPricingTarget(undefined);
     setEndoPatientName('');
     setIsHomePaymentOpen(false); setIsWalkInModalOpen(false); setIsDailyReportModalOpen(false);

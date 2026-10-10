@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Patient, Session } from '../types';
-import { calculateDailyCollections, getPatientFinancialSummary, appendSessionReceipt } from './financials';
+import { calculateDailyCollections, getPatientFinancialSummary, appendSessionReceipt, getSessionCollected, sumFinancialAmounts, financialMoneyCents } from './financials';
 
 const makeSession = (overrides: Partial<Session> = {}): Session => ({
   id: 'session-1',
@@ -227,4 +227,61 @@ test('disjoint date filters allocate installments at their real position rather 
   assert.equal(report.procedureFeesCollectedByName['الخدمة الأولى'], 0);
   assert.equal(report.procedureFeesCollectedByName['الخدمة الثانية'], 100);
   assert.equal(Object.values(report.procedureFeesCollectedByName).reduce((sum, amount) => sum + amount, 0), 200);
+});
+
+test('patient totals and new receipt balances use cents rather than exposing fractional arithmetic residue', () => {
+  const session = makeSession({ amount: 0.8, discount: 0.1, paid: 0.7, paymentsLog: [
+    { id: 'cent-first', date: '2026-09-20', amount: 0.3 },
+    { id: 'cent-second', date: '2026-09-22', amount: 0.4 },
+  ] });
+  const before = structuredClone(session);
+  assert.equal(getSessionCollected({ ...session, paymentsLog: session.paymentsLog.map((receipt, index) => ({ ...receipt, amount: index ? 0.2 : 0.1 })) }), 0.3);
+  assert.deepEqual(getPatientFinancialSummary(makePatient({ sessions: [session] })), {
+    totalRequired: 0.8, totalCollected: 0.7, totalDiscounts: 0.1, totalRemaining: 0,
+  });
+  const first = { ...session, paymentsLog: [session.paymentsLog[0]] };
+  assert.equal(appendSessionReceipt(first, session.paymentsLog[1]).remain, 0);
+  assert.deepEqual(session, before);
+});
+
+test('daily cent allocations and independent receipt totals do not gain tiny balances or unallocated categories', () => {
+  const session = makeSession({ amount: 0.3, paid: 0.3, examinationFee: 0.1, discount: 0,
+    services: [{ id: 'decimal-service', name: 'خدمة بالقرش', price: 0.2 }], paymentsLog: [
+      { id: 'cent-first', amount: 0.1, date: '2026-09-20', createdAt: '2026-09-20T10:00:00Z' },
+      { id: 'cent-second', amount: 0.2, date: '2026-09-22', createdAt: '2026-09-22T10:00:00Z' },
+    ] });
+  const record = makePatient({ sessions: [session], payments: [
+    { id: 'cent-general', amount: 0.1, date: '2026-09-22', createdAt: '2026-09-22T11:00:00Z' },
+  ] });
+  const report = calculateDailyCollections([record], date => date === '2026-09-22');
+  assert.equal(report.totalIncomeCollected, 0.3);
+  assert.equal(report.cashTotal, 0.3);
+  assert.equal(report.examFeesCollected, 0);
+  assert.equal(report.procedureFeesCollectedByName['خدمة بالقرش'], 0.2);
+  assert.equal(report.procedureFeesCollectedByName['تحصيل غير موزع على خدمة'], undefined);
+  assert.equal(report.rows[0].servicesBreakdown[1].paid, 0.2);
+});
+
+test('financial sums do not rewrite genuinely fractional imported history while new cash rejects sub-cent values', () => {
+  const session = makeSession({ amount: 1.234, discount: 0.001, paid: 0.007, paymentsLog: [
+    { id: 'imported-fraction', date: '2026-09-20', amount: 0.007 },
+  ] });
+  const patient = makePatient({ sessions: [session] }), before = structuredClone(patient);
+  assert.equal(sumFinancialAmounts([0.001, 0.007]), 0.008);
+  assert.equal(sumFinancialAmounts([1e-10]), 1e-10);
+  assert.equal(getSessionCollected(session), 0.007);
+  assert.equal(getPatientFinancialSummary(patient).totalRequired, 1.234);
+  assert.equal(getPatientFinancialSummary(patient).totalCollected, 0.007);
+  assert.deepEqual(patient, before);
+  for (const value of [0.001, 1.234, Number.MAX_SAFE_INTEGER, Infinity, NaN, -1]) assert.throws(() => financialMoneyCents(value));
+  assert.equal(financialMoneyCents(0.1 + 0.2), 30);
+});
+
+test('direct session receipt append rejects duplicate and synthesized legacy receipt IDs before changing a ledger', () => {
+  const session = makeSession(), before = structuredClone(session);
+  assert.throws(() => appendSessionReceipt(session, { id: 'pay-1', amount: 1, date: '2026-09-22' }), /معرّف إيصال/);
+  const legacy = makeSession({ paid: 10, paymentsLog: [] });
+  assert.throws(() => appendSessionReceipt(legacy, { id: `legacy_${legacy.id}`, amount: 1, date: '2026-09-22' }), /معرّف إيصال/);
+  assert.deepEqual(session, before);
+  assert.deepEqual(legacy.paymentsLog, []);
 });

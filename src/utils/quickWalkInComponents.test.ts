@@ -27,7 +27,7 @@ function harness(overrides: Record<string, unknown> = {}) {
   const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
   assert.ok(internals && 'H' in internals);
   const slots: any[] = [], pickerSlots: any[] = [], saved: any[] = [], toasts: string[] = [];
-  let tree: Element, closed = 0;
+  let tree: Element, closed = 0, deferSearch = false;
   const context = { showToast: (message: string) => toasts.push(message) };
   const props = { isOpen: true, patients: [patient], serviceTypes: ['حشو اختبار', 'خدمة مجانية', 'تركيبات - ثابتة'], clinicalPrices: { 'حشو اختبار': 600, 'خدمة مجانية': 0, 'تركيبات - ثابتة': 9000 }, onClose: () => { closed++; }, onSaveWalkInVisit: async (value: any) => { saved.push(value); }, ...overrides };
   const evaluate = (component: (props: any) => any, componentProps: any, slots: any[]) => {
@@ -37,7 +37,7 @@ function harness(overrides: Record<string, unknown> = {}) {
       useRef(initial: any) { const index = cursor++; return slots[index] ||= { current: initial }; },
       useId() { return `synthetic-walkin-${cursor++}`; },
       useMemo(factory: () => any, deps: any[]) { const index = cursor++; if (!slots[index] || deps.some((value, i) => !Object.is(value, slots[index].deps[i]))) slots[index] = { value: factory(), deps }; return slots[index].value; },
-      useDeferredValue(value: any) { cursor++; return value; },
+      useDeferredValue(value: any) { const index = cursor++; slots[index] ||= { value }; if (!deferSearch) slots[index].value = value; return slots[index].value; },
       useEffect() { cursor++; },
       useContext() { return context; },
     };
@@ -61,6 +61,9 @@ function harness(overrides: Record<string, unknown> = {}) {
   };
   render();
   return { render, saved, toasts, find, click, change, addCatalogService, get closed() { return closed; }, get content() { return text(tree); },
+    deferSearch: (value: boolean) => { deferSearch = value; },
+    setProps: (value: Record<string, unknown>) => { Object.assign(props, value); render(); },
+    searchPatient: (value: string, renderNow = true) => { find(item => item.type === 'input' && item.props.placeholder === 'اسم المريض، #رقم الملف أو الهاتف').props.onChange({ target: { value } }); if (renderNow) render(); },
     tooth: (value: string, service = 1) => { find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.onChange(value ? [value] : []); render(); },
     dentition: (value: string, service = 1) => { find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.onDentitionChange(value); render(); },
     toothValue: (service = 1) => find(item => item.props.ariaLabel === `أسنان الخدمة ${service}`).props.value as string[],
@@ -82,12 +85,41 @@ test('quick visit renders only active configured clinical services and starts wi
   assert.match(empty.content, /لا توجد خدمات علاجية في الفهرس/);
 });
 
+test('pending patient search disables old results and rejects retained selections before and after rerender', async () => {
+  const h = harness();
+  const staleSelect = h.find(item => item.type === 'button' && text(item).includes(patient.name)).props.onClick;
+  h.deferSearch(true);
+  h.searchPatient('بحث غير مطابق', false);
+  staleSelect(); // An old tap during the same event batch must not select the wrong file.
+  h.render();
+  const staleResult = h.find(item => item.type === 'button' && text(item).includes(patient.name));
+  assert.equal(staleResult.props.disabled, true);
+  staleResult.props.onClick(); h.render();
+  await h.submit(); assert.equal(h.saved.length, 0); assert.match(h.toasts.at(-1) || '', /اختر ملف المريض/);
+  h.deferSearch(false); h.render(); staleSelect(); h.render();
+  assert.match(h.content, /لا يوجد ملف مطابق/);
+  h.searchPatient(patient.name); h.selectPatient(); h.addCatalogService('حشو اختبار');
+  await h.submit(); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].patient.id, patient.id);
+});
+
+test('retained patient search selection cannot choose a removed file or operate after dialog close', async () => {
+  const h = harness();
+  const staleSelect = h.find(item => item.type === 'button' && text(item).includes(patient.name)).props.onClick;
+  h.setProps({ isOpen: false }); staleSelect();
+  h.setProps({ isOpen: true });
+  await h.submit(); assert.equal(h.saved.length, 0); assert.match(h.toasts.at(-1) || '', /اختر ملف المريض/);
+  h.setProps({ patients: [] }); staleSelect(); h.render();
+  assert.match(h.content, /لا يوجد ملف مطابق/);
+  await h.submit(); assert.equal(h.saved.length, 0);
+});
+
 test('configured service price is proposed but does not charge examination or prefill cash and omits unselected tooth', async () => {
   const h = harness(); h.selectPatient(); h.addCatalogService('حشو اختبار');
   await h.submit();
   assert.equal(h.saved.length, 1); const visit = h.saved[0].visit;
   assert.equal(visit.totalFee, 600); assert.equal(visit.examinationFee, 0); assert.equal(visit.paidAmount, 0); assert.equal(visit.isPaid, false); assert.equal(visit.paymentMethod, 'cash');
   assert.equal(visit.services[0].price, 600); assert.ok(!Object.hasOwn(visit.services[0], 'tooth')); assert.equal(h.closed, 1);
+  assert.equal(h.toasts.at(-1), 'تم حفظ الزيارة دون تسجيل دفعة.');
 });
 
 test('one examination button uses the configured price without a manual override or implicit cash and captures a permanent tooth', async () => {
@@ -97,6 +129,7 @@ test('one examination button uses the configured price without a manual override
   h.change('سعر الخدمة 1', '550'); h.tooth('ur6'); h.input('المدفوع الآن', '150');
   await h.submit(); const visit = h.saved[0].visit;
   assert.equal(visit.examinationFee, 125); assert.equal(visit.treatmentFee, 550); assert.equal(visit.totalFee, 675); assert.equal(visit.paidAmount, 150); assert.equal(visit.discountAmount, 0); assert.equal(visit.services[0].tooth, 'ur6');
+  assert.equal(h.toasts.at(-1), 'تم حفظ الزيارة والدفعة المسجلة ضمن تحصيل اليوم.');
   assert.doesNotMatch(h.content, /خصم أو إعفاء/);
 });
 

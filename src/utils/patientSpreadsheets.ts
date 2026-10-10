@@ -92,9 +92,11 @@ export function parsePatientWorkbook(workbook: WorkBook, options: { csv?: boolea
       const idText = cellText(rawId);
       // Our CSV writer marks EVERY file ID as literal text. Remove exactly one
       // marker, including alphabetic IDs; an original apostrophe is doubled.
-      result.id = normalizeDigits(options.csv && idText.startsWith("'") ? idText.slice(1) : literal(idText, !!options.csv));
+      // Preserve the source file identity. Canonical digit conversion belongs
+      // only in duplicate comparison, not in imported/saved/exported values.
+      result.id = options.csv && idText.startsWith("'") ? idText.slice(1) : literal(idText, !!options.csv);
       result.name = literal(cellText(get('name')), !!options.csv);
-      const phoneCell = get('mobile'); result.mobile = normalizeDigits(cellText(phoneCell));
+      const phoneCell = get('mobile'); result.mobile = cellText(phoneCell);
       if (options.csv && result.mobile.startsWith("'") && normalizeContactPhone(result.mobile.slice(1))) result.mobile = result.mobile.slice(1);
       if (!result.id || result.id.length > 200 || /[\u0000-\u001f\u007f]/.test(result.id) || rawId?.t === 'n' && (!Number.isSafeInteger(rawId.v) || Number(rawId.v) <= 0 || /^0{2,}/.test(String(rawId.z || '')))) throw new Error('رقم الملف غير صالح. احفظه كنص للحفاظ على الأصفار.');
       if (!result.name || result.name.length > 200) throw new Error('اسم المريض مطلوب ولا يزيد عن ٢٠٠ حرف.');

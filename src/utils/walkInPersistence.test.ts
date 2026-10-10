@@ -79,6 +79,18 @@ test('actual walk-in save preserves a single primary tooth and allows explicit e
   assert.equal(calculateDailyCollections(exam.current().patients, () => true).examFeesCollected, 100);
 });
 
+test('actual walk-in save stores cent totals and accepts an exact paid/discount split without floating residue', async () => {
+  const h = harness();
+  await h.save(payload([{ id: 'synthetic-cent', name: 'خدمة مصطنعة', price: 0.3 }], 0, 0.1, 0.2));
+  const session = h.current().patients[0].sessions[0];
+  assert.equal(session.amount, 0.3); assert.equal(session.remain, 0);
+  const summed = harness();
+  await summed.save(payload([{ id: 'cent-a', name: 'خدمة أ', price: 0.1 }, { id: 'cent-b', name: 'خدمة ب', price: 0.2 }], 0, 0.3, 0));
+  const summedSession = summed.current().patients[0].sessions[0];
+  assert.equal(summedSession.amount, 0.3); assert.equal(summedSession.treatmentFee, 0.3);
+  assert.equal(summedSession.remain, 0);
+});
+
 test('actual walk-in boundary rejects forged totals and malformed tooth IDs before any commit', () => {
   const h = harness();
   const valid = payload([{ id: 'synthetic-service', name: 'خدمة اختبار', price: 600, tooth: 'ur6' }]);

@@ -11,6 +11,17 @@ test('reserves actual receipts up to cost and releases paid lab amounts', () => 
   assert.equal(getLabCaseFinancials({ ...item, labPaid: 200 }, patients).reserved, 300);
   assert.equal(getLabCaseFinancials({ ...item, labTotal: 300 }, patients).availableToClinic, 200);
 });
+test('private lab balances and linked patient totals retain exact cent values without changing history', () => {
+  const record = { ...item, labTotal: 0.3, labPaid: 0.1 };
+  const records = [{ id: 'p', sessions: [{ id: 's', amount: 0.8, discount: 0.1, paid: 0.3,
+    paymentsLog: [{ id: 'cent-receipt', amount: 0.3, date: '2026-09-20' }] }], payments: [] }] as Patient[];
+  const before = structuredClone({ record, records }), result = getLabCaseFinancials(record, records);
+  assert.equal(result.patientTotal, 0.7);
+  assert.equal(result.patientFileRemaining, 0.4);
+  assert.equal(result.reserved, 0.2);
+  assert.equal(result.remaining, 0.2);
+  assert.deepEqual({ record, records }, before);
+});
 test('unlinked cases cannot reserve unrelated patient receipts', () => {
   assert.equal(getLabCaseFinancials({ ...item, linkedSessionId: undefined }, patients).reserved, 0);
 });

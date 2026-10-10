@@ -160,6 +160,27 @@ test('unsafe keys, cycles, oversized/deep inputs and credentialless restores fai
   assert.equal(validateClinicBackup({}).valid, false);
 });
 
+test('sparse arrays fail validation instead of producing backups with unrestorable null records', () => {
+  const patients = Array(1);
+  assert.equal(validateClinicBackup({ patients }).valid, false);
+  const input: any = fixtures();
+  input.patients[0].sessions[0].paymentsLog = Array(1);
+  assert.equal(validateClinicBackup(input).valid, false);
+  assert.equal(validateClinicBackup({ clinicName: 'اختبار', futureMetadata: { values: Array(1) } }).valid, false);
+});
+
+test('receipt timestamps reject normalized invalid calendar dates and invalid clock times', () => {
+  const patient: any = { id: '401', name: 'مريض مصطنع', age: 30, payments: [{ id: 'receipt-test', amount: 20, date: '2026-10-10' }] };
+  for (const timestamp of ['2026-02-31T10:00:00.000Z', '2025-02-29T10:00:00+02:00', '2026-10-10T24:00:00Z', '1']) {
+    assert.equal(validateClinicBackup({ patients: [{ ...patient, payments: [{ ...patient.payments[0], createdAt: timestamp }] }] }).valid, false, timestamp);
+  }
+  for (const timestamp of ['2024-02-29T10:00:00.000Z', '2026-10-10T10:00:00+02:00', '2026-10-10',
+    '2026-10-10T10:00Z', '2026-10-10T10:00:00', '2026-10-10T10:00:00+0200']) {
+    const result = assertClinicBackup({ patients: [{ ...patient, payments: [{ ...patient.payments[0], createdAt: timestamp }] }] });
+    assert.equal(result.patients?.[0].payments[0].createdAt, timestamp, 'valid legacy date-only and timezone timestamps remain unchanged');
+  }
+});
+
 test('backup clone retains JSON-safe unknown record metadata and omits undefined without mutating source', () => {
   const input: any = fixtures(); input.labs[0].futureField = { nested: ['keep'] }; input.patients[0].gender = undefined;
   const value: any = assertClinicBackup(input); value.labs[0].futureField.nested.push('independent');

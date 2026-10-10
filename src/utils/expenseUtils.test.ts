@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Expense } from '../types';
-import { assertUniqueSupplierInvoice, expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from './expenseUtils';
+import { assertUniqueSupplierInvoice, expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, isExpenseInvoiceTotalLocked, mergeExpenseUpdate, prepareBasicExpenseUpdate } from './expenseUtils';
 
 const expense = (id: string, title: string, category: Expense['category'], amount: number, date: string): Expense => ({ id, title, category, amount, date });
 
@@ -78,4 +78,46 @@ test('ordinary repeated expenses without invoice numbers remain valid and invoic
   assert.doesNotThrow(() => assertUniqueSupplierInvoice([invoice], mergeExpenseUpdate(invoice, { title: 'عنوان جديد' })));
   const next = { ...invoice, id: 'next', invoiceNumber: '002' };
   assert.throws(() => assertUniqueSupplierInvoice([invoice, next], mergeExpenseUpdate(next, { invoiceNumber: '001' })), /مسجّل/);
+});
+
+test('basic expense save preserves the fresh supplier ledger and ignores hidden stale fields', () => {
+  const baseline: Expense = { ...expense('invoice', 'خامات', 'supplies', 500, '2026-10-10'), paidAmount: 100,
+    items: [{ id: 'old-item', itemName: 'خامة', quantity: 5, unit: 'قطعة', unitPrice: 100, total: 500 }] };
+  const current: Expense = { ...baseline, paidAmount: 300, remainingAmount: 200,
+    supplierName: 'المورد الجديد', items: [{ ...baseline.items![0], id: 'fresh-item' }],
+    extraInvoiceField: 'retain' } as Expense;
+  const snapshot = structuredClone(current);
+  const result = prepareBasicExpenseUpdate(current, { ...baseline, title: 'خامات العيادة', note: 'مراجعة' }, baseline);
+  assert.equal(result.title, 'خامات العيادة');
+  assert.equal(result.note, 'مراجعة');
+  assert.equal(result.paidAmount, 300); assert.equal(result.remainingAmount, 200);
+  assert.equal(result.supplierName, current.supplierName); assert.deepEqual(result.items, current.items);
+  assert.equal((result as Expense & { extraInvoiceField: string }).extraInvoiceField, 'retain');
+  assert.deepEqual(current, snapshot);
+});
+
+test('basic expense save refuses a missing/mismatched baseline and stale editable fields', () => {
+  const baseline = expense('expense', 'إيجار', 'fixed', 500, '2026-10-10');
+  assert.throws(() => prepareBasicExpenseUpdate(baseline, baseline), /أعد فتح/);
+  assert.throws(() => prepareBasicExpenseUpdate(baseline, baseline, { ...baseline, id: 'other' }), /أعد فتح/);
+  assert.throws(() => prepareBasicExpenseUpdate(baseline, { ...baseline, id: 'other' }, baseline), /أعد فتح/);
+  for (const changes of [{ title: 'عنوان أحدث' }, { amount: 600 }, { category: 'other' as const },
+    { note: 'ملاحظة أحدث' }, { invoiceImageUrl: 'new-image' }]) {
+    const current = { ...baseline, ...changes };
+    assert.throws(() => prepareBasicExpenseUpdate(current, { ...baseline, note: 'مسودة' }, baseline), /تغيّرت/);
+  }
+});
+
+test('basic expense save enforces the invoice total lock against fresh data, not just the old form', () => {
+  const baseline = expense('invoice', 'فاتورة', 'supplies', 500, '2026-10-10');
+  for (const details of [{ items: [{ id: 'item', itemName: 'خامة', quantity: 5, unit: 'قطعة', unitPrice: 100, total: 500 }] },
+    { paidAmount: 100 }, { remainingAmount: 400 }, { subtotal: 500 }, { tax: 0 }, { discount: 0 },
+    { paymentMethod: 'credit' as const }, { paymentMethod: 'deferred' as const }]) {
+    const current = { ...baseline, ...details };
+    assert.equal(isExpenseInvoiceTotalLocked(current), true);
+    assert.throws(() => prepareBasicExpenseUpdate(current, { ...baseline, amount: 600 }, baseline), /إجمالي الفاتورة/);
+    assert.equal(prepareBasicExpenseUpdate(current, { ...baseline, note: 'بيان' }, baseline).amount, 500);
+  }
+  assert.equal(isExpenseInvoiceTotalLocked(baseline), false);
+  assert.equal(prepareBasicExpenseUpdate(baseline, { ...baseline, amount: 600 }, baseline).amount, 600);
 });

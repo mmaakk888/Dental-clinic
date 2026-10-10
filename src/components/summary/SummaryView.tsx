@@ -8,7 +8,7 @@ import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
-import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, mergeExpenseUpdate } from '../../utils/expenseUtils';
+import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, isExpenseInvoiceTotalLocked } from '../../utils/expenseUtils';
 import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
 import './SummaryView.css';
 
@@ -34,7 +34,7 @@ interface SummaryViewProps {
   isOpenAddExpenseModal?: boolean;
   onCloseAddExpenseModal?: () => void;
   onAddExpense: (expense: Omit<Expense, 'id'>) => void | Promise<void>;
-  onSaveExpense?: (expense: Omit<Expense, 'id'> & { id?: string }) => void | Promise<void>;
+  onSaveExpense?: (expense: Omit<Expense, 'id'> & { id?: string }, baseline?: Expense) => void | Promise<void>;
   onDeleteExpense: (id: string) => void | Promise<void>;
   onAddMaterialUsage: (usage: Omit<MaterialUsage, 'id'>) => void | Promise<void>;
   onDeleteMaterialUsage: (id: string) => void | Promise<void>;
@@ -159,10 +159,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const monthlyTotal = monthExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const monthlyPaid = monthExpenses.reduce((sum, expense) => sum + getExpensePaymentSummary(expense).paid, 0);
   const monthlyRemaining = monthExpenses.reduce((sum, expense) => sum + getExpensePaymentSummary(expense).remaining, 0);
-  const isInvoiceTotalLocked = !!editingExpense && (Boolean(editingExpense.items?.length)
-    || editingExpense.subtotal !== undefined || editingExpense.tax !== undefined || editingExpense.discount !== undefined
-    || editingExpense.paidAmount !== undefined || editingExpense.remainingAmount !== undefined
-    || editingExpense.paymentMethod === 'credit' || editingExpense.paymentMethod === 'deferred');
+  const isInvoiceTotalLocked = !!editingExpense && isExpenseInvoiceTotalLocked(editingExpense);
   const filteredExpenses = useMemo(() => monthExpenses.filter(expense => {
     if (expenseFilterCategory === 'fixed' && !(expense.isFixed || expense.category === 'fixed')) return false;
     if (expenseFilterCategory === 'supplies' && expense.category !== 'supplies') return false;
@@ -360,11 +357,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       recurringPeriod: isFixedExpense ? 'monthly' as const : 'none' as const,
       invoiceImageUrl: expenseInvoiceImage
     };
-    const savedPayload = editingExpense
-      ? mergeExpenseUpdate(editingExpense, { ...payload, ...(editingExpense.invoiceDate ? { invoiceDate: expenseDate } : {}) })
-      : payload;
+    const savedPayload = { ...payload, ...(editingExpense?.invoiceDate ? { invoiceDate: expenseDate } : {}) };
 
-    await confirmSave(() => onSaveExpense ? onSaveExpense(savedPayload) : onAddExpense(savedPayload), () => {
+    await confirmSave(() => onSaveExpense ? onSaveExpense(savedPayload, editingExpense ?? undefined) : onAddExpense(savedPayload), () => {
       handleCloseExpenseModal();
       showToast(editingExpense ? 'تم تعديل بيانات المصروف بنجاح' : 'تم تسجيل المصروف وإرفاق الفاتورة بنجاح', 'success');
     });

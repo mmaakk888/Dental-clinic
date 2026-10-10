@@ -1,9 +1,9 @@
 import type { Patient, Session } from '../types';
-import { getPatientFinancialSummary, getSessionCollected } from './financials';
+import { getPatientFinancialSummary, getSessionCollected, sumFinancialAmounts } from './financials';
 
 /** Independent general receipts can settle debt without changing a session log. */
 export function getPatientSessionReceiptLimit(patient: Patient, session: Session): number {
-  const sessionRemaining = Math.max(0, session.amount - (session.discount ?? 0) - getSessionCollected(session));
+  const sessionRemaining = Math.max(0, sumFinancialAmounts([session.amount, -(session.discount ?? 0), -getSessionCollected(session)]));
   const limit = Math.min(sessionRemaining, getPatientFinancialSummary(patient).totalRemaining);
   // Remove floating-point residue from calculations on cent-valued amounts.
   const cents = Math.round(limit * 100) / 100;

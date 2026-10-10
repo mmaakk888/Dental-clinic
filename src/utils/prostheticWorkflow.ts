@@ -6,7 +6,7 @@ import type { ProstheticKind, ProstheticRoutingSettings } from './prostheticRout
 import { resolveProstheticLab } from './prostheticRouting';
 import { isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
 import { getToothLabel, parseCompositeToothId } from './toothUtils';
-import { getSessionCollected } from './financials';
+import { getSessionCollected, sumFinancialAmounts } from './financials';
 
 export interface ProstheticOrderInput {
   operationId: string;
@@ -95,7 +95,7 @@ export function createProstheticOrder(domain: ClinicDomainData, input: Prostheti
 export function getLinkedPatientAccount(item: LabCase, domain: Pick<ClinicDomainData, 'patients'>) {
   const session = domain.patients.find(patient => patient.id === item.patientId)?.sessions.find(record => record.id === item.linkedSessionId);
   if (!session) return null;
-  const total = Math.max(0, session.amount - (session.discount || 0));
+  const total = Math.max(0, sumFinancialAmounts([session.amount, -(session.discount || 0)]));
   const paid = getSessionCollected(session);
-  return { total, paid, remaining: Math.max(0, total - paid), session };
+  return { total, paid, remaining: Math.max(0, sumFinancialAmounts([total, -paid])), session };
 }

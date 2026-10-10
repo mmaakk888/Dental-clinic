@@ -1,4 +1,32 @@
 import { Session, SessionServiceItem, Patient, Appointment, PaymentInstallment } from '../types';
+import { isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
+
+/** New cash entries are integer piastres; only negligible binary arithmetic
+ * residue is accepted, never an intentional third decimal or an unsafe total. */
+export function financialMoneyCents(value: number): number {
+  const scaled = value * 100, rounded = Math.round(scaled);
+  if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(rounded) || Math.abs(scaled - rounded) > 0.000001) {
+    throw new Error('أدخل مبلغًا صحيحًا بمنزلتين عشريتين على الأكثر.');
+  }
+  return rounded;
+}
+
+/** Calculate cent-valued records exactly without rounding imported fractional
+ * amounts. Those retain the previous arithmetic and their original precision. */
+export function sumFinancialAmounts(values: readonly number[]): number {
+  if (values.every(value => Number.isFinite(value) && /^-?\d+(?:\.\d{1,2})?$/.test(String(value)))) {
+    let cents = 0;
+    for (const value of values) {
+      const entryCents = Math.round(value * 100);
+      if (!Number.isSafeInteger(entryCents) || !Number.isSafeInteger(cents + entryCents)) {
+        return values.reduce((sum, entry) => sum + entry, 0);
+      }
+      cents += entryCents;
+    }
+    return cents / 100;
+  }
+  return values.reduce((sum, value) => sum + value, 0);
+}
 
 export interface PatientFinancialSummary {
   totalRequired: number;
@@ -18,7 +46,7 @@ const positiveMoney = (value: number | undefined): number =>
 export function getSessionCollected(session: Session): number {
   const activePayments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
   if ((session.paymentsLog || []).length > 0) {
-    return activePayments.reduce((sum, payment) => sum + positiveMoney(payment.amount), 0);
+    return sumFinancialAmounts(activePayments.map(payment => positiveMoney(payment.amount)));
   }
   return positiveMoney(session.paid);
 }
@@ -26,14 +54,20 @@ export function getSessionCollected(session: Session): number {
 export function appendSessionReceipt(session: Session, receipt: PaymentInstallment): Session {
   const priorCollected = getSessionCollected(session);
   const priorLog = session.paymentsLog || [];
+  const amountCents = financialMoneyCents(receipt.amount);
+  if (amountCents <= 0 || !isValidAppointmentDate(receipt.date)) throw new Error('أدخل مبلغًا موجبًا وتاريخًا صحيحًا لإيصال التحصيل.');
+  if (typeof receipt.id !== 'string' || !receipt.id.trim() || priorLog.some(payment => payment.id === receipt.id)
+    || (!priorLog.length && priorCollected > 0 && receipt.id === `legacy_${session.id}`)) {
+    throw new Error('معرّف إيصال التحصيل مستخدم بالفعل أو غير صالح. لم تُسجل دفعة مكررة.');
+  }
   const legacyLog: PaymentInstallment[] = !priorLog.length && priorCollected > 0 ? [{
     id: `legacy_${session.id}`, amount: priorCollected, date: session.payDate || session.date,
     paymentMethod: 'cash', note: 'دفعة سابقة محفوظة قبل سجل الدفعات'
   }] : [];
   // New receipts are explicit transactions, never legacy date/amount mirrors.
-  const paymentsLog = [...legacyLog, ...priorLog, { ...receipt, createdAt: receipt.createdAt || new Date().toISOString() }];
+  const paymentsLog = [...legacyLog, ...priorLog, { ...receipt, amount: amountCents / 100, createdAt: receipt.createdAt || new Date().toISOString() }];
   const paid = getSessionCollected({ ...session, paymentsLog });
-  return { ...session, paymentsLog, paid, remain: Math.max(0, positiveMoney(session.amount) - positiveMoney(session.discount) - paid) };
+  return { ...session, paymentsLog, paid, remain: Math.max(0, sumFinancialAmounts([positiveMoney(session.amount), -positiveMoney(session.discount), -paid])) };
 }
 
 function getIndependentGeneralPayments(patient: Patient) {
@@ -78,28 +112,18 @@ function getIndependentGeneralPayments(patient: Patient) {
 }
 
 export function getPatientFinancialSummary(patient: Patient): PatientFinancialSummary {
-  const totalRequired = patient.sessions.reduce(
-    (sum, session) => sum + positiveMoney(session.amount),
-    0
-  );
-  const totalDiscounts = patient.sessions.reduce(
-    (sum, session) => sum + positiveMoney(session.discount),
-    0
-  );
-  const sessionCollections = patient.sessions.reduce(
-    (sum, session) => sum + getSessionCollected(session),
-    0
-  );
-  const generalCollections = getIndependentGeneralPayments(patient)
-    .reduce((sum, payment) => sum + positiveMoney(payment.amount), 0);
-  const totalCollected = sessionCollections + generalCollections;
-  const netRequired = Math.max(0, totalRequired - totalDiscounts);
+  const totalRequired = sumFinancialAmounts(patient.sessions.map(session => positiveMoney(session.amount)));
+  const totalDiscounts = sumFinancialAmounts(patient.sessions.map(session => positiveMoney(session.discount)));
+  const sessionCollections = sumFinancialAmounts(patient.sessions.map(getSessionCollected));
+  const generalCollections = sumFinancialAmounts(getIndependentGeneralPayments(patient).map(payment => positiveMoney(payment.amount)));
+  const totalCollected = sumFinancialAmounts([sessionCollections, generalCollections]);
+  const netRequired = Math.max(0, sumFinancialAmounts([totalRequired, -totalDiscounts]));
 
   return {
     totalRequired,
     totalCollected,
     totalDiscounts,
-    totalRemaining: Math.max(0, netRequired - totalCollected)
+    totalRemaining: Math.max(0, sumFinancialAmounts([netRequired, -totalCollected]))
   };
 }
 
@@ -126,13 +150,13 @@ export function distributePaymentToServices(
 
   // 1. Exam Fee Paid Allocation
   const examFeePaid = Math.min(examinationFee, remainingPaidPool);
-  remainingPaidPool -= examFeePaid;
-  const examFeeRemain = Math.max(0, examinationFee - examFeePaid);
+  remainingPaidPool = sumFinancialAmounts([remainingPaidPool, -examFeePaid]);
+  const examFeeRemain = Math.max(0, sumFinancialAmounts([examinationFee, -examFeePaid]));
 
   // 2. Procedures Paid Allocation
   const updatedServices = services.map(srv => {
     const itemPaid = Math.min(srv.price, remainingPaidPool);
-    remainingPaidPool -= itemPaid;
+    remainingPaidPool = sumFinancialAmounts([remainingPaidPool, -itemPaid]);
     return {
       ...srv,
       paid: itemPaid,
@@ -207,13 +231,13 @@ export function calculateDailyCollections(
       // Check installments logged on the filtered date
       const allActiveInstallments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
       const installmentsInPeriod = allActiveInstallments.filter(p => dateFilterFn(p.date));
-      const installmentPaidInPeriod = installmentsInPeriod.reduce((sum, p) => sum + positiveMoney(p.amount), 0);
+      const installmentPaidInPeriod = sumFinancialAmounts(installmentsInPeriod.map(p => positiveMoney(p.amount)));
 
       // Legacy sessions may have only a paid total and no receipt log.
       const legacyPaidInPeriod = (session.paymentsLog || []).length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
         ? positiveMoney(session.paid)
         : 0;
-      const paidInPeriod = installmentPaidInPeriod + legacyPaidInPeriod;
+      const paidInPeriod = sumFinancialAmounts([installmentPaidInPeriod, legacyPaidInPeriod]);
 
       if (sessionInPeriod || paidInPeriod > 0) {
         patientIdsSeen.add(patient.id);
@@ -225,15 +249,15 @@ export function calculateDailyCollections(
         const remainAmt = patientFinancial.totalRemaining;
 
         if (sessionInPeriod) {
-          totalDiscountsGiven += discountAmt;
+          totalDiscountsGiven = sumFinancialAmounts([totalDiscountsGiven, discountAmt]);
         }
 
-        totalIncomeCollected += paidInPeriod;
+        totalIncomeCollected = sumFinancialAmounts([totalIncomeCollected, paidInPeriod]);
 
         // Payment Method breakdown
         // Clinic policy records all receipts as cash, regardless of the external channel.
         const method: 'cash' = 'cash';
-        cashTotal += paidInPeriod;
+        cashTotal = sumFinancialAmounts([cashTotal, paidInPeriod]);
 
         // Procedures breakdown allocation for reports
         let servicesList = session.services && session.services.length > 0
@@ -243,7 +267,7 @@ export function calculateDailyCollections(
         if (servicesList.length === 0) {
           // Fallback if session has no explicit breakdown array
           const procText = session.procedurePerformed || session.type || 'كشف وحشو أسنان';
-          const treatFee = Math.max(0, session.amount - examFee);
+          const treatFee = Math.max(0, sumFinancialAmounts([session.amount, -examFee]));
           if (treatFee > 0) {
             servicesList = [{ id: 'auto', name: procText, price: treatFee }];
           }
@@ -257,11 +281,12 @@ export function calculateDailyCollections(
         let collectedBefore = 0;
         for (const receipt of [...allActiveInstallments].sort((a, b) => a.date.localeCompare(b.date))) {
           const before = distributePaymentToServices(examFee, servicesList, collectedBefore, discountAmt);
-          collectedBefore += positiveMoney(receipt.amount);
+          collectedBefore = sumFinancialAmounts([collectedBefore, positiveMoney(receipt.amount)]);
           if (!dateFilterFn(receipt.date)) continue;
           const after = distributePaymentToServices(examFee, servicesList, collectedBefore, discountAmt);
-          distribution.examFeePaid += Math.max(0, after.examFeePaid - before.examFeePaid);
-          distribution.services.forEach((service, index) => { service.paid += Math.max(0, (after.services[index]?.paid || 0) - (before.services[index]?.paid || 0)); });
+          distribution.examFeePaid = sumFinancialAmounts([distribution.examFeePaid, Math.max(0, sumFinancialAmounts([after.examFeePaid, -before.examFeePaid]))]);
+          distribution.services.forEach((service, index) => { service.paid = sumFinancialAmounts([service.paid,
+            Math.max(0, sumFinancialAmounts([after.services[index]?.paid || 0, -(before.services[index]?.paid || 0)]))]); });
         }
         if (legacyPaidInPeriod > 0) {
           const legacy = distributePaymentToServices(examFee, servicesList, legacyPaidInPeriod, discountAmt);
@@ -270,20 +295,20 @@ export function calculateDailyCollections(
         }
         // Incomplete historical breakdowns and overpayments must not make
         // actual cash disappear or pretend it belongs to a known treatment.
-        const unallocatedPaid = Math.max(0, paidInPeriod - distribution.examFeePaid
-          - distribution.services.reduce((sum, service) => sum + service.paid, 0));
+        const unallocatedPaid = Math.max(0, sumFinancialAmounts([paidInPeriod, -distribution.examFeePaid,
+          -sumFinancialAmounts(distribution.services.map(service => service.paid))]));
         if (unallocatedPaid > 0) procedureFeesCollectedByName['تحصيل غير موزع على خدمة'] =
-          (procedureFeesCollectedByName['تحصيل غير موزع على خدمة'] || 0) + unallocatedPaid;
+          sumFinancialAmounts([procedureFeesCollectedByName['تحصيل غير موزع على خدمة'] || 0, unallocatedPaid]);
 
         if (examFee > 0) {
-          examFeesCollected += distribution.examFeePaid;
-          procedureFeesCollectedByName['كشف ومعاينة'] = (procedureFeesCollectedByName['كشف ومعاينة'] || 0) + distribution.examFeePaid;
+          examFeesCollected = sumFinancialAmounts([examFeesCollected, distribution.examFeePaid]);
+          procedureFeesCollectedByName['كشف ومعاينة'] = sumFinancialAmounts([procedureFeesCollectedByName['كشف ومعاينة'] || 0, distribution.examFeePaid]);
         }
 
         distribution.services.forEach(srv => {
           const sName = srv.name || 'خدمة أسنان';
           const sPaid = srv.paid || 0;
-          procedureFeesCollectedByName[sName] = (procedureFeesCollectedByName[sName] || 0) + sPaid;
+          procedureFeesCollectedByName[sName] = sumFinancialAmounts([procedureFeesCollectedByName[sName] || 0, sPaid]);
         });
 
         // Procedures summary text
@@ -320,9 +345,9 @@ export function calculateDailyCollections(
     getIndependentGeneralPayments(patient).forEach(pay => {
       if (dateFilterFn(pay.date)) {
         const paymentAmount = positiveMoney(pay.amount);
-        totalIncomeCollected += paymentAmount;
-        cashTotal += paymentAmount;
-        procedureFeesCollectedByName['دفعة عامة / أقساط'] = (procedureFeesCollectedByName['دفعة عامة / أقساط'] || 0) + paymentAmount;
+        totalIncomeCollected = sumFinancialAmounts([totalIncomeCollected, paymentAmount]);
+        cashTotal = sumFinancialAmounts([cashTotal, paymentAmount]);
+        procedureFeesCollectedByName['دفعة عامة / أقساط'] = sumFinancialAmounts([procedureFeesCollectedByName['دفعة عامة / أقساط'] || 0, paymentAmount]);
         patientIdsSeen.add(patient.id);
         rows.push({
           sessionId: pay.linkedSessionId || `general_${pay.id}`,
@@ -345,7 +370,7 @@ export function calculateDailyCollections(
     });
     // General receipts are unallocated credits. Do not invent a per-service
     // settlement or count one patient's current debt again for every visit.
-    if (patientIdsSeen.has(patient.id)) totalOutstandingRemain += patientFinancial.totalRemaining;
+    if (patientIdsSeen.has(patient.id)) totalOutstandingRemain = sumFinancialAmounts([totalOutstandingRemain, patientFinancial.totalRemaining]);
   });
 
   return {

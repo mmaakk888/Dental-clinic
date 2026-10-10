@@ -30,6 +30,18 @@ test('walk-in draft rejects invalid or excessive costs and accepts decimals and 
   assert.ok(validateWalkInAmounts(0, [{ ...services[0], name: ' ' }], 0, 0));
 });
 
+test('walk-in money is cent-safe before any patient visit or cash entry can be created', () => {
+  for (const value of [0.001, 1.999, Number.MAX_SAFE_INTEGER]) {
+    assert.match(validateWalkInAmounts(value, [], 0, 0) || '', /منزلتين عشريتين/);
+    assert.match(validateWalkInAmounts(0, [{ id: 'test', name: 'خدمة اختبار', price: value }], 0, 0) || '', /منزلتين عشريتين/);
+    assert.match(validateWalkInAmounts(100, [], value, 0) || '', /منزلتين عشريتين/);
+    assert.match(validateWalkInAmounts(100, [], 0, value) || '', /منزلتين عشريتين/);
+  }
+  assert.equal(validateWalkInAmounts(0.3, [], 0.1, 0.2), null);
+  assert.equal(validateWalkInAmounts(0.1, [{ id: 'test', name: 'خدمة اختبار', price: 0.2 }], 0.1 + 0.2, 0), null);
+  assert.ok(validateWalkInAmounts(0.3, [], 0.31, 0));
+});
+
 test('walk-in service options come only from active clinical catalog and use configured prices including zero', () => {
   assert.deepEqual(getWalkInServiceOptions(), []);
   assert.deepEqual(getWalkInServiceOptions(['خدمة اختبار', 'تركيبات - ثابتة', 'خدمة بدون سعر', 'خدمة مجانية', 'خدمة اختبار'], {

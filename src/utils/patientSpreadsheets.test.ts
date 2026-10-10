@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as XLSX from 'xlsx';
 import type { WorkBook } from 'xlsx';
 import type { Patient } from '../types';
+import { importPatientRecords } from './clinicMutations';
 import { createPatientWorkbook, downloadPatientSpreadsheet, parsePatientVisitDate, parsePatientWorkbook, previewPatientImport, readPatientSpreadsheet, serializePatientCsv, type PatientExportColumns } from './patientSpreadsheets';
 
 const columns: PatientExportColumns = { id: true, name: true, mobile: true, age: true, firstVisit: true, allergy: true, notes: true, gender: true, totalRequired: true, totalPaid: true, totalRemain: true };
@@ -21,6 +22,30 @@ test('basic patient XLSX round trip preserves leading zeros, text, date and gend
   const p = patient(), rows = await readPatientSpreadsheet(excelFile(await createPatientWorkbook([p], columns, false)));
   assert.equal(rows[0].error, undefined); assert.deepEqual(rows[0].patient, p);
   assert.deepEqual(rows[0].patient?.sessions, []); assert.deepEqual(rows[0].patient?.payments, []);
+});
+
+test('spreadsheet round trips retain Arabic/Persian file IDs and formatted phones while duplicate checks normalize only for comparison', async () => {
+  for (const id of ['٠٠٤٠١', '۰۰۴۰۱', 'ملف-٤٠١']) {
+    const p = patient({ id, mobile: '٠١٠ ١٢٣٤ ٥٦٧٨' });
+    const excel = await readPatientSpreadsheet(excelFile(await createPatientWorkbook([p], columns, false)));
+    const csv = await readPatientSpreadsheet(csvFile(serializePatientCsv([p], columns, false)));
+    assert.deepEqual(excel[0].patient, p);
+    assert.deepEqual(csv[0].patient, p);
+    assert.equal(previewPatientImport(excel, [patient({ id: id === 'ملف-٤٠١' ? 'ملف-401' : '00401' })]).duplicateCount, 1);
+  }
+});
+
+test('patient spreadsheet preview, committed import and subsequent export preserve original file identity end to end', async () => {
+  const p = patient({ id: '٠٠٤٠١', mobile: '٠١٠ ١٢٣٤ ٥٦٧٨' });
+  const parsed = await readPatientSpreadsheet(excelFile(await createPatientWorkbook([p], columns, false)));
+  const preview = previewPatientImport(parsed, []);
+  assert.equal(preview.newCount, 1);
+  const saved = importPatientRecords([], preview.newPatients);
+  assert.deepEqual(saved, [p]);
+  const exported = await readPatientSpreadsheet(csvFile(serializePatientCsv(saved, columns, false)));
+  assert.deepEqual(exported[0].patient, p);
+  assert.equal(previewPatientImport(parsed, [patient({ id: '00401' })]).duplicateCount, 1);
+  assert.throws(() => importPatientRecords(saved, [patient({ id: '۰۰۴۰۱' })]), /موجود|مكرر/);
 });
 test('CSV patient round trip protects formulas and phone/file zero prefixes', async () => {
   const p = patient({ name: '=TEST("literal")', notes: '@not-a-formula', allergy: "'+literal" });
