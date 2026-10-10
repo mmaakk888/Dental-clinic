@@ -34,6 +34,10 @@ test('operating entry initially renders an accessible explicit login, not a clou
   assert.match(html, /min-h-12/u);
   assert.match(html, /text-base/u);
   assert.match(html, /min-w-0/u);
+  assert.match(html, /معاينة واجهة جهات الاتصال/u);
+  assert.match(html, /بلا بيانات أو اتصال بقاعدة البيانات/u);
+  assert.match(html, /الحفظ السحابي غير مفعّل بعد/u);
+  assert.doesNotMatch(html, /فتح جهات الاتصال من الخادم|cloud-contact-name/u);
 });
 
 test('operating page independently blocks external, malformed, conflicting and duplicate routes', () => {

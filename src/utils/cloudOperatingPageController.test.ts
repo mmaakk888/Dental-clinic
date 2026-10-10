@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createCloudOperatingAuthSession, type CloudOperatingAuthAdapter,
   type CloudOperatingAuthSession } from './cloudOperatingAuth';
-import { createCloudOperatingPageController, type CloudOperatingPageState } from './cloudOperatingPageController';
+import { createCloudOperatingPageController, type CloudOperatingPageState,
+  type CloudOperatingPageSession } from './cloudOperatingPageController';
+import { CloudContactError, type CloudContactRepository } from './cloudContactRepository';
 
 const EMAIL = 'owner@example.invalid';
 const PASSWORD = 'synthetic-password-only';
@@ -24,8 +26,9 @@ function deferred<T = void>() {
 
 function fixture(options: {
   adapter?: Partial<CloudOperatingAuthAdapter>;
-  factory?: (session: CloudOperatingAuthSession) => Promise<CloudOperatingAuthSession>;
+  factory?: (session: CloudOperatingPageSession) => Promise<CloudOperatingPageSession>;
   runtime?: () => boolean;
+  getContacts?: () => Promise<CloudContactRepository>;
 } = {}) {
   const calls: string[] = [];
   const credentials: [string, string][] = [];
@@ -39,15 +42,36 @@ function fixture(options: {
     destroy: async () => { calls.push('destroy'); await options.adapter?.destroy?.(); },
   });
   const controller = createCloudOperatingPageController(async () => {
-    calls.push('factory'); return options.factory ? options.factory(session) : session;
+    calls.push('factory');
+    const candidate: CloudOperatingPageSession = options.getContacts ? { ...session, getContacts: async () => {
+      calls.push('getContacts'); return options.getContacts!();
+    } } : session;
+    return options.factory ? options.factory(candidate) : candidate;
   }, options.runtime ?? (() => runtime));
   return { controller, session, calls, credentials, setRuntime: (value: boolean) => { runtime = value; } };
+}
+
+function contactRepository(overrides: Partial<CloudContactRepository> = {}) {
+  const calls: string[] = [];
+  const repository: CloudContactRepository = {
+    commit: async input => {
+      calls.push('commit');
+      return overrides.commit ? overrides.commit(input)
+        : { status: 'committed', recordId: input.recordId, revision: input.expectedRevision + 1 };
+    },
+    get: async recordId => { calls.push('get'); return overrides.get ? overrides.get(recordId) : null; },
+    listPage: async input => {
+      calls.push('listPage');
+      return overrides.listPage ? overrides.listPage(input) : { records: [], nextAfterId: null };
+    },
+  };
+  return { repository, calls };
 }
 
 test('page controller is inert until explicit sign-in, and initial refresh never initializes Auth', async () => {
   const h = fixture();
   assert.deepEqual(h.controller.getState(), { auth: { phase: 'signed-out', owner: null },
-    pending: false, closing: false, error: '', cleanupFailed: false });
+    pending: false, closing: false, error: '', cleanupFailed: false, contacts: { phase: 'closed', error: '' } });
   assert.equal(Object.isFrozen(h.controller.getState()), true);
   assert.equal(Object.isFrozen(h.controller.getState().auth), true);
   await h.controller.refresh();
@@ -356,6 +380,303 @@ test('closing from a checking notification prevents delayed factory/auth work', 
   await h.controller.signIn(EMAIL, PASSWORD); await closing;
   assert.deepEqual(h.calls, []);
   assert.equal(h.controller.getState().auth.phase, 'closed');
+});
+
+test('contacts seam is inert on construction/sign-in and unauthenticated open never creates an SDK or workspace', async () => {
+  const repo = contactRepository();
+  const h = fixture({ getContacts: async () => repo.repository });
+  assert.deepEqual(h.controller.getState().contacts, { phase: 'closed', error: '' });
+  assert.equal(Object.isFrozen(h.controller.getState().contacts), true);
+  assert.equal(h.controller.getContactsWorkspace(), null);
+  assert.equal(await h.controller.openContacts(), null);
+  assert.ok(h.controller.getState().contacts.error);
+  assert.deepEqual(h.calls, []);
+  await h.controller.signIn(EMAIL, PASSWORD);
+  assert.equal(h.calls.includes('getContacts'), false);
+  assert.deepEqual(repo.calls, []);
+  assert.equal(h.controller.getContactsWorkspace(), null);
+  await h.controller.dispose();
+});
+
+test('an older synthetic session without contacts capability fails closed without destroying checked Auth', async () => {
+  const h = fixture();
+  await h.controller.signIn(EMAIL, PASSWORD);
+  assert.equal(await h.controller.openContacts(), null);
+  assert.ok(h.controller.getState().contacts.error);
+  assert.equal(h.controller.getState().auth.phase, 'owner-checked');
+  assert.equal(h.calls.includes('destroy'), false);
+  await h.controller.dispose();
+});
+
+test('explicit contacts open is lazy, shares a pending request and performs no automatic list/read', async () => {
+  const repo = contactRepository();
+  const gate = deferred<CloudContactRepository>();
+  const started = deferred();
+  const h = fixture({ getContacts: async () => { started.resolve(); return gate.promise; } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const first = h.controller.openContacts();
+  const duplicate = h.controller.openContacts();
+  assert.equal(first, duplicate);
+  assert.equal(h.controller.getState().contacts.phase, 'opening');
+  await started.promise;
+  assert.equal(h.calls.filter(value => value === 'getContacts').length, 1);
+  gate.resolve(repo.repository);
+  const workspace = await first;
+  assert.ok(workspace);
+  assert.equal(workspace, h.controller.getContactsWorkspace());
+  assert.equal(workspace, await h.controller.openContacts());
+  assert.deepEqual(repo.calls, []);
+  assert.equal(workspace.getState().loaded, false);
+  assert.equal(h.controller.getState().contacts.phase, 'open');
+  await workspace.loadFirst();
+  assert.deepEqual(repo.calls, ['listPage']);
+  assert.equal(h.controller.closeContacts(), true);
+  assert.equal(workspace.getState().closed, true);
+  assert.equal(h.controller.getContactsWorkspace(), null);
+  await h.controller.dispose();
+});
+
+test('immediate close cancels contacts opening before even its capability microtask runs', async () => {
+  const repo = contactRepository();
+  const h = fixture({ getContacts: async () => repo.repository });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const opening = h.controller.openContacts();
+  assert.equal(h.controller.closeContacts(), true);
+  assert.equal(await opening, null);
+  assert.equal(h.calls.includes('getContacts'), false);
+  assert.equal(h.controller.getState().contacts.phase, 'closed');
+  await h.controller.dispose();
+});
+
+test('delayed capability results cannot open after sign-out, view disposal or runtime loss', async () => {
+  for (const action of ['signOut', 'dispose', 'runtime'] as const) {
+    const repo = contactRepository();
+    const gate = deferred<CloudContactRepository>();
+    const started = deferred();
+    const h = fixture({ getContacts: async () => { started.resolve(); return gate.promise; } });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    const opening = h.controller.openContacts();
+    await started.promise;
+    let closing: Promise<unknown> = Promise.resolve();
+    if (action === 'signOut') closing = h.controller.signOut();
+    else if (action === 'dispose') closing = h.controller.dispose();
+    else h.setRuntime(false);
+    gate.resolve(repo.repository);
+    assert.equal(await opening, null);
+    await closing;
+    if (action === 'runtime') await h.controller.signOut();
+    assert.equal(h.controller.getContactsWorkspace(), null);
+    assert.equal(h.controller.getState().contacts.phase, 'closed');
+    assert.deepEqual(repo.calls, []);
+    assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+    await h.controller.dispose();
+  }
+});
+
+test('a late opening cannot replace a fresh workspace after logout and same-UID relogin', async () => {
+  const oldGate = deferred<CloudContactRepository>();
+  const oldStarted = deferred();
+  const oldRepo = contactRepository(), freshRepo = contactRepository();
+  const old = fixture(), fresh = fixture();
+  let factories = 0;
+  const controller = createCloudOperatingPageController(async () => ++factories === 1
+    ? { ...old.session, getContacts: async () => { oldStarted.resolve(); return oldGate.promise; } }
+    : { ...fresh.session, getContacts: async () => freshRepo.repository }, () => true);
+  await controller.signIn(EMAIL, PASSWORD);
+  const oldOpening = controller.openContacts();
+  await oldStarted.promise;
+  assert.equal(await controller.signOut(), true);
+  await controller.signIn(EMAIL, PASSWORD);
+  const current = await controller.openContacts();
+  assert.ok(current);
+  oldGate.resolve(oldRepo.repository);
+  assert.equal(await oldOpening, null);
+  assert.equal(controller.getContactsWorkspace(), current);
+  assert.equal(current.getState().closed, false);
+  assert.deepEqual(oldRepo.calls, []);
+  await controller.dispose(); await old.controller.dispose(); await fresh.controller.dispose();
+});
+
+test('transient authorization checking and explicit owner refresh preserve workspace and draft', async () => {
+  const gate = deferred<ReturnType<typeof record>>();
+  const started = deferred();
+  let delay = false;
+  const repo = contactRepository();
+  const h = fixture({ getContacts: async () => repo.repository,
+    adapter: { readOwner: async () => { if (delay) { started.resolve(); return gate.promise; } return record(); } } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openContacts();
+  assert.ok(workspace);
+  assert.equal(workspace.beginCreate(), true);
+  assert.equal(workspace.changeDraft({ name: 'Synthetic draft', mobile: '01000000001' }), true);
+  const draft = workspace.getState().draft;
+  delay = true;
+  const refresh = h.controller.refresh();
+  await started.promise;
+  assert.equal(h.controller.getState().auth.phase, 'checking');
+  assert.equal(h.controller.getContactsWorkspace(), workspace);
+  assert.equal(workspace.getState().draft, draft);
+  gate.resolve(record()); await refresh;
+  assert.equal(h.controller.getState().auth.phase, 'owner-checked');
+  assert.equal(h.controller.getContactsWorkspace(), workspace);
+  assert.equal(workspace.getState().draft, draft);
+  await h.controller.dispose();
+});
+
+test('contacts close refuses an ordinary draft until cancellation without discarding any fields', async () => {
+  const repo = contactRepository();
+  const h = fixture({ getContacts: async () => repo.repository });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openContacts();
+  assert.ok(workspace);
+  workspace.beginCreate(); workspace.changeDraft({ name: 'Synthetic draft', mobile: '01000000001' });
+  const draft = workspace.getState().draft;
+  assert.equal(h.controller.closeContacts(), false);
+  assert.equal(h.controller.getContactsWorkspace(), workspace);
+  assert.equal(workspace.getState().draft, draft);
+  assert.ok(h.controller.getState().contacts.error);
+  assert.equal(workspace.cancelDraft(), true);
+  assert.equal(h.controller.closeContacts(), true);
+  assert.equal(workspace.getState().closed, true);
+  await h.controller.dispose();
+});
+
+test('close never abandons saving, uncertain or acknowledged-but-unrefreshed writes; sign-out still clears memory', async () => {
+  for (const mode of ['saving', 'retry-required', 'refresh-required'] as const) {
+    const gate = deferred();
+    const started = deferred();
+    const repo = contactRepository({
+      commit: async input => {
+        started.resolve();
+        if (mode === 'saving') await gate.promise;
+        if (mode !== 'refresh-required') throw new CloudContactError('unavailable');
+        return { status: 'committed', recordId: input.recordId, revision: input.expectedRevision + 1 };
+      },
+      get: async () => { throw new CloudContactError('unavailable'); },
+    });
+    const h = fixture({ getContacts: async () => repo.repository });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    const workspace = await h.controller.openContacts();
+    assert.ok(workspace);
+    workspace.beginCreate(); workspace.changeDraft({ name: 'Synthetic draft', mobile: '01000000001' });
+    const saving = workspace.save();
+    await started.promise;
+    if (mode !== 'saving') await saving;
+    assert.equal(workspace.getState().saveStatus, mode);
+    assert.equal(h.controller.closeContacts(), false);
+    assert.ok(workspace.getState().draft);
+    const closing = h.controller.signOut();
+    assert.equal(workspace.getState().closed, true);
+    assert.equal(workspace.getState().draft, null);
+    assert.equal(h.controller.getContactsWorkspace(), null);
+    gate.resolve(); await saving; await closing;
+    await h.controller.dispose();
+  }
+});
+
+test('actual SDK invalidation/sign-out or runtime loss synchronously clears the workspace and its memory draft', async () => {
+  for (const action of ['invalidate', 'signOut', 'runtime'] as const) {
+    const repo = contactRepository();
+    const h = fixture({ getContacts: async () => repo.repository });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    const workspace = await h.controller.openContacts();
+    assert.ok(workspace);
+    workspace.beginCreate(); workspace.changeDraft({ name: 'Synthetic draft', mobile: '01000000001' });
+    let logout: Promise<unknown> = Promise.resolve();
+    if (action === 'invalidate') h.session.invalidate();
+    else if (action === 'signOut') logout = h.session.signOut();
+    else { h.setRuntime(false); h.controller.getState(); }
+    assert.equal(workspace.getState().closed, true);
+    assert.equal(workspace.getState().draft, null);
+    assert.equal(h.controller.getContactsWorkspace(), null);
+    await logout; await h.controller.dispose();
+  }
+});
+
+test('contacts capability failure is a fixed UI error and disposes an ambiguous session', async () => {
+  for (const failure of [new Error(PASSWORD), new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } })]) {
+    const h = fixture({ getContacts: async () => { throw failure; } });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    assert.equal(await h.controller.openContacts(), null);
+    assert.equal(h.controller.getState().contacts.phase, 'closed');
+    assert.ok(h.controller.getState().contacts.error);
+    assert.equal(h.controller.getState().contacts.error.includes(PASSWORD), false);
+    assert.equal(h.controller.getState().auth.owner, null);
+    assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+    await h.controller.dispose();
+  }
+});
+
+test('contacts opening/open subscribers can cancel or sign out without late resurrection', async () => {
+  for (const when of ['opening', 'open'] as const) {
+    const repo = contactRepository();
+    const h = fixture({ getContacts: async () => repo.repository });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    let closing: Promise<boolean> | null = null;
+    h.controller.subscribe(value => { if (value.contacts.phase === when) closing = h.controller.signOut(); });
+    assert.equal(await h.controller.openContacts(), null);
+    assert.equal(await closing, true);
+    assert.equal(h.controller.getContactsWorkspace(), null);
+    assert.equal(h.controller.getState().contacts.phase, 'closed');
+    if (when === 'opening') assert.equal(h.calls.includes('getContacts'), false);
+    assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+    await h.controller.dispose();
+  }
+});
+
+test('workspace cleanup subscribers cannot recursively duplicate parent Auth cleanup or reopen the workspace', async () => {
+  const repo = contactRepository();
+  const h = fixture({ getContacts: async () => repo.repository });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openContacts();
+  assert.ok(workspace);
+  let logout: Promise<boolean> | null = null;
+  let disposal: Promise<void> | null = null;
+  let reopening: Promise<unknown> | null = null;
+  workspace.subscribe(value => {
+    if (value.closed) {
+      assert.equal(h.controller.getContactsWorkspace(), null);
+      logout = h.controller.signOut();
+      reopening = h.controller.openContacts();
+      disposal = h.controller.dispose();
+    }
+  });
+  const firstLogout = h.controller.signOut();
+  assert.equal(firstLogout, logout);
+  assert.equal(await reopening, null);
+  assert.equal(await firstLogout, true);
+  await disposal;
+  assert.equal(h.controller.getState().auth.phase, 'closed');
+  assert.equal(h.controller.getState().contacts.phase, 'closed');
+  assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+});
+
+test('reentrant runtime or session-state callbacks cannot authorize a cancelled contacts opening', async () => {
+  for (const boundary of ['runtime', 'session-state'] as const) {
+    const repo = contactRepository();
+    let cancel = false;
+    let h!: ReturnType<typeof fixture>;
+    const closeInsideBoundary = () => {
+      if (!cancel) return;
+      cancel = false;
+      assert.equal(h.controller.closeContacts(), true);
+    };
+    h = fixture({ getContacts: async () => repo.repository,
+      runtime: () => { if (boundary === 'runtime') closeInsideBoundary(); return true; },
+      factory: async session => ({ ...session, getState: () => {
+        if (boundary === 'session-state') closeInsideBoundary();
+        return session.getState();
+      } }),
+    });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    h.controller.subscribe(value => { if (value.contacts.phase === 'opening') cancel = true; });
+    assert.equal(await h.controller.openContacts(), null);
+    assert.equal(h.calls.includes('getContacts'), false);
+    assert.equal(h.controller.getContactsWorkspace(), null);
+    assert.equal(h.controller.getState().contacts.phase, 'closed');
+    assert.deepEqual(repo.calls, []);
+    await h.controller.dispose();
+  }
 });
 
 test('controller bundle imports no clinical storage, App, old backup, full Firestore or provider service', async () => {

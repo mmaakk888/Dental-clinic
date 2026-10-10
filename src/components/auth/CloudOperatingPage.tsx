@@ -1,15 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Cloud, Database, LoaderCircle, LogOut, RefreshCw, ShieldCheck } from 'lucide-react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { ArrowRight, Check, Cloud, Database, Eye, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UsersRound } from 'lucide-react';
 import { ClinicLogo } from '../common/ClinicLogo';
 import CloudUnavailablePage from './CloudUnavailablePage';
 import { isCloudOperatingRequest } from '../../utils/clinicEntryRoute';
 import { CLOUD_PROJECT_ID } from '../../utils/cloudIdentity';
 import { createFirebaseOperatingAuth } from '../../utils/cloudOperatingAuth';
+import { CLOUD_CONTACTS_UI_STAGE, createCloudContactUiPreview } from '../../utils/cloudContactUiStage';
+import type { createCloudContactWorkspaceController } from '../../utils/cloudContactWorkspaceController';
 import { createCloudOperatingPageController, type CloudOperatingPageController,
   type CloudOperatingPageState } from '../../utils/cloudOperatingPageController';
 
+const CloudContactsWorkspace = lazy(() => import('../contacts/CloudContactsWorkspace'));
+type ContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
+
 const INITIAL_STATE: CloudOperatingPageState = {
   auth: { phase: 'signed-out', owner: null }, pending: false, closing: false, error: '', cleanupFailed: false,
+  contacts: { phase: 'closed', error: '' },
 };
 
 function validRoute() {
@@ -22,6 +28,9 @@ export default function CloudOperatingPage() {
   const [password, setPassword] = useState('');
   const [view, setView] = useState<CloudOperatingPageState>(INITIAL_STATE);
   const active = useRef<CloudOperatingPageController | null>(null);
+  const previewRef = useRef<ContactsWorkspace | null>(null);
+  const [preview, setPreview] = useState<ContactsWorkspace | null>(null);
+  const [workspace, setWorkspace] = useState<ContactsWorkspace | null>(null);
 
   useEffect(() => {
     // A pure controller, not an SDK session. StrictMode remount gets a fresh
@@ -29,11 +38,18 @@ export default function CloudOperatingPage() {
     const controller = createCloudOperatingPageController(createFirebaseOperatingAuth, validRoute);
     active.current = controller;
     const unsubscribe = controller.subscribe(next => {
-      if (active.current === controller) setView(next);
+      if (active.current === controller) {
+        setView(next);
+        // Temporary Auth checking keeps the same workspace lease. Actual
+        // identity loss disposes it in the parent before this UI notification.
+        if (next.contacts.phase !== 'open') setWorkspace(null);
+      }
     });
     setView(controller.getState());
     return () => {
       if (active.current === controller) active.current = null;
+      previewRef.current?.dispose();
+      previewRef.current = null;
       unsubscribe();
       void controller.dispose().catch(() => undefined);
     };
@@ -42,9 +58,47 @@ export default function CloudOperatingPage() {
   async function leave(returnToLocal: boolean) {
     const controller = active.current;
     if (!controller) return;
+    const currentWorkspace = controller.getContactsWorkspace();
+    if (currentWorkspace?.getState().draft && !window.confirm('الخروج يمسح المسودة من هذه الصفحة. إذا وصلت عملية للخادم فلن يلغيها الخروج. هل تريد المتابعة؟')) return;
+    previewRef.current?.dispose();
+    previewRef.current = null;
+    setPreview(null);
+    setWorkspace(null);
     setPassword('');
     const confirmed = await controller.signOut();
     if (confirmed && returnToLocal && active.current === controller && validRoute()) window.location.assign('/');
+  }
+
+  function openPreview() {
+    const parent = active.current;
+    if (!parent || !validRoute() || previewRef.current) return;
+    const status = parent.getState();
+    if (status.pending || status.closing || status.cleanupFailed || status.contacts.phase !== 'closed') return;
+    const controller: ContactsWorkspace = createCloudContactUiPreview(() => previewRef.current === controller
+      && active.current === parent && validRoute());
+    previewRef.current = controller;
+    setPreview(controller);
+  }
+
+  async function openContacts() {
+    // Source-reviewed readiness, not permission: server authorization remains
+    // mandatory when this future feature is released. No URL/setting bypass.
+    if (!CLOUD_CONTACTS_UI_STAGE.available) return;
+    const controller = active.current;
+    if (!controller || !validRoute()) return;
+    const contacts = await controller.openContacts();
+    if (!contacts || active.current !== controller || !validRoute()
+      || controller.getContactsWorkspace() !== contacts) return;
+    setWorkspace(contacts);
+    await contacts.loadFirst();
+  }
+
+  function closeContacts(displayed: ContactsWorkspace) {
+    if (previewRef.current === displayed) {
+      previewRef.current.dispose();
+      previewRef.current = null;
+      setPreview(null);
+    } else if (active.current?.getContactsWorkspace() === displayed && active.current.closeContacts()) setWorkspace(null);
   }
 
   if (!validRoute()) return <CloudUnavailablePage />;
@@ -52,6 +106,7 @@ export default function CloudOperatingPage() {
   const busy = view.pending || view.closing;
   const blocked = busy || view.cleanupFailed;
   const owner = view.auth.phase === 'owner-checked' ? view.auth.owner : null;
+  const displayedWorkspace = preview ?? workspace;
 
   return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-5 sm:px-6 sm:py-8 text-slate-900">
     <div className="mx-auto w-full max-w-5xl space-y-5 sm:space-y-7">
@@ -60,7 +115,9 @@ export default function CloudOperatingPage() {
         <button type="button" onClick={() => void leave(true)} disabled={view.closing || view.cleanupFailed} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 disabled:opacity-50"><ArrowRight size={18} aria-hidden="true" /> العودة للنسخة المحلية</button>
       </header>
 
-      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+      {displayedWorkspace ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة جهات الاتصال…</section>}>
+        <CloudContactsWorkspace controller={displayedWorkspace} onClose={() => closeContacts(displayedWorkspace)} previewOnly={preview !== null} />
+      </Suspense> : <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
         <section className="min-w-0 rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm" aria-labelledby="operating-account-title">
           <div className="mb-5 flex items-start gap-3"><span className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><ShieldCheck size={25} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-account-title" className="text-lg font-extrabold">حساب مالك العيادة</h2><p className="mt-1 text-sm leading-7 text-slate-500">نستخدم حساب Firebase وعضويتك المعتمدة، وليس حساب الدخول المحلي.</p></div></div>
 
@@ -88,6 +145,14 @@ export default function CloudOperatingPage() {
         </section>
 
         <aside className="min-w-0 space-y-4" aria-labelledby="operating-readiness-title">
+          <section aria-labelledby="operating-contacts-title" className="rounded-3xl border border-indigo-100 bg-white p-5 sm:p-7 shadow-sm">
+            <div className="flex items-start gap-3"><span className="shrink-0 rounded-2xl bg-indigo-50 p-3 text-indigo-600"><UsersRound size={23} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-contacts-title" className="text-lg font-extrabold">جهات الاتصال السحابية</h2><p className="mt-1 text-sm leading-7 text-slate-500">واجهة مرتبة للموبايل والكمبيوتر، وحالات واضحة للحفظ وإعادة المحاولة.</p></div></div>
+            <p id="operating-contacts-stage" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-7 text-amber-950">{CLOUD_CONTACTS_UI_STAGE.reason}</p>
+            <button type="button" disabled={blocked} onClick={openPreview} className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700 disabled:opacity-50"><Eye size={19} aria-hidden="true" />معاينة واجهة جهات الاتصال</button>
+            <p className="mt-2 text-xs leading-6 text-slate-500">معاينة فارغة للتصميم فقط، بلا بيانات أو اتصال بقاعدة البيانات. لا يلزم تسجيل الدخول لمشاهدتها.</p>
+            {owner && <button type="button" aria-describedby="operating-contacts-stage" disabled={blocked || !CLOUD_CONTACTS_UI_STAGE.available || view.contacts.phase === 'opening'} onClick={() => void openContacts()} className="mt-3 flex min-h-11 w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{CLOUD_CONTACTS_UI_STAGE.available ? 'فتح جهات الاتصال من الخادم' : 'الحفظ السحابي غير مفعّل بعد'}</button>}
+            {view.contacts.error && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm leading-7 text-rose-800">{view.contacts.error}</p>}
+          </section>
           <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm"><h2 id="operating-readiness-title" className="text-lg font-extrabold">قبل بدء العمل أونلاين</h2><ol className="mt-5 space-y-4">
             <li className="flex items-start gap-3"><span className={`rounded-xl p-2.5 ${owner ? 'bg-emerald-50 text-emerald-700' : 'bg-indigo-50 text-indigo-600'}`}><ShieldCheck size={21} aria-hidden="true" /></span><div className="min-w-0"><p className="font-bold">دخول المالك والعضوية</p><p className="mt-1 text-sm leading-7 text-slate-500">{owner ? 'تم تأكيدهما في هذه الجلسة.' : 'هذا المدخل يفحصهما من Firebase.'}</p></div></li>
             <li className="flex items-start gap-3"><span className="rounded-xl bg-slate-100 p-2.5 text-slate-500"><Database size={21} aria-hidden="true" /></span><div className="min-w-0"><p className="font-bold">حفظ العيادة والصلاحيات</p><p className="mt-1 text-sm leading-7 text-slate-500">قيد الربط والاختبار. ملفات المرضى والماليات غير متاحة هنا، ولم تُنقل البيانات التجريبية.</p></div></li>
@@ -96,7 +161,7 @@ export default function CloudOperatingPage() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">لا تدخل بيانات مرضى حقيقية في هذه المرحلة. نجاح الدخول لا يعني أن نظام العيادة جاهز للاستخدام السحابي.</div>
           <p className="px-1 text-xs leading-6 text-slate-500">المشروع: <bdi className="break-all">{CLOUD_PROJECT_ID}</bdi><br />لا إنشاء حسابات أو رفع بيانات بمجرد فتح هذه الصفحة.</p>
         </aside>
-      </div>
+      </div>}
     </div>
   </main>;
 }
