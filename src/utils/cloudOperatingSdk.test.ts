@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import type { CloudClinicalCapability, CloudOperatingFirebaseSession } from './cloudOperatingAuth';
+import type { CloudClinicalCapability, CloudOperatingFirebaseSession, CloudServiceCatalogCapability } from './cloudOperatingAuth';
 import type { CloudClinicalCommand } from './cloudClinicalRepository';
 
 const PROJECT = 'dental-clinic-mmaakk888';
@@ -21,6 +21,10 @@ function rawClinicalCommand(): CloudClinicalCommand {
       notes: '', treatmentStage: 'first', rootCanalStatus: '', visitStatus: 'follow_up',
     } };
 }
+function rawCatalogCommand() {
+  return { operationId: INSTANCE, expectedRevision: 0, createdAt: CREATED_AT,
+    data: { examinationCents: 10000, services: [{ serviceId: RECORD, name: 'خدمة مصطنعة', kind: 'clinical', priceCents: 20000, active: true }] } };
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -34,7 +38,7 @@ async function until(check: () => boolean) {
 }
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -59,6 +63,13 @@ async function fixture(options: {
   clinicalFailure?: unknown;
   clinicalIntentKind?: 'clinical' | 'contact';
   clinicalIntentActor?: string;
+  catalogImportHook?: () => void;
+  catalogFactoryGate?: Promise<void>;
+  catalogMethodGate?: Promise<void>;
+  catalogFailure?: unknown;
+  catalogIntentKind?: 'catalog' | 'clinical';
+  catalogIntentActor?: string;
+  catalogRecord?: unknown;
   onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
@@ -72,6 +83,8 @@ async function fixture(options: {
   let patientsActive: (() => boolean) | null = null;
   const clinicalCalls: string[] = [], clinicalInputs: unknown[] = [];
   let clinicalActive: (() => boolean) | null = null;
+  const catalogCalls: string[] = [], catalogInputs: unknown[] = [];
+  let catalogActive: (() => boolean) | null = null;
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -227,6 +240,36 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           };
         } };
       }
+      if (name === './firebaseCloudServiceCatalog') {
+        options.catalogImportHook?.();
+        return { createFirebaseCloudServiceCatalog: async (target: unknown, settings: { isActive: () => boolean }) => {
+          assert.equal(target, auth); assert.equal(settings.isActive(), true);
+          catalogCalls.push('factory'); catalogActive = settings.isActive; await options.catalogFactoryGate;
+          const work = async <T>(name: string, input: unknown, result: T) => {
+            catalogCalls.push(name); catalogInputs.push(input); await options.catalogMethodGate;
+            if (options.catalogFailure !== undefined) throw options.catalogFailure;
+            return result;
+          };
+          const intent = (command: unknown, createdAt = CREATED_AT, status = 'prepared') => module.exports.__input({
+            schemaVersion: 1, clinicId: 'main', recordId: INSTANCE, operationId: INSTANCE,
+            actorUid: options.catalogIntentActor ?? UID, kind: options.catalogIntentKind ?? 'catalog', requestHash: '0'.repeat(64),
+            status, revision: status === 'prepared' ? 1 : 2, createdAt, command,
+          });
+          return {
+            repository: {
+              get: () => work('get', null, options.catalogRecord === undefined ? null : module.exports.__input(options.catalogRecord)),
+              commit: (input: unknown) => work('commit', input, { status: 'committed', recordId: 'serviceCatalog', revision: 1 }),
+            },
+            journal: {
+              prepare: (kind: unknown, command: unknown, createdAt: string) => work('prepare', { kind, command, createdAt }, intent(command, createdAt)),
+              get: (id: string) => work('intentGet', id, intent(rawCatalogCommand())),
+              listPreparedPage: (kind: unknown, input: unknown) => work('listPreparedPage', { kind, input }, { records: [intent(rawCatalogCommand())], nextAfterId: null }),
+              listHistoryPage: (kind: unknown, input: unknown) => work('listHistoryPage', { kind, input }, { records: [intent(rawCatalogCommand())], nextAfterId: null }),
+              cancel: (id: string) => work('cancel', id, intent(rawCatalogCommand(), undefined, 'cancelled')),
+            },
+          };
+        } };
+      }
       if (name === 'firebase/firestore/lite') return {
         getFirestore: (target: unknown, databaseId: string) => {
           assert.equal(target, app); assert.equal(databaseId, '(default)'); step('getFirestore'); return database;
@@ -254,6 +297,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     contactsActive: () => contactsActive?.() ?? false,
     patientCalls, patientInputs, patientsActive: () => patientsActive?.() ?? false,
     clinicalCalls, clinicalInputs, clinicalActive: () => clinicalActive?.() ?? false,
+    catalogCalls, catalogInputs, catalogActive: () => catalogActive?.() ?? false,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
     replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
@@ -268,7 +312,7 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog'].sort());
 });
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
@@ -412,7 +456,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(again, repository);
   assert.equal(Object.isFrozen(repository), true);
   assert.equal(h.contactsActive(), true);
-  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getClinical', 'getContacts', 'getPatients', 'getState',
+  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getClinical', 'getContacts', 'getPatients', 'getServiceCatalog', 'getState',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
   assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);
@@ -925,4 +969,134 @@ test('clinical journal rejects another domain or another actor returned by its a
     for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'] as const) await assert.rejects(invokeClinical(cap, method, h.api.__input));
     await session.dispose();
   }
+});
+
+type CatalogTestMethod = 'get' | 'commit' | 'prepare' | 'intentGet' | 'listPreparedPage' | 'listHistoryPage' | 'cancel';
+const CATALOG_METHODS: readonly CatalogTestMethod[] = ['get', 'commit', 'prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'];
+function invokeCatalog(cap: CloudServiceCatalogCapability, method: CatalogTestMethod, copy: <T>(value: T) => T): Promise<unknown> {
+  switch (method) {
+    case 'get': return cap.repository.get();
+    case 'commit': return cap.repository.commit(copy(rawCatalogCommand()));
+    case 'prepare': return cap.journal.prepare('catalog', copy(rawCatalogCommand()), CREATED_AT);
+    case 'intentGet': return cap.journal.get(INSTANCE);
+    case 'listPreparedPage': return cap.journal.listPreparedPage('catalog', copy({ limit: 2 }));
+    case 'listHistoryPage': return cap.journal.listHistoryPage!('catalog', copy({ limit: 2 }));
+    case 'cancel': return cap.journal.cancel(INSTANCE);
+  }
+}
+
+test('catalog capability is explicit lazy and frozen, missing catalog stays unknown, each action reauthorizes before and after', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+  await assert.rejects(session.getServiceCatalog()); assert.equal(h.imports.includes('./firebaseCloudServiceCatalog'), false);
+  await session.signIn(EMAIL, PASSWORD); assert.deepEqual(h.catalogCalls, []);
+  const cap = await session.getServiceCatalog(); assert.equal(cap, await session.getServiceCatalog());
+  assert.equal(Object.isFrozen(cap), true); assert.equal(Object.isFrozen(cap.repository), true); assert.equal(Object.isFrozen(cap.journal), true);
+  assert.deepEqual(Object.keys(cap.repository).sort(), ['commit', 'get']);
+  for (const method of CATALOG_METHODS) {
+    const before = h.paths.length, result = await invokeCatalog(cap, method, h.api.__input);
+    if (method === 'get') assert.equal(result, null);
+    assert.equal(h.paths.length - before, 2, method);
+  }
+  assert.deepEqual(h.catalogCalls, ['factory', ...CATALOG_METHODS]); await session.dispose();
+});
+
+test('retained catalog actions never revive after logout/relogin, same-UID object replacement or runtime/emulator loss', async () => {
+  for (const event of ['logout', 'invalidate', 'dispose', 'replace', 'host', 'emulator'] as const) {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getServiceCatalog();
+    if (event === 'logout') { await session.signOut(); await session.signIn(EMAIL, PASSWORD); }
+    else if (event === 'invalidate') session.invalidate();
+    else if (event === 'dispose') await session.dispose();
+    else if (event === 'replace') h.replaceIdentity();
+    else if (event === 'host') h.location.hostname = 'outside.invalid';
+    else h.auth.emulatorConfig = {};
+    const before = h.catalogCalls.length;
+    for (const method of CATALOG_METHODS) await assert.rejects(invokeCatalog(cap, method, h.api.__input));
+    assert.equal(h.catalogActive(), false); assert.equal(h.catalogCalls.length, before);
+    if (event === 'host') h.location.hostname = '127.0.0.1';
+    if (event === 'emulator') h.auth.emulatorConfig = null;
+    await assert.rejects(cap.repository.get()); await session.dispose();
+  }
+});
+
+test('catalog import or factory cancelled during loading never returns a usable late capability', async () => {
+  for (const at of ['import', 'factory']) {
+    const gate = deferred(); let session!: CloudOperatingFirebaseSession;
+    const h = await fixture(at === 'import' ? { catalogImportHook: () => { void session.signOut(); } } : { catalogFactoryGate: gate.promise });
+    session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const pending = session.getServiceCatalog(), rejected = assert.rejects(pending);
+    if (at === 'factory') { await until(() => h.catalogCalls.includes('factory')); await session.signOut(); gate.resolve(); }
+    await rejected; assert.equal(h.catalogActive(), false); await session.dispose();
+  }
+});
+
+test('catalog owner loss during authorization prevents invocation while accepted work is masked after logout', async () => {
+  for (const method of CATALOG_METHODS) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getServiceCatalog(); enabled = true;
+    const pending = invokeCatalog(cap, method, h.api.__input), rejected = assert.rejects(pending);
+    await until(() => reached); const logout = session.signOut(); gate.resolve(); await rejected; await logout;
+    assert.deepEqual(h.catalogCalls, ['factory']); await session.dispose();
+    const acceptedGate = deferred(), accepted = await fixture({ catalogMethodGate: acceptedGate.promise });
+    const live = await accepted.api.createFirebaseOperatingAuth(); await live.signIn(EMAIL, PASSWORD);
+    const bound = await live.getServiceCatalog(), doing = invokeCatalog(bound, method, accepted.api.__input), refused = assert.rejects(doing);
+    await until(() => accepted.catalogCalls.includes(method)); await live.signOut(); acceptedGate.resolve(); await refused;
+    assert.equal(accepted.catalogActive(), false); await live.dispose();
+  }
+});
+
+test('catalog commands and query bounds snapshot before delayed server authorization', async () => {
+  for (const method of ['commit', 'prepare', 'listPreparedPage', 'listHistoryPage'] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getServiceCatalog(), input = h.api.__input(rawCatalogCommand()), bounds = h.api.__input({ afterId: RECORD, limit: 2 }); enabled = true;
+    const pending = method === 'commit' ? cap.repository.commit(input) : method === 'prepare' ? cap.journal.prepare('catalog', input, CREATED_AT)
+      : cap.journal[method]!('catalog', bounds);
+    await until(() => reached); input.data.examinationCents = 1; input.data.services[0].priceCents = 1; bounds.limit = 50; bounds.afterId = INSTANCE;
+    gate.resolve(); await pending;
+    const received = h.catalogInputs[0] as any;
+    if (method === 'commit' || method === 'prepare') { const value = method === 'prepare' ? received.command : received; assert.equal(value.data.examinationCents, 10000); assert.equal(value.data.services[0].priceCents, 20000); }
+    else { assert.equal(received.input.limit, 2); assert.equal(received.input.afterId, RECORD); }
+    await session.dispose();
+  }
+});
+
+test('catalog malformed commands, foreign kinds, timestamps, IDs and bounds fail before authorization/data calls', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const cap = await session.getServiceCatalog(), before = h.paths.length;
+  const malicious = new Proxy({}, { ownKeys() { throw new Error(PASSWORD); } });
+  for (const input of [{}, malicious]) {
+    await assert.rejects(cap.repository.commit(input as never), error => !String(error).includes(PASSWORD));
+    await assert.rejects(cap.journal.prepare('catalog', input, CREATED_AT), error => !String(error).includes(PASSWORD));
+  }
+  for (const kind of ['clinical', 'contact', 'patient-profile'] as const) {
+    await assert.rejects(cap.journal.prepare(kind, h.api.__input(rawCatalogCommand()), CREATED_AT));
+    await assert.rejects(cap.journal.listPreparedPage(kind)); await assert.rejects(cap.journal.listHistoryPage!(kind));
+  }
+  for (const method of ['listPreparedPage', 'listHistoryPage'] as const) {
+    for (const input of [h.api.__input({ limit: 0 }), h.api.__input({ limit: 51 }), malicious]) await assert.rejects(cap.journal[method]!('catalog', input), error => !String(error).includes(PASSWORD));
+  }
+  for (const id of ['', `${INSTANCE}\n`]) { await assert.rejects(cap.journal.get(id)); await assert.rejects(cap.journal.cancel(id)); }
+  await assert.rejects(cap.journal.prepare('catalog', h.api.__input(rawCatalogCommand()), CREATED_AT.replace('10:00:', '11:00:')));
+  assert.equal(h.paths.length, before); assert.deepEqual(h.catalogCalls, ['factory']); await session.dispose();
+});
+
+test('catalog adapter failures, foreign returned intents and malformed singleton records expose no private errors or defaults', async () => {
+  for (const options of [{ catalogFailure: new Error(PASSWORD) }, { catalogFailure: new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } }) }]) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getServiceCatalog();
+    for (const method of CATALOG_METHODS) await assert.rejects(invokeCatalog(cap, method, h.api.__input), error => !String(error).includes(PASSWORD));
+    await session.dispose();
+  }
+  for (const options of [{ catalogIntentKind: 'clinical' as const }, { catalogIntentActor: 'another-owner' }]) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getServiceCatalog();
+    for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'] as const) await assert.rejects(invokeCatalog(cap, method, h.api.__input));
+    await session.dispose();
+  }
+  const h = await fixture({ catalogRecord: { examinationCents: 0 } }), session = await h.api.createFirebaseOperatingAuth();
+  await session.signIn(EMAIL, PASSWORD); await assert.rejects((await session.getServiceCatalog()).repository.get()); await session.dispose();
 });

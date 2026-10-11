@@ -7,7 +7,11 @@ import type { CloudPatientRepository } from './cloudPatientRepository';
 import type { CloudClinicalRepository } from './cloudClinicalRepository';
 import type { CloudOperationIntentRepository } from './cloudOperationIntent';
 import type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
+import type { CloudServiceCatalogRepository } from './cloudServiceCatalogRepository';
 export type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
+export interface CloudServiceCatalogCapability {
+  repository: CloudServiceCatalogRepository; journal: CloudOperationIntentRepository;
+}
 
 type OperatingErrorCode = 'invalid-input' | 'busy' | 'unavailable' | 'changed' | 'closed';
 
@@ -183,6 +187,8 @@ export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
   getPatients(): Promise<CloudPatientRepository>;
   /** Prepared clinical-only capability; no UI, Rules or Hosting activation. */
   getClinical(): Promise<CloudClinicalCapability>;
+  /** Explicit catalog/settings capability. No default prices or UI activation. */
+  getServiceCatalog(): Promise<CloudServiceCatalogCapability>;
 };
 
 /**
@@ -268,7 +274,8 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
     let contactsCreation: Promise<CloudContactRepository> | null = null;
     let patientsCreation: Promise<CloudPatientRepository> | null = null;
     let clinicalCreation: Promise<CloudClinicalCapability> | null = null;
-    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; };
+    let catalogCreation: Promise<CloudServiceCatalogCapability> | null = null;
+    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; catalogCreation = null; };
     session.subscribe(value => {
       if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeCapabilities();
     });
@@ -600,6 +607,122 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
             void creation.catch(() => { if (clinicalCreation === creation) clinicalCreation = null; });
           }
           const capability = await clinicalCreation;
+          requireActive(); await authorize(); requireActive(); return capability;
+        } catch { throw new CloudOperatingAuthError('unavailable'); }
+      },
+      getServiceCatalog: async (): Promise<CloudServiceCatalogCapability> => {
+        try {
+          const checked = session.getState(), user = auth.currentUser;
+          if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
+            throw new CloudOperatingAuthError('changed');
+          }
+          const generation = capabilityGeneration, uid = checked.owner.uid;
+          const requireActive = () => {
+            try { requireRuntime(); }
+            catch { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+            const phase = session.getState().phase;
+            if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
+              || phase === 'signed-out' || phase === 'signing-out' || phase === 'closed') {
+              if (generation === capabilityGeneration) revokeCapabilities();
+              throw new CloudOperatingAuthError('changed');
+            }
+          };
+          const authorize = async () => {
+            requireActive(); const owner = await session.authorizeOwner(); requireActive();
+            if (owner.uid !== uid) { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+          };
+          await authorize(); requireActive();
+          if (!catalogCreation) {
+            const creation = Promise.resolve().then(async () => {
+              requireActive();
+              const [catalog, contract, intents] = await Promise.all([
+                import('./firebaseCloudServiceCatalog'), import('./cloudServiceCatalogRepository'), import('./cloudOperationIntent'),
+              ]);
+              requireActive();
+              const capability = await catalog.createFirebaseCloudServiceCatalog(auth, {
+                isActive: () => { try { requireActive(); return true; } catch { return false; } },
+              });
+              requireActive();
+              const run = async <T>(work: () => Promise<T>): Promise<T> => {
+                try {
+                  await authorize(); requireActive();
+                  const result = await work(); requireActive();
+                  await authorize(); requireActive(); return result;
+                } catch (error) {
+                  let safe: Error = new CloudOperatingAuthError('unavailable');
+                  try {
+                    if (error instanceof CloudOperatingAuthError) safe = new CloudOperatingAuthError(error.code);
+                    if (error instanceof contract.CloudServiceCatalogError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) safe = new contract.CloudServiceCatalogError(error.code);
+                    if (error instanceof intents.CloudOperationIntentError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) safe = new intents.CloudOperationIntentError(error.code);
+                  } catch { /* Only fixed errors escape. */ }
+                  throw safe;
+                }
+              };
+              const uuid = (value: unknown): value is string => typeof value === 'string' && value.length === 36
+                && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+              const intentId = (value: unknown) => { if (!uuid(value)) throw new intents.CloudOperationIntentError('invalid'); return value; };
+              const kindOnly = (value: unknown) => { if (value !== 'catalog') throw new intents.CloudOperationIntentError('invalid'); };
+              const pageInput = (value: unknown) => {
+                try {
+                  const source = value === undefined ? {} : value;
+                  if (!source || typeof source !== 'object' || Array.isArray(source)
+                    || ![Object.prototype, null].includes(Object.getPrototypeOf(source))) throw new Error();
+                  const keys = Reflect.ownKeys(source), copy: Record<string, unknown> = {};
+                  if (keys.some(key => typeof key !== 'string' || !['afterId', 'limit'].includes(key))) throw new Error();
+                  for (const key of keys as string[]) {
+                    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+                    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new Error();
+                    copy[key] = descriptor.value;
+                  }
+                  const afterId = copy.afterId === undefined ? null : copy.afterId, limit = copy.limit === undefined ? 25 : copy.limit;
+                  if (afterId !== null && !uuid(afterId) || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error();
+                  return { afterId: afterId as string | null, limit };
+                } catch { throw new intents.CloudOperationIntentError('invalid'); }
+              };
+              const checkedIntent = (value: unknown, id?: string, expectedCommand?: object) => {
+                const result = intents.parseCloudOperationIntent(value);
+                const command = contract.prepareCloudServiceCatalogCommand(result.command);
+                if (result.kind !== 'catalog' || result.actorUid !== uid || id !== undefined && result.operationId !== id
+                  || command.createdAt !== result.createdAt || JSON.stringify(intents.prepareCloudIntentCommand(command)) !== JSON.stringify(result.command)
+                  || expectedCommand !== undefined && JSON.stringify(expectedCommand) !== JSON.stringify(result.command)) throw new intents.CloudOperationIntentError('invalid');
+                return result;
+              };
+              const repository = Object.freeze({
+                get: () => run(async () => {
+                  const result = await capability.repository.get();
+                  return result === null ? null : contract.parseCloudServiceCatalogRecord(result);
+                }),
+                commit: async input => {
+                  const prepared = contract.prepareCloudServiceCatalogCommand(input);
+                  return run(() => capability.repository.commit(prepared));
+                },
+              } satisfies CloudServiceCatalogRepository);
+              const list = async (kind: unknown, input: unknown, history: boolean) => {
+                kindOnly(kind); const prepared = pageInput(input);
+                return run(async () => {
+                  const method = history ? capability.journal.listHistoryPage : capability.journal.listPreparedPage;
+                  if (typeof method !== 'function') throw new intents.CloudOperationIntentError('unavailable');
+                  const page = await method.call(capability.journal, 'catalog', prepared);
+                  return { records: page.records.map(value => checkedIntent(value)), nextAfterId: page.nextAfterId };
+                });
+              };
+              const journal = Object.freeze({
+                prepare: async (kind, input, createdAt) => {
+                  kindOnly(kind); const command = contract.prepareCloudServiceCatalogCommand(input), prepared = intents.prepareCloudIntentCommand(command);
+                  if (createdAt !== command.createdAt) throw new intents.CloudOperationIntentError('invalid');
+                  return run(async () => checkedIntent(await capability.journal.prepare('catalog', prepared, createdAt), command.operationId, prepared));
+                },
+                get: async id => { const prepared = intentId(id); return run(async () => { const result = await capability.journal.get(prepared); return result === null ? null : checkedIntent(result, prepared); }); },
+                listPreparedPage: (kind, input) => list(kind, input, false),
+                listHistoryPage: (kind, input) => list(kind, input, true),
+                cancel: async id => { const prepared = intentId(id); return run(async () => checkedIntent(await capability.journal.cancel(prepared), prepared)); },
+              } satisfies CloudOperationIntentRepository);
+              return Object.freeze({ repository, journal });
+            });
+            catalogCreation = creation;
+            void creation.catch(() => { if (catalogCreation === creation) catalogCreation = null; });
+          }
+          const capability = await catalogCreation;
           requireActive(); await authorize(); requireActive(); return capability;
         } catch { throw new CloudOperatingAuthError('unavailable'); }
       },

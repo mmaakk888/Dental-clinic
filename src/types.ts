@@ -150,6 +150,8 @@ export interface WhatsappSettings {
 
 export interface SessionServiceItem {
   id: string;
+  /** Optional stable source reference; the captured visit name/price remain authoritative. */
+  catalogServiceId?: string | null;
   name: string; // e.g. 'كشف', 'خلع', 'حشو', 'علاج عصب', 'تنظيف', 'أشعة', 'خدمة أخرى'
   price: number;
   paid?: number;

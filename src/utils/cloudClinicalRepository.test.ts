@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { prepareCloudIntentCommand } from './cloudOperationIntent';
 import { CloudClinicalError, createCloudClinicalRepository, parseCloudClinicalAccount, parseCloudClinicalSession,
-  parseCloudClinicalReceipt, prepareCloudClinicalCommand, prepareCloudClinicalPageInput,
+  parseCloudClinicalReceipt, prepareCloudClinicalCommand, prepareCloudClinicalPageInput, prepareCloudClinicalSessionData,
   type CloudClinicalAdapter, type CloudClinicalCommand, type CloudClinicalSessionData } from './cloudClinicalRepository';
 
 // Atomic fabricated server only. These are not Rules-engine, SDK/Auth or
@@ -262,4 +262,42 @@ test('unavailable/hostile adapter errors never escape as provider payloads or ra
 test('clinical core dependency graph contains no SDK/Auth/local storage/App/private-lab backend', async () => {
   const output = await build({ entryPoints: ['src/utils/cloudClinicalRepository.ts'], bundle: true, write: false, metafile: true, platform: 'browser', logLevel: 'silent' });
   for (const input of Object.keys(output.metafile!.inputs)) assert.doesNotMatch(input, /firebase|storage\.ts|src\/App\.tsx|cloudOperatingAuth|prostheticRouting|firebaseService|offlineSync/iu);
+});
+
+test('public session draft validation needs no fabricated operation ID and cannot mutate caller data', () => {
+  const input = data(), prepared = prepareCloudClinicalSessionData(input);
+  input.services[0].priceCents = 1; input.teethIds.push('ur6');
+  assert.equal(prepared.services[0].priceCents, 30_000); assert.deepEqual(prepared.teethIds, ['ur5']);
+  assert.equal(Object.hasOwn(prepared, 'operationId'), false);
+});
+
+test('public session draft validation rejects unknown prices and normalizes hostile errors without reading storage', () => {
+  const unknown = data(); unknown.services[0].priceCents = null as never;
+  for (const value of [unknown, { ...data(), examinationCents: -1 }, new Proxy({}, { ownKeys() { throw new Error('PRIVATE_DRAFT'); } })]) {
+    assert.throws(() => prepareCloudClinicalSessionData(value), error => code('invalid')(error) && !String(error).includes('PRIVATE'));
+  }
+});
+
+test('optional catalog references retain stable identity without changing historical command shapes', () => {
+  const legacy = data();
+  assert.deepEqual(prepareCloudClinicalSessionData(legacy), legacy);
+  for (const catalogServiceId of [OTHER, null]) {
+    const input = { ...data(), services: [{ ...data().services[0], catalogServiceId }] };
+    assert.equal(prepareCloudClinicalSessionData(input).services[0].catalogServiceId, catalogServiceId);
+  }
+  for (const catalogServiceId of ['', 'service-name', undefined, 1]) {
+    assert.throws(() => prepareCloudClinicalSessionData({ ...data(), services: [{ ...data().services[0], catalogServiceId }] }), code('invalid'));
+  }
+});
+
+test('stored catalog identity is part of the original immutable clinical operation fingerprint', async () => {
+  const h = harness(), input = visit({ data: { ...data(), services: [{ ...data().services[0], catalogServiceId: OTHER }] } });
+  await h.repo.commit(input);
+  assert.equal(h.docs.get(path('patientSessions', OP)).data.services[0].catalogServiceId, OTHER);
+  assert.equal((await h.repo.commit(input)).status, 'already-committed');
+  const altered = structuredClone(input);
+  assert.equal(altered.action, 'visit');
+  if (altered.action !== 'visit') throw new Error('Synthetic visit expected');
+  altered.data.services[0].catalogServiceId = OP2;
+  await assert.rejects(h.repo.commit(altered), code('conflict'));
 });

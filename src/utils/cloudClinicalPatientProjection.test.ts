@@ -29,6 +29,19 @@ const account = (sessions: CloudClinicalSession[] = [session()]): CloudClinicalA
 const invalid = (value: unknown) => value instanceof CloudClinicalError && value.code === 'invalid';
 const unavailable = (value: unknown) => value instanceof CloudClinicalError && value.code === 'unavailable';
 const conflict = (value: unknown) => value instanceof CloudClinicalError && value.code === 'conflict';
+
+test('patient presentation preserves optional stable catalog references and historical absence', () => {
+  const legacy = session();
+  const oldView = projectCloudClinicalPatient(profile(), account([legacy]), [legacy], [receipt()]);
+  assert.equal(Object.hasOwn(oldView.patient.sessions[0].services![0], 'catalogServiceId'), false);
+  for (const catalogServiceId of [id(7000), null]) {
+    const current = session(); current.data.services[0].catalogServiceId = catalogServiceId;
+    const result = projectCloudClinicalPatient(profile(), account([current]), [current], [receipt()]);
+    assert.equal(result.patient.sessions[0].services![0].catalogServiceId, catalogServiceId);
+    assert.equal(result.totalCents, 40_001); assert.equal(result.paidCents, 10_001);
+  }
+});
+
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(accept => { resolve = accept; }); return { resolve, promise }; }
 function harness() {
   const calls: string[] = [];

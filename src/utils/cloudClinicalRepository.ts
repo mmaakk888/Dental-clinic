@@ -6,7 +6,11 @@ import { CloudOperationIntentError, readCloudOperationIntentForCommit,
 
 /** Prepared owner-only clinical storage. No SDK, activation, local fallback,
  * historical migration or private supplier data belongs to this module. */
-export interface CloudClinicalService { id: string; name: string; priceCents: number; tooth: string | null }
+export interface CloudClinicalService {
+  id: string; name: string; priceCents: number; tooth: string | null;
+  /** Stable catalog reference; historical commands without it retain their exact shape. */
+  catalogServiceId?: string | null;
+}
 export interface CloudClinicalProgress {
   notes: string; treatmentStage: 'single' | 'first' | 'second' | 'third' | 'follow_up';
   rootCanalStatus: '' | 'access_cleaning' | 'working_length' | 'canal_filled' | 'impression' | 'final_restoration';
@@ -119,11 +123,13 @@ function sessionData(value: unknown): CloudClinicalSessionData {
   if (teethIds.some(id => typeof id !== 'string' || id.length > 3 || !parseCompositeToothId(id)) || new Set(teethIds).size !== teethIds.length) invalid();
   const ids = new Set<string>();
   const services = array(item.services, 64).map(value => {
-    const row = fields(value, ['id', 'name', 'priceCents', 'tooth']);
+    const row = fields(value, ['id', 'name', 'priceCents', 'tooth'], ['catalogServiceId']);
     if (!uuid(row.id) || ids.has(row.id) || !text(row.name, 200) || !row.name || row.name.normalize('NFKC').trim().startsWith('تركيب') || !money(row.priceCents)
+      || 'catalogServiceId' in row && row.catalogServiceId !== null && !uuid(row.catalogServiceId)
       || row.tooth !== null && (typeof row.tooth !== 'string' || row.tooth.length > 3 || !parseCompositeToothId(row.tooth) || !teethIds.includes(row.tooth))) invalid();
     ids.add(row.id);
-    return { id: row.id, name: row.name, priceCents: row.priceCents, tooth: row.tooth as string | null };
+    return { id: row.id, name: row.name, priceCents: row.priceCents, tooth: row.tooth as string | null,
+      ...('catalogServiceId' in row ? { catalogServiceId: row.catalogServiceId as string | null } : {}) };
   });
   if (!services.length && item.examinationCents === 0) invalid();
   const result = { type: item.type, date: item.date, teethIds: teethIds as string[], services, examinationCents: item.examinationCents,
@@ -136,6 +142,11 @@ function total(value: CloudClinicalSessionData): number {
   const result = value.services.reduce((sum, row) => sum + row.priceCents, value.examinationCents);
   if (!money(result)) invalid();
   return result;
+}
+/** Draft validation without inventing an operation ID or creating a charge. */
+export function prepareCloudClinicalSessionData(input: unknown): CloudClinicalSessionData {
+  try { return sessionData(input); }
+  catch { throw new CloudClinicalError('invalid'); }
 }
 export function prepareCloudClinicalCommand(value: unknown): CloudClinicalCommand {
   try {

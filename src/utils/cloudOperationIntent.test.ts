@@ -237,7 +237,7 @@ test('same operation ID from the wrong kind/body/hash/time cannot acknowledge or
   }
 });
 test('all prepared intent kinds resolve only their exact corresponding domain receipt path', async () => {
-  for (const [kind, collection] of [['patient-profile', 'patientOperations'], ['contact', 'contactOperations'], ['clinical', 'clinicalOperations']] as const) {
+  for (const [kind, collection] of [['patient-profile', 'patientOperations'], ['contact', 'contactOperations'], ['clinical', 'clinicalOperations'], ['catalog', 'catalogOperations']] as const) {
     const h = harness(); await h.journal.prepare(kind, { operationId: OP }, WHEN);
     h.docs.set(path(collection), { synthetic: true }); await assert.rejects(h.journal.cancel(OP), check('conflict'));
     assert.equal(h.calls.includes(`get:${path(collection)}`), true);
