@@ -77,6 +77,7 @@ export default function CloudOperatingPage() {
       previewRef.current = null;
       patientPreviewRef.current?.dispose();
       patientPreviewRef.current = null;
+      clinicalPreviewRef.current?.visit?.dispose();
       clinicalPreviewRef.current?.file.dispose();
       clinicalPreviewRef.current?.recovery.dispose();
       clinicalPreviewRef.current = null;
@@ -105,6 +106,7 @@ export default function CloudOperatingPage() {
     patientPreviewRef.current = null;
     setPatientPreview(null);
     setPatientWorkspace(null);
+    clinicalPreviewRef.current?.visit?.dispose();
     clinicalPreviewRef.current?.file.dispose();
     clinicalPreviewRef.current?.recovery.dispose();
     clinicalPreviewRef.current = null;
@@ -210,7 +212,7 @@ export default function CloudOperatingPage() {
 
   function closeClinical(displayed: CloudClinicalWorkspaceBundle) {
     if (clinicalPreviewRef.current === displayed) {
-      displayed.file.dispose(); displayed.recovery.dispose();
+      displayed.visit?.dispose(); displayed.file.dispose(); displayed.recovery.dispose();
       clinicalPreviewRef.current = null;
       setClinicalPreview(null);
     } else if (active.current?.getClinicalWorkspace() === displayed && active.current.closeClinical(displayed)) setClinicalWorkspace(null);
@@ -310,7 +312,7 @@ export default function CloudOperatingPage() {
             <div className="flex items-start gap-3"><span className="shrink-0 rounded-2xl bg-indigo-50 p-3 text-indigo-600"><ClipboardList size={23} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-clinical-title" className="text-lg font-extrabold">الملف السريري واسترجاع العمليات</h2><p className="mt-1 text-sm leading-7 text-slate-500">الجلسات والتحصيل الفعلي وحساب المريض، مع سجل للتحقق من العمليات غير المؤكدة.</p></div></div>
             <p id="operating-clinical-stage" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-7 text-amber-950">{CLOUD_CLINICAL_UI_STAGE.reason}</p>
             <button type="button" disabled={blocked} onClick={openClinicalPreview} className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700 disabled:opacity-50"><Eye size={19} aria-hidden="true" />معاينة الملف السريري وسجل الاسترجاع</button>
-            <p className="mt-2 text-xs leading-6 text-slate-500">معاينة فارغة للتصميم فقط، بلا بيانات أو اتصال بقاعدة البيانات. لا يلزم تسجيل الدخول لمشاهدتها.</p>
+            <p className="mt-2 text-xs leading-6 text-slate-500">تتضمن تصميم تسجيل الزيارة والخدمات والكشف الاختياري. معاينة فارغة بلا بيانات أو اتصال بقاعدة البيانات، ولا يلزم تسجيل الدخول لمشاهدتها.</p>
             {owner && <button type="button" aria-describedby="operating-clinical-stage" disabled={blocked || !CLOUD_CLINICAL_UI_STAGE.available || view.clinical.phase === 'opening'} onClick={() => void openClinical()} className="mt-3 flex min-h-11 w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{CLOUD_CLINICAL_UI_STAGE.available ? 'فتح الملف السريري وسجل الاسترجاع' : 'التشغيل السريري غير مفعّل بعد'}</button>}
             {view.clinical.error && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm leading-7 text-rose-800">{view.clinical.error}</p>}
           </section>

@@ -102,6 +102,24 @@ function harness() {
     active: (value: boolean) => { active = value; }, capCalls: () => capCalls };
 }
 
+test('clinical subscribers receive the original transition during synchronous dirty reacquisition', async () => {
+  const h = harness();
+  assert.equal(await h.controller.open(PATIENT), true);
+  assert.equal(h.controller.setDraftDirty(PATIENT, true), true);
+  let reacquire = true;
+  h.controller.subscribe(state => {
+    if (!state.draftDirty && reacquire) {
+      reacquire = false;
+      assert.equal(h.controller.setDraftDirty(PATIENT, true), true);
+    }
+  });
+  const observed: boolean[] = [];
+  h.controller.subscribe(state => { observed.push(state.draftDirty); });
+  assert.equal(h.controller.setDraftDirty(PATIENT, false), false);
+  assert.deepEqual(observed, [true, false]);
+  assert.equal(h.controller.getState().draftDirty, true);
+});
+
 test('clinical controller constructs inertly and opens only a fully verified selected cloud UUID', async () => {
   const h = harness(); assert.deepEqual(h.calls, []); assert.equal(h.capCalls(), 0);
   assert.equal(h.controller.getState().snapshot, null);

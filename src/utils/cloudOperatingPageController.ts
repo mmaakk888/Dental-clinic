@@ -179,10 +179,13 @@ export function createCloudOperatingPageController(
     clinicalInvalidating = true;
     // Both leases are revoked before either controller notifies subscribers.
     // Actual logout hides memory, but cannot undo a server-accepted command.
-    try { previous?.file.dispose(); }
+    try { previous?.visit?.dispose(); }
     finally {
-      try { previous?.recovery.dispose(); }
-      finally { clinicalInvalidating = wasInvalidating; }
+      try { previous?.file.dispose(); }
+      finally {
+        try { previous?.recovery.dispose(); }
+        finally { clinicalInvalidating = wasInvalidating; }
+      }
     }
   }
 
@@ -613,8 +616,9 @@ export function createCloudOperatingPageController(
         if (!clinicalActive(ticket, candidate, owner.uid)) return null;
         const capability = await candidate.getClinical!();
         if (!clinicalActive(ticket, candidate, owner.uid)) return null;
-        const [fileModule, recoveryModule] = await Promise.all([
+        const [fileModule, recoveryModule, visitModule] = await Promise.all([
           import('./cloudClinicalWorkspaceController'), import('./cloudClinicalRecoveryController'),
+          import('./cloudClinicalVisitWorkspaceController'),
         ]);
         if (!clinicalActive(ticket, candidate, owner.uid)) return null;
         const options = {
@@ -624,12 +628,23 @@ export function createCloudOperatingPageController(
           },
           isActive: () => clinicalActive(ticket, candidate, owner.uid),
         };
+        const file = fileModule.createCloudClinicalWorkspaceController(options);
         const controller: CloudOperatingClinicalWorkspace = Object.freeze({
-          file: fileModule.createCloudClinicalWorkspaceController(options),
+          file,
           recovery: recoveryModule.createCloudClinicalRecoveryController(options),
+          visit: visitModule.createCloudClinicalVisitWorkspaceController({ file, isActive: options.isActive,
+            getCatalog: async () => {
+              if (!clinicalActive(ticket, candidate, owner.uid) || typeof candidate.getServiceCatalog !== 'function') throw new CloudOperatingAuthError('changed');
+              const catalog = await candidate.getServiceCatalog();
+              if (!clinicalActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
+              const record = await catalog.repository.get();
+              if (!clinicalActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
+              return record;
+            },
+          }),
         });
         if (!clinicalActive(ticket, candidate, owner.uid)) {
-          controller.file.dispose(); controller.recovery.dispose(); return null;
+          controller.visit?.dispose(); controller.file.dispose(); controller.recovery.dispose(); return null;
         }
         clinicalWorkspace = controller;
         publish({ ...state, clinical: contactsState('open') });
@@ -667,7 +682,9 @@ export function createCloudOperatingPageController(
       if (!stillOwned()) return false;
       const recovery = workspace.recovery.getState();
       if (!stillOwned()) return false;
-      if (file.draftDirty || file.loading || file.saveStatus !== 'idle' || file.pendingOperationId || recovery.loading) {
+      const visit = workspace.visit?.getState();
+      if (!stillOwned()) return false;
+      if (file.draftDirty || file.loading || file.saveStatus !== 'idle' || file.pendingOperationId || recovery.loading || visit && visit.phase !== 'idle') {
         publish({ ...state, clinical: contactsState('open', CLINICAL_CLOSE_ERROR) });
         return false;
       }

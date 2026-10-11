@@ -1,5 +1,5 @@
 import React, { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowDown, Check, ClipboardList, CreditCard, History, MessageCircle, Pencil, Phone, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { ArrowDown, Check, ClipboardList, CreditCard, History, MessageCircle, Pencil, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import type { Session } from '../../types';
 import type { CloudClinicalProgress } from '../../utils/cloudClinicalRepository';
 import type { CloudClinicalPatientSnapshot } from '../../utils/cloudClinicalPatientProjection';
@@ -7,6 +7,8 @@ import type { CloudClinicalWorkspaceState } from '../../utils/cloudClinicalWorks
 import type { CloudClinicalRecoveryState } from '../../utils/cloudClinicalRecoveryController';
 import type { CloudClinicalWorkspaceBundle } from '../../utils/cloudClinicalUiStage';
 import type { CloudOperationIntent } from '../../utils/cloudOperationIntent';
+import type { CloudClinicalVisitWorkspaceController } from '../../utils/cloudClinicalVisitWorkspaceController';
+import CloudClinicalVisitEditor from './CloudClinicalVisitEditor';
 import { normalizeContactPhone } from '../../utils/clinicContacts';
 import { normalizeDirectoryDigits } from '../../utils/patientDirectory';
 import './CloudClinicalWorkspace.css';
@@ -38,6 +40,8 @@ export interface CloudClinicalWorkspaceViewProps {
   onSave: (editor: CloudClinicalEditor) => void; onCancelEditor: (editor: CloudClinicalEditor) => void;
   onContact: (snapshot: CloudClinicalPatientSnapshot) => boolean;
   onRecoveryLoad: () => void; onRecoveryMore: () => void; onResume: (intent: CloudOperationIntent) => void;
+  visitController?: CloudClinicalVisitWorkspaceController;
+  onStartVisit?: (snapshot: CloudClinicalPatientSnapshot) => void;
 }
 
 /** Presentation only: never opens a file, initializes Auth or fetches on mount. */
@@ -75,6 +79,7 @@ export function CloudClinicalWorkspaceView(props: CloudClinicalWorkspaceViewProp
       <div className="ccw-actions"><button type="button" className={primary} disabled={closing || state.loading || recovery.loading || ['saving', 'preparing'].includes(state.saveStatus)} onClick={() => { if (!previewOnly && !closing && !state.loading && !recovery.loading && ['retry-required', 'refresh-required'].includes(state.saveStatus)) props.onRetry(); }}><RefreshCw size={18} aria-hidden="true" />{state.saveStatus === 'refresh-required' ? 'تحديث النتيجة — قراءة فقط' : 'إعادة نفس المحاولة'}</button>
         {state.saveStatus === 'retry-required' && <button type="button" className={button} disabled={closing || state.loading || recovery.loading} onClick={() => { if (!previewOnly && !closing && !state.loading && !recovery.loading) props.onCancelPending(); }}>التحقق من إمكانية إلغاء العملية</button>}</div></section>}
     <div className="ccw-columns"><main className="ccw-main">
+      {props.visitController && <CloudClinicalVisitEditor controller={props.visitController} previewOnly={unavailable} closing={closing} />}
       {snapshot ? <>
         <section className="ccw-surface" aria-label="ملخص حساب الملف"><div className="ccw-totals"><div><span>إجمالي الخدمات</span><strong>{money(snapshot.totalCents)}</strong></div><div><span>المحصّل فعليًا</span><strong>{money(snapshot.paidCents)}</strong></div><div className="ccw-balance"><span>المتبقي</span><strong>{money(snapshot.totalCents - snapshot.paidCents)}</strong></div></div>
           <div className="ccw-contact"><p>{phone ? <bdi>{snapshot.profile.data.mobile}</bdi> : 'لم يُسجل رقم موبايل لهذا الملف'}</p>{phone && <div className="ccw-actions">
@@ -96,7 +101,8 @@ export function CloudClinicalWorkspaceView(props: CloudClinicalWorkspaceViewProp
             </fieldset><div className="ccw-actions"><button className={primary} type="submit" disabled={locked || editor.mode === 'payment' && (amount === null || amount > maxPayment)}><Check size={18} aria-hidden="true" />{editor.mode === 'payment' ? 'تأكيد تسجيل الدفعة' : 'حفظ المتابعة'}</button>
               <button className={button} type="button" disabled={locked} onClick={() => guard(() => props.onCancelEditor(editor))}>إلغاء المسودة</button></div>
           </form></section>}
-        <section className="ccw-surface" aria-label="جلسات الملف"><div className="ccw-section-title"><h3>الجلسات والخدمات</h3><span>{snapshot.patient.sessions.length.toLocaleString('ar-EG')} جلسة</span></div>
+        <section className="ccw-surface" aria-label="جلسات الملف"><div className="ccw-section-title"><h3>الجلسات والخدمات</h3><span>{snapshot.patient.sessions.length.toLocaleString('ar-EG')} جلسة</span>
+          {props.visitController && props.onStartVisit && <button className={primary} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onStartVisit?.(snapshot); })}><Plus size={18} aria-hidden="true" />تسجيل زيارة أو خدمة</button>}</div>
           {!snapshot.patient.sessions.length && <p className="ccw-empty">لا جلسات مسجلة لهذا الملف بعد.</p>}
           <div className="ccw-list">{snapshot.patient.sessions.map(session => <article className="ccw-session" key={session.id}><header><div><h4>{session.type}</h4><p>تاريخ الجلسة · <bdi>{session.date}</bdi></p></div><span className="ccw-pill">{session.visitStatus === 'follow_up' ? 'تحتاج متابعة' : 'مكتملة'}</span></header>
             <dl className="ccw-session-totals"><div><dt>القيمة</dt><dd>{money(Math.round(session.amount * 100))}</dd></div><div><dt>المحصّل</dt><dd>{money(Math.round(session.paid * 100))}</dd></div><div><dt>المتبقي</dt><dd>{money(Math.round(session.remain * 100))}</dd></div></dl>
@@ -107,7 +113,7 @@ export function CloudClinicalWorkspaceView(props: CloudClinicalWorkspaceViewProp
         </section>
         <section className="ccw-surface" aria-label="تاريخ التحصيل"><h3>سجل المدفوعات الفعلية</h3>{!receiptRows.length ? <p className="ccw-empty">لا إيصالات تحصيل مسجلة.</p> : <ol className="ccw-receipts">{receiptRows.map(({ session, receipt }) => <li key={receipt.id}><div><strong>{money(Math.round(receipt.amount * 100))}</strong><p>{session.type} · <bdi>{receipt.date}</bdi></p>{receipt.note && <p className="ccw-notes">{receipt.note}</p>}</div><span className="ccw-pill">نقدي</span></li>)}</ol>}</section>
       </> : <section className="ccw-surface ccw-empty"><ClipboardList size={32} aria-hidden="true" /><h3>لا يوجد حساب معروض</h3><p>{previewOnly ? 'تظهر هنا الجلسات والحساب بعد تفعيل الربط واختيار ملف.' : state.patientRecordId ? 'اضغط تحديث الملف لقراءة سجل كامل ومؤكد.' : 'اختر ملفًا من قائمة المرضى لقراءة حسابه. لا تُقرأ ملفات تلقائيًا.'}</p><p>الحساب غير المقروء لا يعني أن الرصيد صفر.</p></section>}
-      <p className="ccw-message ccw-info">تسجيل زيارة أو خدمة جديدة غير متاح في هذا المسار بعد؛ يلزم ربط فهرس الخدمات والأسعار والإعدادات أولًا. هذه الشاشة لا تستخدم أسعارًا أو بيانات محلية بديلة.</p>
+      {!props.visitController && <p className="ccw-message ccw-info">تسجيل زيارة أو خدمة جديدة غير متاح في هذا المسار بعد؛ يلزم ربط فهرس الخدمات والأسعار والإعدادات أولًا. هذه الشاشة لا تستخدم أسعارًا أو بيانات محلية بديلة.</p>}
     </main><aside className="ccw-surface ccw-recovery" aria-label="استرجاع العمليات"><div className="ccw-section-title"><h3><History size={20} aria-hidden="true" />سجل العمليات والاسترجاع</h3></div><p className="ccw-help">يعرض الصفحات المحمّلة بترتيب المعرف، وليس الأحدث أو كل عمليات العيادة. المتابعة تتحقق من الأمر الأصلي وقد تستكمله، دون إنشاء دفعة بديلة.</p>
       <button className={button} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onRecoveryLoad(); })}><RefreshCw size={18} aria-hidden="true" />{recovery.loaded && !unavailable ? 'تحديث سجل العمليات' : 'تحميل سجل العمليات'}</button>
       {!unavailable && recovery.loading && <p role="status" className="ccw-help">جارٍ تحميل السجل…</p>}{!unavailable && recovery.error && <p role="alert" className="ccw-message ccw-error">{recovery.error}</p>}{!unavailable && recovery.notice && <p role="status" className="ccw-message">{recovery.notice}</p>}
@@ -131,17 +137,26 @@ export default function CloudClinicalWorkspace({ controller, onClose, previewOnl
   editorRef.current = editor;
   const live = useRef({ controller, onClose, previewOnly, closing }); live.current = { controller, onClose, previewOnly, closing };
   const fresh = (allowPending = false) => {
-    if (live.current.controller !== controller || live.current.previewOnly || live.current.closing || running.current) return null;
-    const value = controller.file.getState(), directory = controller.recovery.getState();
+    const owned = () => live.current.controller === controller && !live.current.previewOnly && !live.current.closing && !running.current;
+    if (!owned()) return null;
+    const value = controller.file.getState(); if (!owned()) return null;
+    const directory = controller.recovery.getState(); if (!owned()) return null;
     return value.closed || directory.closed || value.loading || directory.loading || (!allowPending && value.saveStatus !== 'idle') ? null : value;
   };
+  const visitIdle = () => !controller.visit || controller.visit.getState().phase === 'idle';
   const sameEditor = (expected: CloudClinicalEditor) => { const value = fresh(); return value && editorRef.current === expected && value.snapshot === expected.snapshot && value.patientRecordId === expected.snapshot.patientRecordId ? value : null; };
   const clearEditor = () => { editorRef.current = null; setEditor(null); };
   const run = async (work: () => Promise<unknown>) => { if (running.current) return; running.current = true; try { await work(); } catch { /* Controllers own fixed messages; no provider error reaches rendering. */ } finally { running.current = false; } };
-  return <CloudClinicalWorkspaceView state={state} recovery={recovery} editor={editor} previewOnly={previewOnly} closing={closing}
-    onClose={() => { if (live.current.controller !== controller || live.current.closing || running.current) return; const value = controller.file.getState(), directory = controller.recovery.getState(); if (live.current.previewOnly || value.closed || !busy(value) && !value.draftDirty && !editorRef.current && !directory.loading) live.current.onClose(); }}
+  return <CloudClinicalWorkspaceView state={state} recovery={recovery} editor={editor} previewOnly={previewOnly} closing={closing} visitController={controller.visit}
+    onStartVisit={snapshot => { const value = fresh(); if (!value || !visitIdle() || value.draftDirty || editorRef.current || value.snapshot !== snapshot || !controller.visit || fresh()?.snapshot !== snapshot) return;
+      void run(() => controller.visit!.begin(snapshot)); }}
+    onClose={() => { if (live.current.controller !== controller || live.current.closing || running.current) return;
+      const value = controller.file.getState(), directory = controller.recovery.getState();
+      const idleVisit = visitIdle();
+      if (live.current.controller !== controller || live.current.closing || running.current) return;
+      if (live.current.previewOnly || value.closed || idleVisit && !busy(value) && !value.draftDirty && !editorRef.current && !directory.loading) live.current.onClose(); }}
     onRefresh={() => { const value = fresh(); if (value && !value.draftDirty && !editorRef.current) void run(() => controller.file.refresh()); }}
-    onStartEdit={(snapshot, session, mode) => { const value = fresh(); if (!value || value.draftDirty || editorRef.current || value.snapshot !== snapshot || !snapshot.patient.sessions.includes(session)) return; if (mode === 'payment' && (session.remain <= 0 || snapshot.totalCents <= snapshot.paidCents)) return;
+    onStartEdit={(snapshot, session, mode) => { const value = fresh(); if (!value || !visitIdle() || value.draftDirty || editorRef.current || value.snapshot !== snapshot || !snapshot.patient.sessions.includes(session)) return; if (mode === 'payment' && (session.remain <= 0 || snapshot.totalCents <= snapshot.paidCents)) return;
       if (!controller.file.setDraftDirty(snapshot.patientRecordId, true)) return;
       const next: CloudClinicalEditor = { mode, snapshot, session, amount: '', date: today(), note: '', progress: { notes: session.visitNotes ?? '', treatmentStage: session.treatmentStage ?? 'single', rootCanalStatus: session.rootCanalStatus ?? '', visitStatus: session.visitStatus ?? 'completed' } };
       editorRef.current = next; setEditor(next); }}
@@ -150,8 +165,8 @@ export default function CloudClinicalWorkspace({ controller, onClose, previewOnl
       void run(async () => { const success = expected.mode === 'payment' ? await controller.file.addReceipt(expected.snapshot.patientRecordId, expected.session.id, { amountCents: cents!, date: expected.date, note: expected.note }) : await controller.file.saveProgress(expected.snapshot.patientRecordId, expected.session.id, expected.progress); if (success && live.current.controller === controller && editorRef.current === expected) clearEditor(); }); }}
     onCancelEditor={expected => { if (sameEditor(expected) && controller.file.setDraftDirty(expected.snapshot.patientRecordId, false)) clearEditor(); }}
     onContact={snapshot => { const value = fresh(); return Boolean(value && !value.draftDirty && !editorRef.current && value.snapshot === snapshot && normalizeContactPhone(snapshot.profile.data.mobile)); }}
-    onRetry={() => { const value = fresh(true), expected = editorRef.current; if (value && ['retry-required', 'refresh-required'].includes(value.saveStatus)) void run(async () => { if (await controller.file.retry() && live.current.controller === controller && editorRef.current === expected) clearEditor(); }); }}
-    onCancelPending={() => { const value = fresh(true), expected = editorRef.current; if (value?.saveStatus === 'retry-required') void run(async () => { if (await controller.file.cancelPending() && live.current.controller === controller && editorRef.current === expected) clearEditor(); }); }}
+    onRetry={() => { const value = fresh(true), expected = editorRef.current; if (value && ['retry-required', 'refresh-required'].includes(value.saveStatus)) void run(async () => { const visit = controller.visit?.getState(); const success = visit?.phase === 'pending' ? await controller.visit!.retry() : await controller.file.retry(); if (success && live.current.controller === controller && editorRef.current === expected) clearEditor(); }); }}
+    onCancelPending={() => { const value = fresh(true), expected = editorRef.current; if (value?.saveStatus === 'retry-required') void run(async () => { const visit = controller.visit?.getState(); const success = visit?.phase === 'pending' ? await controller.visit!.cancelPending() : await controller.file.cancelPending(); if (success && live.current.controller === controller && editorRef.current === expected) clearEditor(); }); }}
     onRecoveryLoad={() => { const value = fresh(); if (value && !value.draftDirty && !editorRef.current) void run(() => controller.recovery.loadFirst()); }}
     onRecoveryMore={() => { const value = fresh(); if (value && !value.draftDirty && !editorRef.current && controller.recovery.getState().nextAfterId) void run(() => controller.recovery.loadMore()); }}
     onResume={intent => { const value = fresh(); if (value && !value.draftDirty && !editorRef.current && intent.status !== 'cancelled' && controller.recovery.getState().records.includes(intent)) void run(() => controller.file.resume(intent.operationId)); }} />;

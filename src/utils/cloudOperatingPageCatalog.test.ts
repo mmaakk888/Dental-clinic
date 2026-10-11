@@ -100,6 +100,69 @@ function otherCapabilities() {
   return { contacts, patients, clinical, calls };
 }
 
+function pricedCatalog() {
+  return { schemaVersion: 1 as const, clinicId: 'main' as const, recordId: 'serviceCatalog' as const,
+    revision: 1, lastOperationId: OP, data: { examinationCents: 10000,
+      services: [{ serviceId: OP, name: 'خدمة مصطنعة', kind: 'clinical' as const, priceCents: 25000, active: true }] } };
+}
+
+test('clinical bundle acquires catalog only on explicit visit begin and locks all workspace switches until cancelled', async () => {
+  const domains = otherCapabilities(), catalog = catalogCapability();
+  catalog.capability.repository.get = async () => { catalog.calls.push('get'); return pricedCatalog(); };
+  const h = fixture({ getClinical: async () => domains.clinical, getServiceCatalog: async () => catalog.capability,
+    getContacts: async () => domains.contacts, getPatients: async () => domains.patients });
+  await h.controller.signIn(EMAIL, PASSWORD); const bundle = await h.controller.openClinical(); assert.ok(bundle?.visit);
+  assert.equal(h.calls.includes('getServiceCatalog'), false); assert.deepEqual(domains.calls, []); assert.deepEqual(catalog.calls, []);
+  assert.equal(await bundle.file.open(PATIENT), true); const snapshot = bundle.file.getState().snapshot!;
+  assert.equal(await bundle.visit.begin(snapshot), true); assert.deepEqual(catalog.calls, ['get']);
+  assert.equal(bundle.file.getState().draftDirty, true); assert.equal(bundle.visit.chooseService(OP), true);
+  assert.equal(bundle.visit.getState().draft?.services.length, 1);
+  assert.equal(h.controller.closeClinical(bundle), false); assert.equal(await h.controller.openContacts(), null);
+  assert.equal(await h.controller.openPatients(), null); assert.equal(await h.controller.openCatalog(), null);
+  assert.equal(bundle.visit.cancel(), true); assert.equal(bundle.file.getState().draftDirty, false);
+  assert.equal(h.controller.closeClinical(bundle), true); assert.equal(bundle.visit.getState().closed, true);
+  await h.controller.dispose();
+});
+
+test('late catalog capability after logout cannot read pricing or resurrect visit draft', async () => {
+  const gate = deferred<CloudServiceCatalogCapability>(), domains = otherCapabilities(), catalog = catalogCapability();
+  const h = fixture({ getClinical: async () => domains.clinical, getServiceCatalog: () => gate.promise });
+  await h.controller.signIn(EMAIL, PASSWORD); const bundle = (await h.controller.openClinical())!;
+  await bundle.file.open(PATIENT); const pending = bundle.visit!.begin(bundle.file.getState().snapshot!);
+  assert.equal(bundle.visit!.getState().phase, 'loading'); const ending = h.controller.signOut();
+  assert.equal(bundle.visit!.getState().closed, true); assert.equal(bundle.file.getState().snapshot, null);
+  gate.resolve(catalog.capability); assert.equal(await pending, false); await ending;
+  assert.deepEqual(catalog.calls, []); assert.equal(bundle.visit!.getState().draft, null); await h.controller.dispose();
+});
+
+test('temporary owner checking preserves captured visit and does not fetch the catalog again', async () => {
+  const domains = otherCapabilities(), catalog = catalogCapability(); let ownerGate: ReturnType<typeof deferred<Awaited<ReturnType<CloudOperatingAuthAdapter['readOwner']>>>> | null = null;
+  catalog.capability.repository.get = async () => { catalog.calls.push('get'); return pricedCatalog(); };
+  const h = fixture({ adapter: { readOwner: () => ownerGate ? ownerGate.promise : Promise.resolve(record()) },
+    getClinical: async () => domains.clinical, getServiceCatalog: async () => catalog.capability });
+  await h.controller.signIn(EMAIL, PASSWORD); const bundle = (await h.controller.openClinical())!; await bundle.file.open(PATIENT);
+  assert.equal(await bundle.visit!.begin(bundle.file.getState().snapshot!), true); assert.equal(bundle.visit!.chooseService(OP), true);
+  const draft = bundle.visit!.getState().draft; ownerGate = deferred(); const refresh = h.controller.refresh();
+  assert.equal(h.controller.getState().auth.phase, 'checking'); assert.equal(bundle.visit!.getState().draft, draft);
+  assert.equal(h.controller.getClinicalWorkspace(), bundle); ownerGate.resolve(record()); await refresh;
+  assert.equal(bundle.visit!.getState().draft, draft); assert.deepEqual(catalog.calls, ['get']);
+  assert.equal(bundle.visit!.cancel(), true); await h.controller.dispose();
+});
+
+test('missing catalog capability or record releases only its own draft lock, with no local fallback or write', async () => {
+  for (const missing of ['capability', 'record']) {
+    const domains = otherCapabilities(), catalog = catalogCapability();
+    const h = fixture({ getClinical: async () => domains.clinical,
+      ...(missing === 'record' ? { getServiceCatalog: async () => catalog.capability } : {}) });
+    await h.controller.signIn(EMAIL, PASSWORD); const bundle = (await h.controller.openClinical())!; await bundle.file.open(PATIENT);
+    assert.equal(await bundle.visit!.begin(bundle.file.getState().snapshot!), false);
+    assert.equal(bundle.file.getState().draftDirty, false); assert.equal(bundle.visit!.getState().phase, 'idle');
+    assert.equal(bundle.visit!.getState().catalog, null); assert.equal(bundle.visit!.getState().draft, null);
+    assert.equal(domains.calls.includes('clinical-commit'), false); assert.equal(catalog.calls.includes('commit'), false);
+    assert.equal(h.controller.closeClinical(bundle), true); await h.controller.dispose();
+  }
+});
+
 test('catalog seam is inert before explicit checked-owner open and absent capability never initializes data', async () => {
   const h = fixture(); assert.equal(Object.isFrozen(h.controller.getState().catalog), true);
   assert.equal(h.controller.getCatalogWorkspace(), null); assert.equal(await h.controller.openCatalog(), null); assert.deepEqual(h.calls, []);

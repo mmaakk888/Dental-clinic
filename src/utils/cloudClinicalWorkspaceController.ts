@@ -49,8 +49,11 @@ export function createCloudClinicalWorkspaceController(options: {
   let acknowledged: { revision: number; fileNo: number } | null = null;
   const listeners = new Set<(value: CloudClinicalWorkspaceState) => void>();
   function publish(value: CloudClinicalWorkspaceState) {
-    state = Object.freeze(value);
-    for (const listener of [...listeners]) { try { listener(state); } catch { /* View grants no authority. */ } }
+    const published = Object.freeze(value);
+    state = published;
+    // A subscriber may synchronously publish a newer state. Every listener must
+    // still receive this transition, not a mutable lookup of the latest state.
+    for (const listener of [...listeners]) { try { listener(published); } catch { /* View grants no authority. */ } }
   }
   function dispose() {
     if (closed) return;

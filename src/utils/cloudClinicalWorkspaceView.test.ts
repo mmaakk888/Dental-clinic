@@ -352,8 +352,74 @@ test('scoped layout supports narrow wrapping, desktop columns, 44px targets, 16p
 
 test('view bundle contains no SDK, local App/data stores, prescriptions, lab accounts, bulk messaging or import/export graph', () => {
   const inputs = Object.keys(compiled.metafile!.inputs).join('\n');
-  assert.doesNotMatch(inputs, /firebase|cloudOperatingAuth|cloudClinicalRepository|cloudOperationIntent|cloudClinicalPatientProjection|localStorage|dataStore|App\.tsx|Rx|Prescription|WhatsAppComposer|cloudBackup/i);
+  // The new visit editor imports pure clinical schema validators. Their graph
+  // is not a data capability: the rendered view still has no SDK/auth/store.
+  assert.doesNotMatch(inputs, /firebase|cloudOperatingAuth|cloudClinicalPatientProjection|localStorage|dataStore|App\.tsx|Rx|Prescription|WhatsAppComposer|cloudBackup/i);
+  const source = compiled.outputFiles[0].text;
+  assert.doesNotMatch(source, /createCloudClinicalRepository\(|createCloudOperationIntentRepository\(/);
   const h = harness(), html = renderToStaticMarkup(React.createElement(CloudClinicalWorkspaceView, h.render()));
   assert.match(html, /تسجيل زيارة أو خدمة جديدة غير متاح|بدون تكاليف المعامل أو استيراد أو تصدير/);
   assert.doesNotMatch(html, /<nav|download=|إضافة زيارة|استيراد ملف|تصدير ملف/);
+});
+
+function withVisit(h: ReturnType<typeof harness>) {
+  const emptyPreview = createCloudClinicalUiPreview(() => true), calls: string[] = [];
+  let phase: 'idle' | 'loading' | 'editing' | 'submitting' | 'pending' = 'idle';
+  const visit = { ...emptyPreview.visit!, getState: () => ({ phase, snapshot: null, catalog: null, draft: null, error: '', closed: false }),
+    begin: async (value: CloudClinicalPatientSnapshot) => { calls.push(`begin:${value.patientRecordId}`); phase = 'editing'; h.bundle.file.setDraftDirty(value.patientRecordId, true); return true; },
+    retry: async () => { calls.push('visit-retry'); return true; }, cancelPending: async () => { calls.push('visit-cancel'); return true; } };
+  const bundle = { ...h.bundle, visit };
+  const render = (changes: { controller?: CloudClinicalWorkspaceBundle; previewOnly?: boolean; closing?: boolean } = {}) => h.render({ controller: bundle, ...changes });
+  return { bundle, visit, calls, render, setPhase: (value: typeof phase) => { phase = value; } };
+}
+
+test('visit begins explicitly with the exact verified file and immediate repeat cannot begin twice', async () => {
+  const h = harness(), v = withVisit(h), props = v.render(), selected = props.state.snapshot!;
+  assert.deepEqual(v.calls, []); assert.deepEqual(h.calls, []);
+  props.onStartVisit!({ ...selected }); assert.deepEqual(v.calls, []);
+  props.onStartVisit!(selected); props.onStartVisit!(selected); await flush();
+  assert.deepEqual(v.calls, [`begin:${ID}`]); assert.equal(h.state().draftDirty, true);
+  v.render().onStartEdit(selected, selected.patient.sessions[0], 'payment');
+  assert.equal(v.render().editor, null); assert.equal(h.calls.some(call => call[0] === 'payment'), false);
+});
+
+test('retained visit begin callbacks are inert after preview, closing, replacement and actual file disposal', async () => {
+  for (const mode of ['preview', 'closing', 'replacement', 'closed']) {
+    const h = harness(), v = withVisit(h), retained = v.render(), selected = retained.state.snapshot!;
+    if (mode === 'closed') h.bundle.file.dispose();
+    else v.render(mode === 'replacement' ? { controller: harness().bundle } : mode === 'closing' ? { closing: true } : { previewOnly: true });
+    retained.onStartVisit!(selected); await flush(); assert.deepEqual(v.calls, []); assert.deepEqual(h.calls, []);
+  }
+});
+
+test('active visit state blocks payment/progress/close even if an unrelated caller cleared the dirty bit', () => {
+  const h = harness(), v = withVisit(h); v.setPhase('loading');
+  const props = v.render(), selected = props.state.snapshot!;
+  props.onStartEdit(selected, selected.patient.sessions[0], 'payment');
+  props.onStartEdit(selected, selected.patient.sessions[0], 'progress'); props.onClose();
+  assert.equal(v.render().editor, null); assert.equal(h.closes(), 0); assert.deepEqual(h.calls, []);
+});
+
+test('one shared pending panel delegates original visit retry/cancellation to the visit controller only', async () => {
+  const h = harness(), v = withVisit(h); v.setPhase('pending');
+  h.setState({ saveStatus: 'retry-required', pendingOperationId: OP, draftDirty: true });
+  const props = v.render(); props.onRetry(); await flush(); v.render().onCancelPending(); await flush();
+  assert.deepEqual(v.calls, ['visit-retry', 'visit-cancel']); assert.deepEqual(h.calls, []);
+  h.setState({ saveStatus: 'refresh-required' }); v.render().onCancelPending(); await flush();
+  assert.deepEqual(v.calls, ['visit-retry', 'visit-cancel']);
+});
+
+test('visit start affordance requires a loaded file and is disabled for a dirty editor or closing page', () => {
+  const h = harness(), v = withVisit(h), first = v.render();
+  assert.equal(rendered(first).button('تسجيل زيارة أو خدمة').props.disabled, false);
+  h.setState({ draftDirty: true }); assert.equal(rendered(v.render()).button('تسجيل زيارة أو خدمة').props.disabled, true);
+  h.setState({ draftDirty: false }); assert.equal(rendered(v.render({ closing: true })).button('تسجيل زيارة أو خدمة').props.disabled, true);
+  h.setState({ loaded: false, snapshot: null }); assert.equal(rendered(v.render()).elements.some(item => item.type === 'button' && text(item) === 'تسجيل زيارة أو خدمة'), false);
+});
+
+test('state getter reentrancy cannot start a visit after the wrapper changed to preview', async () => {
+  const h = harness(), v = withVisit(h), props = v.render(), selected = props.state.snapshot!;
+  const original = h.bundle.file.getState; let once = true;
+  h.bundle.file.getState = () => { if (once) { once = false; v.render({ previewOnly: true }); } return original(); };
+  props.onStartVisit!(selected); await flush(); assert.deepEqual(v.calls, []); assert.deepEqual(h.calls, []);
 });

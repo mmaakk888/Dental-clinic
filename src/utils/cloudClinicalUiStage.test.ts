@@ -39,3 +39,26 @@ test('clinical preview graph excludes SDK/Auth/local clinic storage and prior ba
     platform: 'browser', write: false, metafile: true, logLevel: 'silent' });
   for (const path of Object.keys(result.metafile!.inputs)) assert.doesNotMatch(path, /firebase|storage\.ts|App\.tsx|cloudOperatingAuth|offlineSync|aiService/i);
 });
+
+test('priced visit design preview is empty and all retained actions ignore even hostile inputs', async () => {
+  let active = true; const bundle = createCloudClinicalUiPreview(() => active), visit = bundle.visit!;
+  assert.ok(visit); assert.equal(Object.isFrozen(visit), true);
+  assert.deepEqual(visit.getState(), { phase: 'idle', snapshot: null, catalog: null, draft: null, error: '', closed: false });
+  const hostile = new Proxy({}, { get() { throw new Error('Do not inspect preview input'); }, ownKeys() { throw new Error('Do not inspect preview input'); } });
+  assert.equal(await visit.begin(hostile as never), false); assert.equal(visit.chooseService(ID), false);
+  assert.equal(visit.removeService(ID), false); assert.equal(visit.setServicePrice(ID, 10000), false);
+  assert.equal(visit.setServiceTooth(ID, 'ur5'), false); assert.equal(visit.setTeeth(hostile as never), false);
+  assert.equal(visit.setExaminationEnabled(true), false); assert.equal(await visit.save(hostile as never, 10000), false);
+  assert.equal(visit.cancel(), false); assert.equal(await visit.retry(), false); assert.equal(await visit.cancelPending(), false);
+  active = false; assert.equal(visit.getState().closed, true); active = true;
+  assert.equal(visit.getState().closed, true); assert.equal(await visit.begin(hostile as never), false);
+  bundle.file.dispose(); bundle.recovery.dispose(); visit.dispose();
+});
+
+test('visit preview disposal notifies once with empty closed state, including invalid runtime callback', () => {
+  let fail = false; const preview = createCloudClinicalUiPreview(() => { if (fail) throw new Error('PRIVATE'); return true; });
+  const states: unknown[] = []; preview.visit!.subscribe(value => states.push(value));
+  fail = true; assert.equal(preview.visit!.getState().closed, true); preview.visit!.dispose();
+  assert.equal(states.length, 1); assert.deepEqual(states[0], { phase: 'idle', snapshot: null, catalog: null, draft: null, error: '', closed: true });
+  preview.file.dispose(); preview.recovery.dispose();
+});
