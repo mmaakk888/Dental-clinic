@@ -38,9 +38,11 @@ type Element = { type: unknown; props: Record<string, any> };
 const children = (node: any): any[] => node == null ? [] : Array.isArray(node) ? node.flatMap(children) : [node];
 const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props ? [item, ...all(item.props.children)] : []);
 const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(item.props.children) : '').join('');
-function invoke(component: (props: any) => any, props: any, subscriptions?: Array<(notify: () => void) => () => void>) {
+function invoke(component: (props: any) => any, props: any, subscriptions?: Array<(notify: () => void) => () => void>, refSlots?: Array<{ current: any }>) {
   const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, previous = internals.H;
-  internals.H = { useId: () => 'synthetic-cloud-patients', useMemo: (factory: () => unknown) => factory(), useCallback: (callback: unknown) => callback, useRef: (value: unknown) => ({ current: value }),
+  let refIndex = 0;
+  internals.H = { useId: () => 'synthetic-cloud-patients', useMemo: (factory: () => unknown) => factory(), useCallback: (callback: unknown) => callback,
+    useRef: (value: unknown) => { const index = refIndex++; return refSlots ? refSlots[index] ?? (refSlots[index] = { current: value }) : { current: value }; },
     useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => undefined],
     useSyncExternalStore: (subscribe: (notify: () => void) => () => void, snapshot: () => unknown) => { subscriptions?.push(subscribe); return snapshot(); } };
   try { return component(props); } finally { internals.H = previous; }
@@ -63,7 +65,7 @@ function harness() {
 test('patient view starts unloaded with no SDK/read on render, clinical totals, fake records or action on mount', () => {
   const h = harness(), html = renderToStaticMarkup(React.createElement(CloudPatientsWorkspace, { controller: h.controller, onClose() {} }));
   assert.deepEqual(h.calls, []); assert.match(html, /لم تُحمّل ملفات المرضى بعد|ليس إجمالي العيادة/);
-  assert.match(html, /بيانات الملف الأساسية — الجلسات والحسابات لم تُربط بعد/);
+  assert.match(html, /بيانات الملف الأساسية — الجلسات والحسابات غير متاحة في هذا العرض/);
   assert.doesNotMatch(html, /أحمد اختبار|المتبقي|المدفوع|رصيد|تم الحفظ|<nav/);
 });
 
@@ -230,4 +232,57 @@ test('patient view dependency graph excludes local UI/storage, SDK/Auth and all 
   const output = await build({ entryPoints: ['src/components/patients/CloudPatientsWorkspace.tsx'], bundle: true, write: false,
     metafile: true, platform: 'browser', logLevel: 'silent', external: ['react', 'react-dom', 'lucide-react'], loader: { '.css': 'empty' } });
   for (const input of Object.keys(output.metafile!.inputs)) assert.doesNotMatch(input, /(?:App\.tsx|components\/settings|utils\/(?:storage|localClinicBackup|firebaseService|offlineSync|cloudOperatingAuth|firebaseCloudPatients)|firebase(?:-admin)?\/|financial|patientFinancial)/i);
+});
+
+test('clinical opening is absent without an explicit capability and is masked in preview despite supplied selection', () => {
+  const data = record();
+  const missing = viewProps({ state: state({ loaded: true, selected: data }) });
+  assert.doesNotMatch(missing.html(), /فتح الجلسات وحساب الملف/);
+  let opened = 0;
+  const preview = viewProps({ previewOnly: true, state: state({ loaded: true, selected: data }), onOpenClinical: () => opened++ });
+  assert.doesNotMatch(preview.html(), /فتح الجلسات وحساب الملف|أحمد اختبار/);
+  assert.equal(opened, 0);
+});
+
+test('clinical selected-file action is explicit and refuses busy, closing, stale or preview callbacks', () => {
+  const data = record(), opened: CloudPatientRecord[] = [];
+  const h = viewProps({ state: state({ loaded: true, selected: data }), onOpenClinical: value => opened.push(value) });
+  const refs: Array<{ current: any }> = [];
+  const tree = invoke(CloudPatientsWorkspaceView, h.props, undefined, refs);
+  const retained = all(tree).find(item => item.type === 'button' && text(item) === 'فتح الجلسات وحساب الملف')!;
+  assert.ok(retained); retained.props.onClick(); assert.deepEqual(opened, [data]);
+  for (const changed of [
+    { ...h.props, previewOnly: true }, { ...h.props, closing: true },
+    { ...h.props, state: state({ selected: data, loading: true }) },
+    { ...h.props, state: state({ selected: data, saveStatus: 'retry-required' }) },
+    { ...h.props, state: state({ selected: record() }) }, { ...h.props, onOpenClinical: undefined },
+  ]) {
+    invoke(CloudPatientsWorkspaceView, changed, undefined, refs);
+    retained.props.onClick(); assert.equal(opened.length, 1);
+  }
+});
+
+test('clinical wrapper sends internal UUID only after a fresh selected profile, never public file number', async () => {
+  const h = harness(), opened: string[] = [];
+  await h.controller.refresh(); const row = h.controller.getState().records[0]; await h.controller.select(row.recordId);
+  const props = invoke(CloudPatientsWorkspace, { controller: h.controller, onClose() {}, onOpenClinical: (value: string) => opened.push(value) }).props as CloudPatientsWorkspaceViewProps;
+  const selected = props.state.selected!;
+  props.onOpenClinical!(record()); assert.deepEqual(opened, []);
+  props.onOpenClinical!(selected); assert.deepEqual(opened, [ID]);
+  await h.controller.refresh(); props.onOpenClinical!(selected); assert.deepEqual(opened, [ID]);
+  h.controller.dispose(); props.onOpenClinical!(selected); assert.deepEqual(opened, [ID]);
+});
+
+test('retained clinical wrapper cannot bypass a later preview/closing state or replaced controller', async () => {
+  const h = harness(), opened: string[] = [], refs: Array<{ current: any }> = [];
+  await h.controller.refresh(); await h.controller.select(ID);
+  const base = { controller: h.controller, onClose() {}, onOpenClinical: (value: string) => opened.push(value) };
+  const props = invoke(CloudPatientsWorkspace, base, undefined, refs).props as CloudPatientsWorkspaceViewProps;
+  const retained = props.onOpenClinical!, selected = props.state.selected!;
+  for (const changed of [{ ...base, previewOnly: true }, { ...base, closing: true },
+    { ...base, onOpenClinical: undefined }, { ...base, controller: harness().controller }]) {
+    invoke(CloudPatientsWorkspace, changed, undefined, refs); retained(selected); assert.deepEqual(opened, []);
+  }
+  invoke(CloudPatientsWorkspace, base, undefined, refs); retained(selected); assert.deepEqual(opened, [ID]);
+  h.controller.dispose();
 });

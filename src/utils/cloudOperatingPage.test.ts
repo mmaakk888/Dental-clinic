@@ -36,9 +36,10 @@ test('operating entry initially renders an accessible explicit login, not a clou
   assert.match(html, /min-w-0/u);
   assert.match(html, /معاينة واجهة جهات الاتصال/u);
   assert.match(html, /معاينة واجهة ملفات المرضى/u);
+  assert.match(html, /معاينة الملف السريري وسجل الاسترجاع/u);
   assert.match(html, /بلا بيانات أو اتصال بقاعدة البيانات/u);
   assert.match(html, /الحفظ السحابي غير مفعّل بعد/u);
-  assert.doesNotMatch(html, /فتح جهات الاتصال من الخادم|فتح ملفات المرضى من الخادم|cloud-contact-name|cloud-patient-name/u);
+  assert.doesNotMatch(html, /فتح جهات الاتصال من الخادم|فتح ملفات المرضى من الخادم|فتح الملف السريري وسجل الاسترجاع|cloud-contact-name|cloud-patient-name/u);
 });
 
 test('operating page independently blocks external, malformed, conflicting and duplicate routes', () => {

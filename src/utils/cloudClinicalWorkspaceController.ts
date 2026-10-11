@@ -11,6 +11,7 @@ export interface CloudClinicalCapability {
 export type CloudClinicalWorkspaceState = Readonly<{
   patientRecordId: string | null; snapshot: CloudClinicalPatientSnapshot | null;
   loaded: boolean; loading: boolean;
+  draftDirty: boolean;
   saveStatus: 'idle' | 'preparing' | 'saving' | 'retry-required' | 'refresh-required';
   pendingOperationId: string | null; error: string; notice: string; closed: boolean;
 }>;
@@ -42,7 +43,7 @@ export function createCloudClinicalWorkspaceController(options: {
   now?: () => string;
 }) {
   let state: CloudClinicalWorkspaceState = Object.freeze({ patientRecordId: null, snapshot: null,
-    loaded: false, loading: false, saveStatus: 'idle', pendingOperationId: null, error: '', notice: '', closed: false });
+    loaded: false, loading: false, draftDirty: false, saveStatus: 'idle', pendingOperationId: null, error: '', notice: '', closed: false });
   let epoch = 0, closed = false, capability: CloudClinicalCapability | null = null;
   let command: CloudClinicalCommand | null = null;
   let acknowledged: { revision: number; fileNo: number } | null = null;
@@ -55,7 +56,7 @@ export function createCloudClinicalWorkspaceController(options: {
     if (closed) return;
     closed = true; ++epoch; capability = null; command = null; acknowledged = null;
     publish({ patientRecordId: null, snapshot: null, loaded: false, loading: false,
-      saveStatus: 'idle', pendingOperationId: null, error: '', notice: '', closed: true });
+      draftDirty: false, saveStatus: 'idle', pendingOperationId: null, error: '', notice: '', closed: true });
     listeners.clear();
   }
   function active(ticket = epoch) {
@@ -78,7 +79,7 @@ export function createCloudClinicalWorkspaceController(options: {
     return loadCloudClinicalPatient(cap.repository, patientId, assertActive(ticket));
   }
   async function open(patientId: string): Promise<boolean> {
-    if (!active() || busy() || command) return false;
+    if (!active() || busy() || command || state.draftDirty) return false;
     if (!validId(patientId)) { publish({ ...state, error: 'اختر ملفًا صحيحًا من قائمة المرضى.' }); return false; }
     const ticket = ++epoch;
     publish({ ...state, patientRecordId: patientId, snapshot: null, loaded: false, loading: true, error: '', notice: '' });
@@ -117,7 +118,7 @@ export function createCloudClinicalWorkspaceController(options: {
       if (snapshot.accountRevision < acknowledged.revision || snapshot.patient.id !== String(acknowledged.fileNo)) fail();
       command = null; acknowledged = null;
       publish({ ...state, snapshot, patientRecordId: snapshot.patientRecordId, loaded: true, loading: false,
-        saveStatus: 'idle', pendingOperationId: null, error: '', notice: 'تم تأكيد العملية وقراءة حساب المريض كاملًا من الخادم.' });
+        draftDirty: false, saveStatus: 'idle', pendingOperationId: null, error: '', notice: 'تم تأكيد العملية وقراءة حساب المريض كاملًا من الخادم.' });
       return true;
     } catch (error) {
       if (!active(ticket)) return false;
@@ -166,7 +167,7 @@ export function createCloudClinicalWorkspaceController(options: {
       command = null; acknowledged = null;
       // Old loaded totals are invalidated after resolving an uncertain attempt.
       publish({ ...state, snapshot: null, loaded: false, loading: false, pendingOperationId: null, saveStatus: 'idle',
-        error: '', notice: 'تم تأكيد إلغاء العملية قبل تنفيذها. حدّث الملف قبل تسجيل أي تغيير جديد.' });
+        draftDirty: false, error: '', notice: 'تم تأكيد إلغاء العملية قبل تنفيذها. حدّث الملف قبل تسجيل أي تغيير جديد.' });
       return true;
     } catch {
       if (active(ticket)) publish({ ...state, loading: false, saveStatus: 'retry-required',
@@ -175,7 +176,7 @@ export function createCloudClinicalWorkspaceController(options: {
     }
   }
   async function resume(operationId: string): Promise<boolean> {
-    if (!active() || busy() || command || !validId(operationId)) return false;
+    if (!active() || busy() || command || state.draftDirty || !validId(operationId)) return false;
     const ticket = ++epoch; publish({ ...state, loading: true, snapshot: null, loaded: false, error: '', notice: '' });
     try {
       const cap = await getCapability(ticket), intent = parseCloudOperationIntent(await cap.journal.get(operationId));
@@ -199,6 +200,13 @@ export function createCloudClinicalWorkspaceController(options: {
       listeners.add(listener); return () => { listeners.delete(listener); };
     },
     open,
+    setDraftDirty: (patientId: string, dirty: boolean): boolean => {
+      const ticket = epoch;
+      if (!validId(patientId) || typeof dirty !== 'boolean' || !active(ticket) || busy() || command
+        || !state.loaded || !state.snapshot || state.patientRecordId !== patientId || state.snapshot.patientRecordId !== patientId) return false;
+      if (state.draftDirty !== dirty) publish({ ...state, draftDirty: dirty });
+      return active(ticket) && state.loaded && state.patientRecordId === patientId && state.draftDirty === dirty;
+    },
     refresh: () => state.patientRecordId && !command ? open(state.patientRecordId) : Promise.resolve(false),
     saveVisit: (patientId: string, data: CloudClinicalSessionData, paidCents: number) => start(patientId, (operationId, snapshot, createdAt) => ({
       operationId, patientId, sessionId: operationId, expectedRevision: snapshot.accountRevision, createdAt, action: 'visit', data, paidCents,

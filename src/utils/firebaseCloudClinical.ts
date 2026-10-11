@@ -119,7 +119,7 @@ export async function createFirebaseCloudClinical(auth: Auth, options: FirebaseC
       requireRuntime(); return result;
     };
     const page = async (collectionName: 'patientSessions' | 'patientReceipts' | 'operationIntents',
-      patientId: string | null, afterId: string | null, count: number) => {
+      patientId: string | null, afterId: string | null, count: number, preparedOnly = true) => {
       requireRuntime();
       if (afterId !== null && (typeof afterId !== 'string' || !ID.test(afterId))
         || !Number.isSafeInteger(count) || count < 1 || count > 50
@@ -130,7 +130,7 @@ export async function createFirebaseCloudClinical(auth: Auth, options: FirebaseC
       if (collectionName === 'operationIntents') {
         constraints.push(sdkCall(() => store.where('actorUid', '==', uid)));
         constraints.push(sdkCall(() => store.where('kind', '==', 'clinical')));
-        constraints.push(sdkCall(() => store.where('status', '==', 'prepared')));
+        if (preparedOnly) constraints.push(sdkCall(() => store.where('status', '==', 'prepared')));
       } else constraints.push(sdkCall(() => store.where('patientId', '==', patientId)));
       constraints.push(sdkCall(() => store.orderBy(sdkCall(() => store.documentId()))));
       if (afterId !== null) constraints.push(sdkCall(() => store.startAfter(afterId)));
@@ -160,6 +160,11 @@ export async function createFirebaseCloudClinical(auth: Auth, options: FirebaseC
         if (actorUid !== uid) throw new CloudOperationIntentError('invalid');
         return page('operationIntents', null, afterId, count);
       },
+      listHistoryPage: (kind, actorUid, afterId, count) => {
+        clinicalKind(kind); requireRuntime();
+        if (actorUid !== uid) throw new CloudOperationIntentError('invalid');
+        return page('operationIntents', null, afterId, count, false);
+      },
     });
     const journal = Object.freeze({
       prepare: (async (kind, input, createdAt) => {
@@ -179,6 +184,11 @@ export async function createFirebaseCloudClinical(auth: Auth, options: FirebaseC
         const result = await journalRepository.listPreparedPage(kind, input);
         return { records: result.records.map(intent => checkedIntent(intent)), nextAfterId: result.nextAfterId };
       }) as typeof journalRepository.listPreparedPage,
+      listHistoryPage: (async (kind, input) => {
+        clinicalKind(kind);
+        const result = await journalRepository.listHistoryPage(kind, input);
+        return { records: result.records.map(intent => checkedIntent(intent)), nextAfterId: result.nextAfterId };
+      }) as typeof journalRepository.listHistoryPage,
       cancel: (async id => checkedIntent(await journalRepository.cancel(id))) as typeof journalRepository.cancel,
     });
     requireRuntime(); return Object.freeze({ repository: Object.freeze(repository), journal });

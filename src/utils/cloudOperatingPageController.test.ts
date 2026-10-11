@@ -7,6 +7,8 @@ import { createCloudOperatingPageController, type CloudOperatingPageState,
   type CloudOperatingPageSession } from './cloudOperatingPageController';
 import { CloudContactError, type CloudContactRepository } from './cloudContactRepository';
 import { CloudPatientError, type CloudPatientRepository } from './cloudPatientRepository';
+import { CloudClinicalError, type CloudClinicalSessionData } from './cloudClinicalRepository';
+import type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
 
 const EMAIL = 'owner@example.invalid';
 const PASSWORD = 'synthetic-password-only';
@@ -31,6 +33,7 @@ function fixture(options: {
   runtime?: () => boolean;
   getContacts?: () => Promise<CloudContactRepository>;
   getPatients?: () => Promise<CloudPatientRepository>;
+  getClinical?: () => Promise<CloudClinicalCapability>;
 } = {}) {
   const calls: string[] = [];
   const credentials: [string, string][] = [];
@@ -49,6 +52,8 @@ function fixture(options: {
       calls.push('getContacts'); return options.getContacts!();
     } } : {}), ...(options.getPatients ? { getPatients: async () => {
       calls.push('getPatients'); return options.getPatients!();
+    } } : {}), ...(options.getClinical ? { getClinical: async () => {
+      calls.push('getClinical'); return options.getClinical!();
     } } : {}) };
     return options.factory ? options.factory(candidate) : candidate;
   }, options.runtime ?? (() => runtime));
@@ -92,7 +97,7 @@ test('page controller is inert until explicit sign-in, and initial refresh never
   const h = fixture();
   assert.deepEqual(h.controller.getState(), { auth: { phase: 'signed-out', owner: null },
     pending: false, closing: false, error: '', cleanupFailed: false,
-    contacts: { phase: 'closed', error: '' }, patients: { phase: 'closed', error: '' } });
+    contacts: { phase: 'closed', error: '' }, patients: { phase: 'closed', error: '' }, clinical: { phase: 'closed', error: '' } });
   assert.equal(Object.isFrozen(h.controller.getState()), true);
   assert.equal(Object.isFrozen(h.controller.getState().auth), true);
   await h.controller.refresh();
@@ -929,4 +934,289 @@ test('patient opening callbacks and reentrant runtime boundaries cannot resurrec
     assert.deepEqual(repo.calls, []);
     await h.controller.dispose();
   }
+});
+
+const CLINICAL_PATIENT = '10000000-0000-4000-8000-000000000001';
+const clinicalVisit = (): CloudClinicalSessionData => ({ type: 'حشو عادي', date: '2026-10-11',
+  teethIds: ['ur5'], services: [{ id: '20000000-0000-4000-8000-000000000001', name: 'حشو عادي', priceCents: 30_000, tooth: 'ur5' }],
+  examinationCents: 10_000, notes: '', treatmentStage: 'single', rootCanalStatus: '', visitStatus: 'completed' });
+function clinicalCapability() {
+  const calls: string[] = [];
+  const hooks: { read?: () => Promise<void> } = {};
+  const read = async (kind: string) => { calls.push(kind); await hooks.read?.(); };
+  const capability: CloudClinicalCapability = {
+    repository: {
+      getProfile: async () => { await read('profile'); return {
+        schemaVersion: 1, clinicId: 'main', recordId: CLINICAL_PATIENT, fileNo: 451, revision: 1,
+        lastOperationId: '30000000-0000-4000-8000-000000000001', phoneKey: null,
+        data: { name: 'مريض مصطنع', mobile: '', age: 30, gender: '', firstVisit: '2026-10-11', notes: '', allergy: '' },
+      }; },
+      getAccount: async () => { await read('account'); return null; },
+      getSession: async () => { await read('session'); return null; },
+      listSessions: async () => { await read('sessions'); return { records: [], nextAfterId: null }; },
+      listReceipts: async () => { await read('receipts'); return { records: [], nextAfterId: null }; },
+      commit: async () => { calls.push('commit'); throw new CloudClinicalError('unavailable'); },
+    },
+    journal: {
+      prepare: async () => { calls.push('prepare'); throw new Error('SYNTHETIC_PRIVATE_PROVIDER'); },
+      get: async () => { await read('intent'); return null; },
+      cancel: async () => { calls.push('cancel'); throw new Error('SYNTHETIC_PRIVATE_PROVIDER'); },
+      listPreparedPage: async () => { await read('prepared'); return { records: [], nextAfterId: null }; },
+      listHistoryPage: async () => { await read('history'); return { records: [], nextAfterId: null }; },
+    },
+  };
+  return { capability, calls, hooks };
+}
+
+test('clinical seam is inert before explicit checked-owner open and missing capability never initializes data', async () => {
+  const h = fixture();
+  assert.equal(Object.isFrozen(h.controller.getState().clinical), true);
+  assert.equal(h.controller.getClinicalWorkspace(), null);
+  assert.equal(await h.controller.openClinical(), null);
+  assert.deepEqual(h.calls, []);
+  await h.controller.signIn(EMAIL, PASSWORD);
+  assert.equal(await h.controller.openClinical(), null);
+  assert.ok(h.controller.getState().clinical.error);
+  assert.equal(h.controller.getState().auth.phase, 'owner-checked');
+  assert.equal(h.calls.includes('destroy'), false);
+  await h.controller.dispose();
+});
+
+test('clinical opening owns one lazy capability and both controllers without reading any selected file or history', async () => {
+  const cap = clinicalCapability(), gate = deferred<CloudClinicalCapability>(), started = deferred();
+  const h = fixture({ getClinical: async () => { started.resolve(); return gate.promise; } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  assert.equal(h.calls.includes('getClinical'), false);
+  const first = h.controller.openClinical();
+  assert.equal(first, h.controller.openClinical());
+  assert.equal(h.controller.getState().clinical.phase, 'opening');
+  await started.promise; gate.resolve(cap.capability);
+  const workspace = await first; assert.ok(workspace);
+  assert.equal(Object.isFrozen(workspace), true);
+  assert.equal(workspace, h.controller.getClinicalWorkspace());
+  assert.equal(workspace, await h.controller.openClinical());
+  assert.deepEqual(cap.calls, []);
+  assert.equal(workspace.file.getState().snapshot, null);
+  assert.equal(workspace.recovery.getState().loaded, false);
+  assert.equal(await workspace.file.open(CLINICAL_PATIENT), true);
+  assert.equal(workspace.file.getState().snapshot?.patient.id, '451');
+  assert.equal(cap.calls.includes('history'), false);
+  await workspace.recovery.loadFirst();
+  assert.equal(cap.calls.filter(value => value === 'history').length, 1);
+  assert.equal(h.controller.closeClinical(workspace), true);
+  assert.equal(workspace.file.getState().closed, true);
+  assert.equal(workspace.recovery.getState().closed, true);
+  await h.controller.dispose();
+});
+
+test('clinical delayed acquisition is permanently revoked on close, logout, disposal, identity and runtime loss', async () => {
+  for (const mode of ['close', 'signOut', 'dispose', 'identity', 'runtime'] as const) {
+    const cap = clinicalCapability(), gate = deferred<CloudClinicalCapability>(), started = deferred();
+    const h = fixture({ getClinical: async () => { started.resolve(); return gate.promise; } });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    const opening = h.controller.openClinical(); await started.promise;
+    let cleanup: Promise<unknown> = Promise.resolve();
+    if (mode === 'close') assert.equal(h.controller.closeClinical(), true);
+    else if (mode === 'signOut') cleanup = h.controller.signOut();
+    else if (mode === 'dispose') cleanup = h.controller.dispose();
+    else if (mode === 'identity') h.session.invalidate();
+    else { h.setRuntime(false); h.controller.getState(); }
+    gate.resolve(cap.capability);
+    assert.equal(await opening, null); await cleanup;
+    assert.equal(h.controller.getClinicalWorkspace(), null);
+    assert.equal(h.controller.getState().clinical.phase, 'closed');
+    assert.deepEqual(cap.calls, []);
+    await h.controller.dispose();
+  }
+});
+
+test('clinical immediate close prevents SDK acquisition and old close cannot revoke a fresh composite', async () => {
+  const cap = clinicalCapability(), h = fixture({ getClinical: async () => cap.capability });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const opening = h.controller.openClinical();
+  assert.equal(h.controller.closeClinical(), true);
+  assert.equal(await opening, null);
+  assert.equal(h.calls.includes('getClinical'), false);
+  const old = await h.controller.openClinical(); assert.ok(old);
+  assert.equal(h.controller.closeClinical(old), true);
+  const fresh = await h.controller.openClinical(); assert.ok(fresh);
+  assert.notEqual(old, fresh);
+  assert.equal(h.controller.closeClinical(old), false);
+  assert.equal(h.controller.getClinicalWorkspace(), fresh);
+  assert.equal(fresh.file.getState().closed, false);
+  assert.equal(fresh.recovery.getState().closed, false);
+  await h.controller.dispose();
+});
+
+test('checking preserves exact clinical lease, dirty editor and unresolved command; actual logout clears both controllers', async () => {
+  const gate = deferred<ReturnType<typeof record>>(), started = deferred(); let delay = false;
+  const cap = clinicalCapability();
+  const h = fixture({ getClinical: async () => cap.capability,
+    adapter: { readOwner: async () => { if (delay) { started.resolve(); return gate.promise; } return record(); } } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openClinical(); assert.ok(workspace);
+  await workspace.file.open(CLINICAL_PATIENT);
+  assert.equal(workspace.file.setDraftDirty(CLINICAL_PATIENT, true), true);
+  delay = true; const checking = h.controller.refresh(); await started.promise;
+  assert.equal(h.controller.getState().auth.phase, 'checking');
+  assert.equal(h.controller.getClinicalWorkspace(), workspace);
+  assert.equal(workspace.file.getState().draftDirty, true);
+  gate.resolve(record()); await checking;
+  assert.equal(h.controller.closeClinical(workspace), false);
+  assert.equal(workspace.file.setDraftDirty(CLINICAL_PATIENT, false), true);
+  assert.equal(await workspace.file.saveVisit(CLINICAL_PATIENT, clinicalVisit(), 0), false);
+  assert.equal(workspace.file.getState().saveStatus, 'retry-required');
+  assert.equal(h.controller.closeClinical(workspace), false);
+  assert.ok(workspace.file.getState().pendingOperationId);
+  const logout = h.controller.signOut();
+  assert.equal(workspace.file.getState().closed, true);
+  assert.equal(workspace.file.getState().snapshot, null);
+  assert.equal(workspace.recovery.getState().closed, true);
+  assert.equal(h.controller.getClinicalWorkspace(), null);
+  await logout; await h.controller.dispose();
+});
+
+test('clinical file or recovery reads block ordinary close and switching; logout safely abandons late reads', async () => {
+  for (const domain of ['file', 'recovery'] as const) {
+    const gate = deferred(), started = deferred(), cap = clinicalCapability();
+    const contacts = contactRepository(), patients = patientRepository();
+    const h = fixture({ getClinical: async () => cap.capability,
+      getContacts: async () => contacts.repository, getPatients: async () => patients.repository });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    const workspace = await h.controller.openClinical(); assert.ok(workspace);
+    cap.hooks.read = async () => { started.resolve(); await gate.promise; };
+    const loading = domain === 'file' ? workspace.file.open(CLINICAL_PATIENT) : workspace.recovery.loadFirst();
+    await started.promise;
+    assert.equal(h.controller.closeClinical(workspace), false);
+    assert.equal(await h.controller.openContacts(), null);
+    assert.equal(await h.controller.openPatients(), null);
+    assert.equal(h.calls.includes('getContacts'), false);
+    assert.equal(h.calls.includes('getPatients'), false);
+    const logout = h.controller.signOut();
+    assert.equal(workspace.file.getState().closed, true);
+    assert.equal(workspace.recovery.getState().closed, true);
+    gate.resolve(); await loading; await logout;
+    assert.equal(workspace.file.getState().snapshot, null);
+    assert.deepEqual(workspace.recovery.getState().records, []);
+    await h.controller.dispose();
+  }
+});
+
+test('all three workspace switches preserve drafts, cancel pending acquisition and revoke outgoing leases', async () => {
+  const contacts = contactRepository(), patients = patientRepository(), cap = clinicalCapability();
+  const gate = deferred<CloudClinicalCapability>(), started = deferred(); let delay = false;
+  const h = fixture({ getContacts: async () => contacts.repository, getPatients: async () => patients.repository,
+    getClinical: async () => { if (delay) { started.resolve(); return gate.promise; } return cap.capability; } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const contact = await h.controller.openContacts(); assert.ok(contact); contact.beginCreate();
+  assert.equal(await h.controller.openClinical(), null);
+  assert.equal(h.calls.includes('getClinical'), false);
+  contact.cancelDraft();
+  const patient = await h.controller.openPatients(); assert.ok(patient); patient.beginCreate();
+  assert.equal(await h.controller.openClinical(), null);
+  patient.cancelDraft();
+  const clinical = await h.controller.openClinical(); assert.ok(clinical);
+  assert.equal(patient.getState().closed, true); assert.equal(contact.getState().closed, true);
+  await clinical.file.open(CLINICAL_PATIENT); clinical.file.setDraftDirty(CLINICAL_PATIENT, true);
+  assert.equal(await h.controller.openContacts(), null); assert.equal(await h.controller.openPatients(), null);
+  clinical.file.setDraftDirty(CLINICAL_PATIENT, false);
+  const freshContact = await h.controller.openContacts(); assert.ok(freshContact);
+  assert.equal(clinical.file.getState().closed, true); assert.equal(clinical.recovery.getState().closed, true);
+  h.controller.closeContacts(freshContact); delay = true;
+  const pending = h.controller.openClinical(); await started.promise;
+  const freshPatient = await h.controller.openPatients(); assert.ok(freshPatient);
+  gate.resolve(cap.capability); assert.equal(await pending, null);
+  assert.equal(h.controller.getClinicalWorkspace(), null);
+  assert.equal(h.controller.getPatientsWorkspace(), freshPatient);
+  await h.controller.dispose();
+});
+
+test('clinical capability failure uses a fixed error and owns full Auth cleanup', async () => {
+  const h = fixture({ getClinical: async () => { throw new Error(PASSWORD); } });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  assert.equal(await h.controller.openClinical(), null);
+  assert.ok(h.controller.getState().clinical.error);
+  assert.equal(h.controller.getState().clinical.error.includes(PASSWORD), false);
+  assert.equal(h.controller.getState().auth.owner, null);
+  assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+  await h.controller.dispose();
+});
+
+test('clinical opening and boundary callbacks cannot resurrect cancelled ownership or duplicate cleanup', async () => {
+  for (const mode of ['opening', 'open', 'runtime', 'session-state'] as const) {
+    const cap = clinicalCapability(); let cancel = false, closing: Promise<boolean> | null = null;
+    let h!: ReturnType<typeof fixture>;
+    const cancelInside = () => { if (cancel) { cancel = false; assert.equal(h.controller.closeClinical(), true); } };
+    h = fixture({ getClinical: async () => cap.capability,
+      runtime: () => { if (mode === 'runtime') cancelInside(); return true; },
+      factory: async session => ({ ...session, getState: () => { if (mode === 'session-state') cancelInside(); return session.getState(); } }),
+    });
+    await h.controller.signIn(EMAIL, PASSWORD);
+    h.controller.subscribe(value => {
+      if (value.clinical.phase === mode) closing = h.controller.signOut();
+      else if (value.clinical.phase === 'opening' && (mode === 'runtime' || mode === 'session-state')) cancel = true;
+    });
+    assert.equal(await h.controller.openClinical(), null);
+    if (closing) await closing;
+    assert.equal(h.controller.getClinicalWorkspace(), null);
+    assert.deepEqual(cap.calls, []);
+    await h.controller.dispose();
+  }
+});
+
+test('clinical synchronous disposal callbacks cannot reopen either half of a revoked bundle', async () => {
+  const cap = clinicalCapability(), h = fixture({ getClinical: async () => cap.capability });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openClinical(); assert.ok(workspace);
+  let secondLogout: Promise<boolean> | null = null, reopen: Promise<unknown> | null = null;
+  workspace.file.subscribe(value => {
+    if (!value.closed) return;
+    assert.equal(h.controller.getClinicalWorkspace(), null);
+    secondLogout = h.controller.signOut(); reopen = h.controller.openClinical();
+    void workspace.recovery.loadFirst();
+  });
+  const logout = h.controller.signOut();
+  assert.equal(logout, secondLogout);
+  assert.equal(workspace.recovery.getState().closed, true);
+  assert.equal(await reopen, null);
+  await logout;
+  assert.deepEqual(cap.calls, []);
+  assert.equal(h.calls.filter(value => value === 'destroy').length, 1);
+  await h.controller.dispose();
+});
+
+test('clinical UUID lease rejects a different checked owner even when the parent session object is unchanged', async () => {
+  const cap = clinicalCapability(); let changed = false;
+  const h = fixture({ getClinical: async () => cap.capability,
+    factory: async candidate => ({ ...candidate, getState: () => {
+      const state = candidate.getState();
+      return changed && state.owner ? { ...state, owner: { ...state.owner, uid: 'synthetic-other-owner' } } : state;
+    } }),
+  });
+  await h.controller.signIn(EMAIL, PASSWORD);
+  const workspace = await h.controller.openClinical(); assert.ok(workspace);
+  await workspace.file.open(CLINICAL_PATIENT); changed = true;
+  assert.equal(h.controller.getClinicalWorkspace(), null);
+  assert.equal(workspace.file.getState().closed, true); assert.equal(workspace.file.getState().snapshot, null);
+  assert.equal(workspace.recovery.getState().closed, true);
+  await h.controller.dispose();
+});
+
+test('clinical late capability cannot replace a new exact Auth session after same-UID re-login', async () => {
+  const oldGate = deferred<CloudClinicalCapability>(), oldStarted = deferred();
+  const oldCap = clinicalCapability(), freshCap = clinicalCapability();
+  const old = fixture(), fresh = fixture(); let factories = 0;
+  const controller = createCloudOperatingPageController(async () => ++factories === 1
+    ? { ...old.session, getClinical: async () => { oldStarted.resolve(); return oldGate.promise; } }
+    : { ...fresh.session, getClinical: async () => freshCap.capability }, () => true);
+  await controller.signIn(EMAIL, PASSWORD);
+  const opening = controller.openClinical(); await oldStarted.promise;
+  assert.equal(await controller.signOut(), true);
+  await controller.signIn(EMAIL, PASSWORD);
+  const current = await controller.openClinical(); assert.ok(current);
+  oldGate.resolve(oldCap.capability); assert.equal(await opening, null);
+  assert.equal(controller.getClinicalWorkspace(), current);
+  assert.equal(current.file.getState().closed, false); assert.equal(current.recovery.getState().closed, false);
+  assert.deepEqual(oldCap.calls, []); assert.deepEqual(freshCap.calls, []);
+  await controller.dispose(); await old.controller.dispose(); await fresh.controller.dispose();
 });

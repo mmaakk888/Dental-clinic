@@ -1,5 +1,5 @@
 import React, { useCallback, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowDown, ArrowRight, Check, ChevronLeft, FileSearch, FolderOpen, MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, ShieldCheck, UserRound, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Check, ChevronLeft, FileSearch, FolderHeart, FolderOpen, MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, ShieldCheck, UserRound, X } from 'lucide-react';
 import { normalizeContactPhone } from '../../utils/clinicContacts';
 import { normalizeDirectoryDigits, normalizeDirectoryName } from '../../utils/patientDirectory';
 import { getWhatsAppUrl } from '../../utils/whatsappUtils';
@@ -32,6 +32,8 @@ export interface CloudPatientsWorkspaceViewProps {
   onSelect: (record: CloudPatientRecord) => void;
   onEdit: (record: CloudPatientRecord) => void;
   onContact: (record: CloudPatientRecord) => boolean;
+  /** Explicit selected-file seam. Absence means clinical opening is unavailable. */
+  onOpenClinical?: (record: CloudPatientRecord) => void;
   onChangeDraft: (patch: Partial<CloudPatientProfile>, expected: CloudPatientWorkspaceDraft) => void;
   onSave: (expected: CloudPatientWorkspaceDraft) => void;
   onCancel: (expected: CloudPatientWorkspaceDraft) => void;
@@ -43,6 +45,8 @@ export interface CloudPatientsWorkspaceViewProps {
 export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProps) {
   const { state, previewOnly = false, closing = false } = props;
   const prefix = useId();
+  const latest = useRef(props);
+  latest.current = props;
   const unavailable = previewOnly || state.closed;
   const isLocked = locked(state) || closing;
   const disabled = unavailable || isLocked;
@@ -69,7 +73,7 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
   return <section className="cloud-patients-workspace" dir="rtl" aria-labelledby={`${prefix}-title`}>
     <header className="cpw-header cpw-surface">
       <div className="cpw-heading"><span className="cpw-heading-icon"><FolderOpen size={24} aria-hidden="true" /></span>
-        <div><h2 id={`${prefix}-title`}>ملفات المرضى</h2><p>بيانات الملف الأساسية — الجلسات والحسابات لم تُربط بعد.</p></div>
+        <div><h2 id={`${prefix}-title`}>ملفات المرضى</h2><p>{props.onOpenClinical && !unavailable ? 'بيانات الملف والوصول إلى سجل الجلسات والتحصيل الكامل.' : 'بيانات الملف الأساسية — الجلسات والحسابات غير متاحة في هذا العرض.'}</p></div>
       </div>
       <div><button type="button" className={secondaryClass} disabled={closeBlocked} aria-describedby={closeBlocked ? `${prefix}-close-help` : undefined}
         onClick={() => { if (!closeBlocked) props.onClose(); }}><ArrowRight size={18} aria-hidden="true" />إلغاء وإغلاق</button>
@@ -131,6 +135,11 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
         <div className="cpw-section-heading"><span className="cpw-detail-kicker">ملف {fileNumber(selected.fileNo)}</span><button type="button" className={secondaryClass} disabled={disabled} onClick={() => guard(() => props.onEdit(selected))}><Pencil size={17} aria-hidden="true" />تعديل البيانات</button></div>
         <h3 id={`${prefix}-detail-title`} className="cpw-patient-name">{selected.data.name}</h3>
         <p className="cpw-help">بيانات الملف الأساسية فقط؛ هذا العرض لا يتضمن العلاج أو الحسابات.</p>
+        {props.onOpenClinical && <button type="button" className={primaryClass} disabled={disabled} onClick={() => {
+          const current = latest.current;
+          if (!current.previewOnly && !current.closing && !current.state.closed && !locked(current.state)
+            && !current.state.draft && current.state.selected === selected) current.onOpenClinical?.(selected);
+        }}><FolderHeart size={18} aria-hidden="true" />فتح الجلسات وحساب الملف</button>}
         <dl className="cpw-facts"><div><dt>رقم الموبايل</dt><dd>{selected.data.mobile ? <bdi dir="ltr">{selected.data.mobile}</bdi> : 'غير مسجل'}</dd></div><div><dt>العمر</dt><dd>{selected.data.age.toLocaleString('ar-EG')} سنة</dd></div><div><dt>النوع</dt><dd>{selected.data.gender || 'غير محدد'}</dd></div><div><dt>أول زيارة</dt><dd><bdi dir="ltr">{selected.data.firstVisit}</bdi></dd></div></dl>
         {normalizeContactPhone(selected.data.mobile) && <div className="cpw-communication">
           <a className={secondaryClass} href={disabled ? undefined : `tel:+${normalizeContactPhone(selected.data.mobile)}`} aria-disabled={disabled} tabIndex={disabled ? -1 : undefined} aria-label={`اتصال بـ${selected.data.name}`} onClick={event => { if (disabled || !props.onContact(selected)) event.preventDefault(); }}><Phone size={18} aria-hidden="true" />اتصال</a>
@@ -164,8 +173,9 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
 }
 
 /** Subscription only. The parent owns capability/view lifetime and disposal. */
-export default function CloudPatientsWorkspace({ controller, onClose, previewOnly = false, closing = false }: {
-  controller: CloudPatientWorkspaceController; onClose: () => void; previewOnly?: boolean; closing?: boolean;
+export default function CloudPatientsWorkspace({ controller, onClose, onOpenClinical, previewOnly = false, closing = false }: {
+  controller: CloudPatientWorkspaceController; onClose: () => void; onOpenClinical?: (patientRecordId: string) => void;
+  previewOnly?: boolean; closing?: boolean;
 }) {
   const subscribe = useCallback((notify: () => void) => controller.subscribe(() => notify()), [controller]);
   const getSnapshot = useCallback(() => controller.getState(), [controller]);
@@ -174,6 +184,8 @@ export default function CloudPatientsWorkspace({ controller, onClose, previewOnl
   const [ageQuery, setAgeQuery] = useState<string | null>(null);
   const ageQueryRef = useRef<string | null>(null);
   ageQueryRef.current = ageQuery;
+  const clinicalProps = useRef({ controller, onOpenClinical, previewOnly, closing });
+  clinicalProps.current = { controller, onOpenClinical, previewOnly, closing };
   const fresh = () => { const value = controller.getState(); return !previewOnly && !closing && !value.closed && !locked(value) ? value : null; };
   const listsAvailable = () => { const value = fresh(); return value && !value.draft ? value : null; };
   const sameDraft = (expected: CloudPatientWorkspaceDraft, retry = false) => {
@@ -190,6 +202,12 @@ export default function CloudPatientsWorkspace({ controller, onClose, previewOnl
     onSelect={record => { if (listsAvailable()?.records.includes(record)) void controller.select(record.recordId); }}
     onEdit={record => { if (listsAvailable()?.selected === record && controller.beginEdit(record)) { ageQueryRef.current = null; setAgeQuery(null); } }}
     onContact={record => { const value = listsAvailable(); return Boolean(value && value.selected === record && normalizeContactPhone(record.data.mobile)); }}
+    onOpenClinical={onOpenClinical && !previewOnly ? record => {
+      const current = clinicalProps.current;
+      if (current.controller !== controller || current.previewOnly || current.closing || !current.onOpenClinical) return;
+      const value = listsAvailable();
+      if (value?.selected === record) current.onOpenClinical(record.recordId);
+    } : undefined}
     onChangeDraft={(patch, expected) => { if (sameDraft(expected)) controller.updateProfile(patch); }}
     onSave={expected => { const digits = ageQueryRef.current === null ? null : normalizeDirectoryDigits(ageQueryRef.current); if (sameDraft(expected, true) && (digits === null || /^[0-9]{1,3}$/.test(digits) && Number(digits) <= 120)) void controller.save(); }}
     onCancel={expected => { if (sameDraft(expected) && controller.cancelDraft()) { ageQueryRef.current = null; setAgeQuery(null); } }}

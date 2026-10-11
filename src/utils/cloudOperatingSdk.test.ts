@@ -221,6 +221,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
               prepare: (kind: unknown, command: unknown, createdAt: string) => work('prepare', { kind, command, createdAt }, intent(command, createdAt)),
               get: (id: string) => work('intentGet', id, intent(recovered())),
               listPreparedPage: (kind: unknown, input: unknown) => work('listPreparedPage', { kind, input }, { records: [intent(recovered())], nextAfterId: null }),
+              listHistoryPage: (kind: unknown, input: unknown) => work('listHistoryPage', { kind, input }, { records: [intent(recovered())], nextAfterId: null }),
               cancel: (id: string) => work('cancel', id, intent(recovered(), undefined, 'cancelled')),
             },
           };
@@ -734,9 +735,9 @@ test('patient command/query validation and provider failures never expose payloa
 });
 
 type ClinicalTestMethod = 'commit' | 'getProfile' | 'getAccount' | 'getSession' | 'listSessions' | 'listReceipts'
-  | 'prepare' | 'intentGet' | 'listPreparedPage' | 'cancel';
+  | 'prepare' | 'intentGet' | 'listPreparedPage' | 'listHistoryPage' | 'cancel';
 const CLINICAL_METHODS: readonly ClinicalTestMethod[] = ['commit', 'getProfile', 'getAccount', 'getSession', 'listSessions', 'listReceipts',
-  'prepare', 'intentGet', 'listPreparedPage', 'cancel'];
+  'prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'];
 function invokeClinical(capability: CloudClinicalCapability, method: ClinicalTestMethod, copy: <T>(value: T) => T): Promise<unknown> {
   switch (method) {
     case 'commit': return capability.repository.commit(copy(rawClinicalCommand()));
@@ -748,6 +749,7 @@ function invokeClinical(capability: CloudClinicalCapability, method: ClinicalTes
     case 'prepare': return capability.journal.prepare('clinical', copy(rawClinicalCommand()), CREATED_AT);
     case 'intentGet': return capability.journal.get(INSTANCE);
     case 'listPreparedPage': return capability.journal.listPreparedPage('clinical', copy({ limit: 2 }));
+    case 'listHistoryPage': return capability.journal.listHistoryPage!('clinical', copy({ limit: 2 }));
     case 'cancel': return capability.journal.cancel(INSTANCE);
   }
 }
@@ -761,7 +763,7 @@ test('clinical capability is explicit, lazy, frozen, clinical-only and reauthori
   assert.deepEqual(h.clinicalCalls, ['factory']);
   assert.deepEqual(Object.keys(capability).sort(), ['journal', 'repository']);
   assert.deepEqual(Object.keys(capability.repository).sort(), ['commit', 'getAccount', 'getProfile', 'getSession', 'listReceipts', 'listSessions']);
-  assert.deepEqual(Object.keys(capability.journal).sort(), ['cancel', 'get', 'listPreparedPage', 'prepare']);
+  assert.deepEqual(Object.keys(capability.journal).sort(), ['cancel', 'get', 'listHistoryPage', 'listPreparedPage', 'prepare']);
   assert.equal(Object.isFrozen(capability), true); assert.equal(Object.isFrozen(capability.repository), true); assert.equal(Object.isFrozen(capability.journal), true);
   assert.equal(h.clinicalActive(), true);
   for (const method of CLINICAL_METHODS) {
@@ -851,7 +853,7 @@ test('clinical results require a fresh server membership check after the underly
 });
 
 test('clinical commands, page queries and journal preparation/page arguments snapshot before delayed authorization', async () => {
-  for (const method of ['commit', 'listSessions', 'listReceipts', 'prepare', 'listPreparedPage'] as const) {
+  for (const method of ['commit', 'listSessions', 'listReceipts', 'prepare', 'listPreparedPage', 'listHistoryPage'] as const) {
     const gate = deferred(); let enabled = false, reached = false;
     const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
     const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
@@ -859,7 +861,8 @@ test('clinical commands, page queries and journal preparation/page arguments sna
     const command = h.api.__input(rawClinicalCommand()), page = h.api.__input({ patientId: RECORD, afterId: INSTANCE, limit: 2 });
     const intentPage = h.api.__input({ afterId: INSTANCE, limit: 2 });
     const pending = method === 'commit' ? cap.repository.commit(command) : method === 'prepare' ? cap.journal.prepare('clinical', command, CREATED_AT)
-      : method === 'listPreparedPage' ? cap.journal.listPreparedPage('clinical', intentPage) : cap.repository[method](page);
+      : method === 'listPreparedPage' ? cap.journal.listPreparedPage('clinical', intentPage)
+        : method === 'listHistoryPage' ? cap.journal.listHistoryPage!('clinical', intentPage) : cap.repository[method](page);
     await until(() => reached);
     command.operationId = RECORD; if (command.action === 'visit') { command.data.notes = 'Changed'; command.data.services[0].priceCents = 1; }
     page.patientId = INSTANCE; page.limit = 50; intentPage.limit = 50; intentPage.afterId = RECORD;
@@ -870,9 +873,9 @@ test('clinical commands, page queries and journal preparation/page arguments sna
       assert.equal(value.operationId, INSTANCE); assert.equal(value.data.notes, ''); assert.equal(value.data.services[0].priceCents, 20000);
       if (method === 'prepare') { assert.equal(received.kind, 'clinical'); assert.equal(received.createdAt, CREATED_AT); }
     } else {
-      const value = method === 'listPreparedPage' ? received.input : received;
+      const value = method === 'listPreparedPage' || method === 'listHistoryPage' ? received.input : received;
       assert.equal(value.limit, 2); assert.equal(value.afterId, INSTANCE);
-      if (method !== 'listPreparedPage') assert.equal(value.patientId, RECORD);
+      if (method !== 'listPreparedPage' && method !== 'listHistoryPage') assert.equal(value.patientId, RECORD);
     }
     await session.dispose();
   }
@@ -890,6 +893,7 @@ test('malformed clinical or journal inputs and nonclinical kinds fail asynchrono
     }
   }
   for (const value of [h.api.__input({ limit: 0 }), malicious]) await assert.rejects(cap.journal.listPreparedPage('clinical', value), error => !String(error).includes(PASSWORD));
+  for (const value of [h.api.__input({ limit: 0 }), malicious]) await assert.rejects(cap.journal.listHistoryPage!('clinical', value), error => !String(error).includes(PASSWORD));
   for (const id of ['', `${RECORD}\n`, Object.assign({}, { toString: () => { throw new Error(PASSWORD); } })]) {
     for (const work of [() => cap.repository.getProfile(id as never), () => cap.repository.getAccount(id as never), () => cap.repository.getSession(id as never),
       () => cap.journal.get(id as never), () => cap.journal.cancel(id as never)]) await assert.rejects(work(), error => !String(error).includes(PASSWORD));
@@ -897,6 +901,7 @@ test('malformed clinical or journal inputs and nonclinical kinds fail asynchrono
   for (const kind of ['contact', 'patient-profile'] as const) {
     await assert.rejects(cap.journal.prepare(kind, h.api.__input(rawClinicalCommand()), CREATED_AT));
     await assert.rejects(cap.journal.listPreparedPage(kind));
+    await assert.rejects(cap.journal.listHistoryPage!(kind));
   }
   await assert.rejects(cap.journal.prepare('clinical', h.api.__input(rawClinicalCommand()), '2026-10-11T10:00:00.000Z'));
   assert.equal(h.paths.length, before); assert.deepEqual(h.clinicalCalls, ['factory']); await session.dispose();
@@ -917,7 +922,7 @@ test('clinical journal rejects another domain or another actor returned by its a
   for (const options of [{ clinicalIntentKind: 'contact' as const }, { clinicalIntentActor: 'different-synthetic-owner' }]) {
     const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
     const cap = await session.getClinical();
-    for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'cancel'] as const) await assert.rejects(invokeClinical(cap, method, h.api.__input));
+    for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'] as const) await assert.rejects(invokeClinical(cap, method, h.api.__input));
     await session.dispose();
   }
 });

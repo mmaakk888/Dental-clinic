@@ -17,6 +17,8 @@ export interface CloudIntentAdapter {
   runTransaction<T>(work: (transaction: CloudIntentTransaction) => Promise<T>): Promise<T>;
   readRecord?(path: string): Promise<unknown | null>;
   listPreparedPage?(kind: CloudOperationKind, actorUid: string, afterId: string | null, limit: number): Promise<unknown>;
+  /** Includes committed intents: an accepted write can lose its acknowledgement. */
+  listHistoryPage?(kind: CloudOperationKind, actorUid: string, afterId: string | null, limit: number): Promise<unknown>;
 }
 export interface CloudIntentOptions { digest?: (text: string) => Promise<string> }
 export class CloudOperationIntentError extends Error {
@@ -156,6 +158,29 @@ export function createCloudOperationIntentRepository(adapter: CloudIntentAdapter
     const exists = await transaction.get(receiptPath(intent.kind, intent.operationId)) !== null;
     if (exists !== (intent.status === 'committed')) conflict();
   }
+  async function list(kind: CloudOperationKind, input: { afterId?: string | null; limit?: number }, preparedOnly: boolean) {
+    try {
+      const item = fields(input), keys = Object.keys(item), after = item.afterId ?? null, limit = item.limit === undefined ? 25 : item.limit;
+      if (!validKind(kind) || keys.some(key => !['afterId', 'limit'].includes(key))
+        || after !== null && !validId(after) || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) invalid();
+      const uid = await authorize(), reader = preparedOnly ? adapter.listPreparedPage : adapter.listHistoryPage;
+      if (!reader) unavailable();
+      const raw = await reader.call(adapter, kind, uid, after as string | null, limit);
+      if (!Array.isArray(raw) || raw.length > limit || Reflect.ownKeys(raw).length !== raw.length + 1) invalid();
+      const records: CloudOperationIntent[] = []; let previous = after as string | null;
+      for (let index = 0; index < raw.length; index++) {
+        const property = Object.getOwnPropertyDescriptor(raw, String(index));
+        if (!property || !('value' in property) || !property.enumerable) invalid();
+        const row = fields(property.value);
+        if (Object.keys(row).length !== 2 || !Object.hasOwn(row, 'id') || !Object.hasOwn(row, 'data')
+          || !validId(row.id) || previous !== null && row.id <= previous) invalid();
+        const intent = await checked(row.data, uid, row.id, options);
+        if (intent.kind !== kind || preparedOnly && intent.status !== 'prepared') invalid();
+        records.push(intent); previous = row.id;
+      }
+      await reauthorize(uid); return { records, nextAfterId: records.length === limit ? previous : null };
+    } catch (error) { throw safeError(error); }
+  }
   return {
     async prepare(kind: CloudOperationKind, input: unknown, createdAt: string): Promise<CloudOperationIntent> {
       try {
@@ -190,26 +215,10 @@ export function createCloudOperationIntentRepository(adapter: CloudIntentAdapter
       } catch (error) { throw safeError(error); }
     },
     async listPreparedPage(kind: CloudOperationKind, input: { afterId?: string | null; limit?: number } = {}) {
-      try {
-        const item = fields(input), keys = Object.keys(item), after = item.afterId ?? null, limit = item.limit === undefined ? 25 : item.limit;
-        if (!validKind(kind) || keys.some(key => !['afterId', 'limit'].includes(key))
-          || after !== null && !validId(after) || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) invalid();
-        const uid = await authorize(); if (!adapter.listPreparedPage) unavailable();
-        const raw = await adapter.listPreparedPage(kind, uid, after as string | null, limit);
-        if (!Array.isArray(raw) || raw.length > limit || Reflect.ownKeys(raw).length !== raw.length + 1) invalid();
-        const records: CloudOperationIntent[] = []; let previous = after as string | null;
-        for (let index = 0; index < raw.length; index++) {
-          const property = Object.getOwnPropertyDescriptor(raw, String(index));
-          if (!property || !('value' in property) || !property.enumerable) invalid();
-          const row = fields(property.value);
-          if (Object.keys(row).length !== 2 || !Object.hasOwn(row, 'id') || !Object.hasOwn(row, 'data')
-            || !validId(row.id) || previous !== null && row.id <= previous) invalid();
-          const intent = await checked(row.data, uid, row.id, options);
-          if (intent.kind !== kind || intent.status !== 'prepared') invalid();
-          records.push(intent); previous = row.id;
-        }
-        await reauthorize(uid); return { records, nextAfterId: records.length === limit ? previous : null };
-      } catch (error) { throw safeError(error); }
+      return list(kind, input, true);
+    },
+    async listHistoryPage(kind: CloudOperationKind, input: { afterId?: string | null; limit?: number } = {}) {
+      return list(kind, input, false);
     },
     async cancel(id: string): Promise<CloudOperationIntent> {
       try {
@@ -228,4 +237,8 @@ export function createCloudOperationIntentRepository(adapter: CloudIntentAdapter
     },
   };
 }
-export type CloudOperationIntentRepository = ReturnType<typeof createCloudOperationIntentRepository>;
+type IntentRepository = ReturnType<typeof createCloudOperationIntentRepository>;
+/** Older isolated capabilities may not support history. Recovery must fail
+ * closed in that case, never substitute the prepared-only queue. */
+export type CloudOperationIntentRepository = Omit<IntentRepository, 'listHistoryPage'>
+  & Partial<Pick<IntentRepository, 'listHistoryPage'>>;

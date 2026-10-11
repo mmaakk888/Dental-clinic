@@ -581,6 +581,14 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
                     return { records: page.records.map(value => checkedIntent(value)), nextAfterId: page.nextAfterId };
                   });
                 },
+                listHistoryPage: async (kind, input) => {
+                  clinicalKind(kind); const prepared = pageInput(input);
+                  return run(async () => {
+                    if (!capability.journal.listHistoryPage) throw new intents.CloudOperationIntentError('unavailable');
+                    const page = await capability.journal.listHistoryPage('clinical', prepared);
+                    return { records: page.records.map(value => checkedIntent(value)), nextAfterId: page.nextAfterId };
+                  });
+                },
                 cancel: async id => {
                   const prepared = intentId(id);
                   return run(async () => checkedIntent(await capability.journal.cancel(prepared), prepared));

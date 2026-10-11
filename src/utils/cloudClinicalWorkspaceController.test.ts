@@ -260,3 +260,70 @@ test('clinical controller dependency graph remains SDK/Auth/browser storage/App-
     platform: 'browser', write: false, metafile: true, logLevel: 'silent' });
   for (const path of Object.keys(result.metafile!.inputs)) assert.doesNotMatch(path, /firebase|storage\.ts|App\.tsx|cloudOperatingAuth/i);
 });
+
+test('ordinary clinical drafts bind the loaded patient UUID and block read/navigation/recovery until explicitly cancelled', async () => {
+  const h = harness(); assert.equal(h.controller.getState().draftDirty, false);
+  assert.equal(h.controller.setDraftDirty(PATIENT, true), false);
+  await h.controller.open(PATIENT);
+  assert.equal(h.controller.setDraftDirty(OTHER, true), false);
+  assert.equal(h.controller.setDraftDirty(PATIENT, 'true' as never), false);
+  assert.equal(h.controller.setDraftDirty(PATIENT, true), true);
+  const before = [...h.calls];
+  assert.equal(await h.controller.open(OTHER), false); assert.equal(await h.controller.open(PATIENT), false);
+  assert.equal(await h.controller.refresh(), false); assert.equal(await h.controller.resume(id(99)), false);
+  assert.deepEqual(h.calls, before); assert.equal(h.controller.getState().draftDirty, true);
+  assert.equal(h.controller.setDraftDirty(OTHER, false), false);
+  assert.equal(h.controller.setDraftDirty(PATIENT, false), true);
+  assert.equal(await h.controller.refresh(), true); assert.equal(h.controller.getState().draftDirty, false);
+});
+test('a dirty form may submit, while validation failure preserves the form and full verified success clears it', async () => {
+  const h = harness(); await h.controller.open(PATIENT); h.controller.setDraftDirty(PATIENT, true);
+  assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 0.5), false);
+  assert.equal(h.controller.getState().draftDirty, true); assert.equal(h.intents.size, 0);
+  assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 10_000), true);
+  assert.equal(h.controller.getState().draftDirty, false);
+});
+test('uncertain or failed saves and cancellations keep dirty state immutable until server-confirmed cancellation', async () => {
+  const h = harness(); await h.controller.open(PATIENT); h.controller.setDraftDirty(PATIENT, true); h.faults.lostPrepare = true;
+  assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 10_000), false);
+  assert.equal(h.controller.getState().draftDirty, true); assert.equal(h.controller.setDraftDirty(PATIENT, false), false);
+  const originalCancel = h.capability.journal.cancel;
+  h.capability.journal.cancel = async () => { throw new Error('PRIVATE_CANCEL'); };
+  assert.equal(await h.controller.cancelPending(), false); assert.equal(h.controller.getState().draftDirty, true);
+  h.capability.journal.cancel = originalCancel;
+  assert.equal(await h.controller.cancelPending(), true); assert.equal(h.controller.getState().draftDirty, false);
+  assert.equal(h.controller.getState().loaded, false);
+});
+test('acknowledged save does not clear ordinary dirty state until full read-only refresh succeeds', async () => {
+  const h = harness(); await h.controller.open(PATIENT); h.controller.setDraftDirty(PATIENT, true);
+  h.hooks.onAccepted = () => { h.hooks.read = () => { throw new Error('PRIVATE_REFRESH'); }; };
+  assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 10_000), false);
+  assert.equal(h.controller.getState().saveStatus, 'refresh-required'); assert.equal(h.controller.getState().draftDirty, true);
+  assert.equal(h.controller.setDraftDirty(PATIENT, false), false);
+  h.hooks.read = undefined; assert.equal(await h.controller.retry(), true);
+  assert.equal(h.controller.getState().draftDirty, false); assert.equal(h.submitted.length, 1);
+});
+test('in-flight dirty save cannot be cleared through a retained setter and is cleared only after success', async () => {
+  const h = harness(), gate = deferred(), started = deferred(); await h.controller.open(PATIENT); h.controller.setDraftDirty(PATIENT, true);
+  h.hooks.prepare = async () => { started.resolve(); await gate.promise; };
+  const saving = h.controller.saveVisit(PATIENT, visitData(), 10_000); await started.promise;
+  assert.equal(h.controller.setDraftDirty(PATIENT, false), false); assert.equal(h.controller.getState().draftDirty, true);
+  gate.resolve(); assert.equal(await saving, true); assert.equal(h.controller.getState().draftDirty, false);
+});
+test('dirty setters fail closed after callback disposal or actual lease loss and cannot resurrect a draft', async () => {
+  const h = harness(); await h.controller.open(PATIENT); h.controller.setDraftDirty(PATIENT, true); h.active(false);
+  assert.equal(h.controller.setDraftDirty(PATIENT, false), false); assert.equal(h.controller.getState().draftDirty, false);
+  h.active(true); assert.equal(h.controller.setDraftDirty(PATIENT, true), false);
+  let controller!: ReturnType<typeof createCloudClinicalWorkspaceController>, closeOnCheck = false;
+  controller = createCloudClinicalWorkspaceController({ getCapability: async () => h.capability,
+    isActive: () => { if (closeOnCheck) controller.dispose(); return true; } });
+  await controller.open(PATIENT); closeOnCheck = true;
+  assert.equal(controller.setDraftDirty(PATIENT, true), false); assert.equal(controller.getState().closed, true);
+  assert.equal(controller.getState().draftDirty, false);
+});
+test('dirty listener reentrancy cannot claim a live successful setter after the view has closed', async () => {
+  const h = harness(); await h.controller.open(PATIENT);
+  h.controller.subscribe(state => { if (state.draftDirty) h.controller.dispose(); });
+  assert.equal(h.controller.setDraftDirty(PATIENT, true), false);
+  assert.equal(h.controller.getState().closed, true); assert.equal(h.controller.getState().draftDirty, false);
+});

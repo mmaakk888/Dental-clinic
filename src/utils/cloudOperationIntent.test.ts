@@ -39,6 +39,13 @@ function harness() {
         && value.actorUid === uid && value.status === 'prepared' && (!after || value.recordId > after))
         .sort(([a], [b]) => a.localeCompare(b)).slice(0, count).map(([key, data]) => ({ id: key.split('/').at(-1), data: structuredClone(data) }));
     },
+    listHistoryPage: async (kind, uid, after, count) => {
+      calls.push(`history:${kind}:${uid}:${after}:${count}`);
+      if (hooks.list) return hooks.list();
+      return [...docs].filter(([key, value]) => key.startsWith(path('operationIntents', '')) && value.kind === kind
+        && value.actorUid === uid && (!after || value.recordId > after))
+        .sort(([a], [b]) => a.localeCompare(b)).slice(0, count).map(([key, data]) => ({ id: key.split('/').at(-1), data: structuredClone(data) }));
+    },
     runTransaction: async work => {
       const previous = tail; let release!: () => void; tail = new Promise<void>(accept => { release = accept; }); await previous;
       const attempt = async (publish: boolean) => {
@@ -124,6 +131,58 @@ test('lost clinical acknowledgement can be inspected after reload without creati
   assert.equal((await core.commit(visit())).status, 'already-committed');
   assert.equal(h.docs.get(path('patientAccounts', PATIENT)).paidCents, 10_000);
   assert.equal([...h.docs.keys()].filter(key => key.startsWith(path('patientReceipts', ''))).length, 1);
+});
+
+test('all-status history rediscovers an accepted lost-ACK command after reload without knowing its operation ID', async () => {
+  const h = harness(); await h.journal.prepare('clinical', visit(), WHEN); h.faults.lostCommitReply = true;
+  await assert.rejects(h.clinical.commit(visit()), clinical('unavailable'));
+  const fresh = createCloudOperationIntentRepository(h.adapter, { digest });
+  assert.deepEqual((await fresh.listPreparedPage('clinical')).records, []);
+  const [recovered] = (await fresh.listHistoryPage('clinical')).records;
+  assert.equal(recovered.status, 'committed'); assert.equal(recovered.operationId, OP);
+  const before = structuredClone(h.docs);
+  assert.equal((await createCloudClinicalRepository(h.adapter, { digest }).commit(recovered.command as unknown as CloudClinicalCommand)).status, 'already-committed');
+  assert.deepEqual(h.docs, before); assert.equal(h.docs.get(path('patientAccounts', PATIENT)).paidCents, 10_000);
+  assert.equal([...h.docs.keys()].filter(key => key.startsWith(path('patientReceipts', ''))).length, 1);
+});
+
+test('history is explicitly bounded, actor/kind scoped, ordered and includes cancelled and prepared operations', async () => {
+  const h = harness();
+  for (const n of [3, 1, 2]) await h.journal.prepare('clinical', { ...visit(), operationId: id(n), sessionId: id(n) }, WHEN);
+  await h.journal.cancel(id(2));
+  await h.journal.prepare('contact', { operationId: id(4), name: 'جهة مصطنعة' }, WHEN);
+  const first = await h.journal.listHistoryPage('clinical', { limit: 2 });
+  assert.deepEqual(first.records.map(value => [value.operationId, value.status]), [[id(1), 'prepared'], [id(2), 'cancelled']]);
+  assert.equal(first.nextAfterId, id(2));
+  const second = await h.journal.listHistoryPage('clinical', { afterId: first.nextAfterId, limit: 2 });
+  assert.deepEqual(second.records.map(value => value.operationId), [id(3)]); assert.equal(second.nextAfterId, null);
+  h.owner('another-owner'); assert.deepEqual((await h.journal.listHistoryPage('clinical')).records, []);
+});
+
+test('history fails closed without a history adapter and never substitutes the prepared queue', async () => {
+  const h = harness(); delete h.adapter.listHistoryPage;
+  await assert.rejects(h.journal.listHistoryPage('clinical'), check('unavailable'));
+  assert.equal(h.calls.some(value => value.startsWith('list:')), false);
+});
+
+test('history snapshots bounds before authorization and rejects malformed, foreign or unordered rows', async () => {
+  const h = harness(); await h.journal.prepare('clinical', visit(), WHEN);
+  const bounds = { afterId: null as string | null, limit: 1 };
+  h.hooks.auth = () => { bounds.afterId = id(99); bounds.limit = 50; };
+  const page = await h.journal.listHistoryPage('clinical', bounds);
+  assert.equal(page.records.length, 1); assert.ok(h.calls.includes(`history:clinical:${OWNER}:null:1`));
+  delete h.hooks.auth;
+  const intent = await h.journal.get(OP);
+  for (const rows of [[{ id: OP, data: { ...intent, actorUid: 'other-owner' } }],
+    [{ id: OP, data: { ...intent, requestHash: '0'.repeat(64) } }],
+    [{ id: OP, data: intent }, { id: OP, data: intent }],
+    [{ id: OP, data: { ...intent, status: 'committed', revision: 1 } }]]) {
+    h.hooks.list = () => rows; await assert.rejects(h.journal.listHistoryPage('clinical'), error => check('invalid')(error) || check('conflict')(error));
+  }
+  delete h.hooks.list;
+  for (const input of [{ limit: 0 }, { limit: 51 }, { afterId: `${OP}\n` }, { unexpected: true }]) {
+    await assert.rejects(h.journal.listHistoryPage('clinical', input as never), check('invalid'));
+  }
 });
 test('failure at any clinical write leaves intent prepared and no partially published finance', async () => {
   for (const failAt of [1, 2, 3, 4, 5]) {

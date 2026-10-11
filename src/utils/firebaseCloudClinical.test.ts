@@ -115,7 +115,7 @@ async function harness(options: Options = {}) {
           if (request.key === path('operationIntents', '').slice(0, -1)) assert.deepEqual(predicates, [
             { kind: 'where', field: 'actorUid', operator: '==', value: UID },
             { kind: 'where', field: 'kind', operator: '==', value: 'clinical' },
-            { kind: 'where', field: 'status', operator: '==', value: 'prepared' },
+            ...(predicates.length === 2 ? [] : [{ kind: 'where', field: 'status', operator: '==', value: 'prepared' }]),
           ]);
           else assert.deepEqual(predicates, [{ kind: 'where', field: 'patientId', operator: '==', value: ID }]);
           const after = request.constraints.find((value: any) => value.kind === 'after')?.id;
@@ -221,6 +221,7 @@ test('clinical capability refuses other journal kinds and never reads or cancels
   for (const kind of ['contact', 'patient-profile', 'other']) {
     await assert.rejects(async () => service.journal.prepare(kind, h.payload, WHEN));
     await assert.rejects(async () => service.journal.listPreparedPage(kind));
+    await assert.rejects(async () => service.journal.listHistoryPage(kind));
   }
   const stored = h.rows.get(path('operationIntents', OP)); stored.kind = 'contact';
   stored.requestHash = createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', UID, 'contact', stored.command])).digest('hex');
@@ -270,11 +271,47 @@ test('clinical recovery queries constrain actor, kind and prepared status and re
   assert.equal((await service.journal.listPreparedPage('clinical')).records.length, 0);
 });
 
+test('clinical all-status recovery discovers an accepted lost-ACK operation after a new capability and replays cash once', async () => {
+  const h = await harness(), service = await prepared(h); h.options.lostReply = true;
+  await assert.rejects(service.repository.commit(h.payload), failed);
+  const fresh = await capability(h);
+  assert.equal((await fresh.journal.listPreparedPage('clinical')).records.length, 0);
+  const history = await fresh.journal.listHistoryPage('clinical', h.copy({ limit: 1 }));
+  assert.equal(history.records[0].status, 'committed'); assert.equal(history.records[0].operationId, OP);
+  assert.equal(history.nextAfterId, OP);
+  const writes = h.calls.filter(call => call.startsWith('set:')).length;
+  assert.equal((await fresh.repository.commit(history.records[0].command)).status, 'already-committed');
+  assert.equal(h.calls.filter(call => call.startsWith('set:')).length, writes);
+  assert.equal(h.rows.get(path('patientAccounts')).paidCents, 10_000);
+  assert.equal([...h.rows.keys()].filter(key => key.startsWith(path('patientReceipts', ''))).length, 1);
+  assert.equal((await fresh.journal.listHistoryPage('clinical', h.copy({ afterId: OP, limit: 1 }))).records.length, 0);
+});
+
+test('clinical history includes cancelled intents, excludes other owners/domains and never queries unrelated collections', async () => {
+  const h = await harness(), service = await prepared(h); await service.journal.cancel(OP);
+  for (const [key, actorUid, kind] of [[OP2, 'other-owner', 'clinical'], [ITEM, UID, 'contact']]) {
+    h.rows.set(path('operationIntents', key), h.copy({ ...h.rows.get(path('operationIntents', OP)), recordId: key, operationId: key, actorUid, kind }));
+  }
+  const history = await service.journal.listHistoryPage('clinical');
+  assert.equal(history.records.length, 1); assert.equal(history.records[0].status, 'cancelled');
+  assert.equal(h.calls.some(call => /doc:.*contactOperations|doc:.*patientOperations/.test(call)), false);
+});
+
+test('clinical history fails closed on revoked SDK boundaries and malformed complete commands', async () => {
+  for (const stopAt of ['where', 'query', 'page', 'page-docs', 'page-id', 'page-data'] as const) {
+    const h = await harness(), service = await prepared(h); h.options.stopAt = stopAt;
+    await assert.rejects(service.journal.listHistoryPage('clinical'), failed);
+  }
+  const h = await harness(), service = await prepared(h);
+  h.rows.get(path('operationIntents', OP)).command.data.services[0].priceCents = -1;
+  await assert.rejects(service.journal.listHistoryPage('clinical'));
+});
+
 test('clinical SDK read/write denials expose fixed errors without fallback or successful empty results', async () => {
   const h = await harness({ denyRead: true }), service = await capability(h);
   for (const read of [() => service.repository.getAccount(ID), () => service.repository.getSession(OP),
     () => service.repository.listSessions(h.copy({ patientId: ID })), () => service.journal.get(OP),
-    () => service.journal.listPreparedPage('clinical')]) await assert.rejects(read(), failed);
+    () => service.journal.listPreparedPage('clinical'), () => service.journal.listHistoryPage('clinical')]) await assert.rejects(read(), failed);
   assert.equal(h.rows.size, 2);
   const denied = await harness({ denyWrite: true }), writer = await capability(denied);
   await assert.rejects(writer.journal.prepare('clinical', denied.payload, WHEN), failed); assert.equal(denied.rows.size, 2);
