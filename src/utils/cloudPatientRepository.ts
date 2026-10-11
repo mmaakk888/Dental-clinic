@@ -1,4 +1,5 @@
 import { normalizeContactPhone } from './clinicContacts';
+import { CloudOperationIntentError, readCloudOperationIntentForCommit, markCloudOperationIntentCommitted } from './cloudOperationIntent';
 
 /** Prepared profile-only storage. NOT a migration codec or an enabled clinical
  * feature. Sessions, receipts and private lab costs belong to separate domains.
@@ -50,6 +51,7 @@ function unavailable(): never { throw new CloudPatientError('unavailable'); }
 function safeError(error: unknown): CloudPatientError {
   try {
     if (error instanceof CloudPatientError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) return new CloudPatientError(error.code);
+    if (error instanceof CloudOperationIntentError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) return new CloudPatientError(error.code);
   } catch { /* No raw provider/hostile object details. */ }
   return new CloudPatientError('unavailable');
 }
@@ -156,7 +158,7 @@ async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export function createCloudPatientRepository(adapter: CloudPatientAdapter, options: CloudPatientRepositoryOptions = {}) {
+function createPatientRepository(adapter: CloudPatientAdapter, options: CloudPatientRepositoryOptions, journalRequired: boolean) {
   const digest = options.digest ?? sha256;
   const hash = async (value: string) => { const result = await digest(value); if (!validHash(result)) invalid(); return result; };
   const phoneHash = (data: CloudPatientProfile) => data.mobile === '' ? Promise.resolve(null) : hash(`patient-phone-v1:${normalizeContactPhone(data.mobile)}`);
@@ -242,9 +244,18 @@ export function createCloudPatientRepository(adapter: CloudPatientAdapter, optio
         const result = await adapter.runTransaction<CloudPatientCommit>(async tx => {
           await reauthorize(uid);
           const oldReceipt = await tx.get(operationPath(prepared.operationId));
+          // The journaled factory has no caller-controlled bypass. An accepted
+          // operation and its durable status are one atomic domain transaction.
+          const intent = journalRequired ? await readCloudOperationIntentForCommit(tx,
+            { actorUid: uid, kind: 'patient-profile', command: prepared }, { digest }) : null;
+          if (intent && intent.status !== (oldReceipt === null ? 'prepared' : 'committed')) throw new CloudPatientError('conflict');
+          // Profile commands intentionally carry no time. Bind the separately
+          // retained preparation envelope in the journaled receipt only.
+          const expectedReceipt = { ...baseReceipt, ...(intent
+            ? { intentCreatedAt: intent.createdAt, intentRequestHash: intent.requestHash } : {}) };
           if (oldReceipt !== null) {
-            const item = fields(oldReceipt, [...Object.keys(baseReceipt), 'fileNo']);
-            if (!integer(item.fileNo) || Object.keys(baseReceipt).some(key => item[key] !== baseReceipt[key as keyof typeof baseReceipt])) throw new CloudPatientError('conflict');
+            const item = fields(oldReceipt, [...Object.keys(expectedReceipt), 'fileNo']);
+            if (!integer(item.fileNo) || Object.keys(expectedReceipt).some(key => item[key] !== expectedReceipt[key as keyof typeof expectedReceipt])) throw new CloudPatientError('conflict');
             await reauthorize(uid);
             return { status: 'already-committed', recordId: prepared.recordId, fileNo: item.fileNo, revision: baseReceipt.resultRevision };
           }
@@ -271,7 +282,8 @@ export function createCloudPatientRepository(adapter: CloudPatientAdapter, optio
           }
           tx.set(recordPath(prepared.recordId), { schemaVersion: 1, clinicId: 'main', recordId: prepared.recordId,
             fileNo, revision: baseReceipt.resultRevision, lastOperationId: prepared.operationId, phoneKey, data: prepared.profile });
-          tx.set(operationPath(prepared.operationId), { ...baseReceipt, fileNo });
+          tx.set(operationPath(prepared.operationId), { ...expectedReceipt, fileNo });
+          if (intent) markCloudOperationIntentCommitted(tx, intent);
           return { status: 'committed', recordId: prepared.recordId, fileNo, revision: baseReceipt.resultRevision };
         });
         await reauthorize(uid);
@@ -281,5 +293,14 @@ export function createCloudPatientRepository(adapter: CloudPatientAdapter, optio
       } catch (error) { throw safeError(error); }
     },
   };
+}
+/** Legacy isolated stage contract only. Its old candidate Rules do not include
+ * recovery intents and are NOT deployable for the journaled SDK capability. */
+export function createCloudPatientRepository(adapter: CloudPatientAdapter, options: CloudPatientRepositoryOptions = {}) {
+  return createPatientRepository(adapter, options, false);
+}
+/** Durable preparation is mandatory, including on historical receipt replay. */
+export function createJournaledCloudPatientRepository(adapter: CloudPatientAdapter, options: CloudPatientRepositoryOptions = {}) {
+  return createPatientRepository(adapter, options, true);
 }
 export type CloudPatientRepository = ReturnType<typeof createCloudPatientRepository>;

@@ -1,5 +1,7 @@
 import type { ClinicContact } from '../types';
 import { clinicContactValidationError, normalizeContactPhone } from './clinicContacts';
+import { CloudOperationIntentError, readCloudOperationIntentForCommit,
+  markCloudOperationIntentCommitted } from './cloudOperationIntent';
 
 // Explicit server operations only. No SDK initialization, local fallback, account data,
 // network, or automatic migration. A future adapter must enforce owner access
@@ -70,6 +72,11 @@ function safeError(error: unknown): CloudContactError {
       return new CloudContactError(error.code);
     }
   } catch { /* Hostile error objects must not escape the fixed public errors. */ }
+  try {
+    if (error instanceof CloudOperationIntentError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) {
+      return new CloudContactError(error.code);
+    }
+  } catch { /* Only fixed domain errors leave the repository. */ }
   return new CloudContactError('unavailable');
 }
 function record(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
@@ -161,7 +168,7 @@ function pageRows(value: unknown, limit: number): unknown[] {
   return rows;
 }
 
-export function createCloudContactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions = {}) {
+function contactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions, journaled: boolean) {
   const digest = options.digest ?? sha256;
   const hash = async (text: string) => { const value = await digest(text); if (typeof value !== 'string' || value.length !== 64 || !HASH.test(value)) invalid(); return value; };
   const checkedRecord = async (value: unknown, id: string): Promise<CloudContactRecord> => {
@@ -218,12 +225,22 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
         const requestHash = await hash(JSON.stringify([actorUid, prepared.operationId, prepared.recordId,
           prepared.expectedRevision, prepared.action, prepared.contact]));
         const nextPhoneKey = prepared.contact ? await hash(`contact-phone-v1:${normalizeContactPhone(prepared.contact.mobile)}`) : null;
-        const receipt = { schemaVersion: 1, clinicId: 'main', operationId: prepared.operationId, actorUid,
+        const receiptBase = { schemaVersion: 1, clinicId: 'main', operationId: prepared.operationId, actorUid,
           recordId: prepared.recordId, action: prepared.action, expectedRevision: prepared.expectedRevision,
           resultRevision: prepared.expectedRevision + 1, requestHash };
         const result = await adapter.runTransaction<CloudContactCommit>(async transaction => {
           if (await adapter.authorizeOwner() !== actorUid) throw new CloudContactError('unavailable');
           const existingReceipt = await transaction.get(operationPath(prepared.operationId));
+          // The separate factory requires an owner-bound durable preparation;
+          // receipt and committed intent are coupled by this SAME transaction.
+          const intent = journaled ? await readCloudOperationIntentForCommit(transaction,
+            { actorUid, kind: 'contact', command: prepared }, { digest }) : null;
+          if (intent && intent.status !== (existingReceipt === null ? 'prepared' : 'committed')) {
+            throw new CloudContactError('conflict');
+          }
+          const receipt = { ...receiptBase, ...(intent ? {
+            intentCreatedAt: intent.createdAt, intentRequestHash: intent.requestHash,
+          } : {}) };
           if (existingReceipt !== null) {
             const checked = record(existingReceipt, Object.keys(receipt));
             if (Object.keys(receipt).some(key => checked[key] !== receipt[key as keyof typeof receipt])) throw new CloudContactError('conflict');
@@ -250,6 +267,7 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
           transaction.set(recordPath(prepared.recordId), { schemaVersion: 1, clinicId: 'main', recordId: prepared.recordId,
             revision: receipt.resultRevision, deleted: prepared.action === 'delete', lastOperationId: prepared.operationId, phoneKey: nextPhoneKey, data: prepared.contact });
           transaction.set(operationPath(prepared.operationId), receipt);
+          if (intent) markCloudOperationIntentCommitted(transaction, intent);
           return { status: 'committed', recordId: prepared.recordId, revision: receipt.resultRevision };
         });
         // An acknowledged historical receipt is not a current record snapshot.
@@ -262,6 +280,19 @@ export function createCloudContactRepository(adapter: CloudContactAdapter, optio
       }
     },
   };
+}
+
+/** Legacy standalone stage contract. Kept solely for its undeployed Rules and
+ * synthetic emulator fixtures; it must not be used by the operating SDK. */
+export function createCloudContactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions = {}) {
+  return contactRepository(adapter, options, false);
+}
+
+/** No opt-out: every domain write requires a prepared journal intent and
+ * atomically records its committed state. A committed replay only acknowledges
+ * the matching historical receipt; it never restores an old phone reservation. */
+export function createJournaledCloudContactRepository(adapter: CloudContactAdapter, options: CloudContactRepositoryOptions = {}) {
+  return contactRepository(adapter, options, true);
 }
 
 export type CloudContactRepository = ReturnType<typeof createCloudContactRepository>;

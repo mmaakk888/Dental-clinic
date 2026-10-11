@@ -8,6 +8,7 @@ const ID = '10000000-0000-4000-8000-000000000001';
 const OTHER = '10000000-0000-4000-8000-000000000002';
 const OP = '20000000-0000-4000-8000-000000000001';
 const UID = 'synthetic-owner';
+const CREATED = '2026-10-12T09:00:00.000Z';
 const PROJECT = 'dental-clinic-mmaakk888';
 const COUNTER = 'clinics/main/counters/patientFiles';
 const PHONE_KEY = createHash('sha256').update('patient-phone-v1:201000000001').digest('hex');
@@ -24,7 +25,7 @@ type Boundary = 'database' | 'token' | 'member-doc' | 'member' | 'member-exists'
 
 async function harness(options: { hostname?: string; projectId?: string; appName?: string; authDomain?: string;
   verified?: boolean; emulator?: boolean; memberDisabled?: boolean; missingMember?: boolean; staleAuthTime?: boolean;
-  swapAt?: Boundary; stopAt?: Boundary; denyWrite?: boolean; denyRead?: boolean; raw?: boolean } = {}) {
+  swapAt?: Boundary; stopAt?: Boundary; denyWrite?: boolean; denyRead?: boolean; raw?: boolean; loseAck?: boolean } = {}) {
   const compiled = await (options.raw ? rawBundle : bundle), module = { exports: {} as any }, calls: string[] = [];
   const user = { uid: UID, email: 'owner@example.invalid', emailVerified: options.verified ?? true };
   const location = { hostname: options.hostname ?? '127.0.0.1' };
@@ -52,7 +53,8 @@ async function harness(options: { hostname?: string; projectId?: string; appName
     require: (name: string) => {
       calls.push(`import:${name}`);
       if (name === './cloudPatientRepository' && options.raw) return {
-        createCloudPatientRepository: (adapter: unknown) => adapter,
+        createJournaledCloudPatientRepository: (adapter: unknown) => adapter,
+        prepareCloudPatientCommand: (input: unknown) => input,
         CloudPatientError: class extends Error {
           constructor(public code: string) { super(`SAFE_PATIENT_${code}`); }
         },
@@ -104,16 +106,23 @@ async function harness(options: { hostname?: string; projectId?: string; appName
           calls.push(`query:${JSON.stringify(constraints)}`); step('query'); return { path, constraints };
         },
         getDocs: async (query: any) => {
-          assert.equal(query.path, 'clinics/main/patientProfiles');
           const predicates = query.constraints.filter((value: any) => value.kind === 'where');
-          assert.equal(predicates.length <= 1, true);
-          if (predicates.length) assert.deepEqual(predicates[0], { kind: 'where', field: 'phoneKey', operator: '==', value: PHONE_KEY });
+          if (query.path === 'clinics/main/patientProfiles') {
+            assert.equal(predicates.length <= 1, true);
+            if (predicates.length) assert.deepEqual(predicates[0], { kind: 'where', field: 'phoneKey', operator: '==', value: PHONE_KEY });
+          } else {
+            assert.equal(query.path, 'clinics/main/operationIntents');
+            assert.equal(predicates.length === 2 || predicates.length === 3, true);
+            assert.deepEqual(predicates[0], { kind: 'where', field: 'actorUid', operator: '==', value: UID });
+            assert.deepEqual(predicates[1], { kind: 'where', field: 'kind', operator: '==', value: 'patient-profile' });
+            if (predicates[2]) assert.deepEqual(predicates[2], { kind: 'where', field: 'status', operator: '==', value: 'prepared' });
+          }
           assert.deepEqual(query.constraints.find((value: any) => value.kind === 'order'), { kind: 'order', field: '__name__' });
           assert.equal(query.constraints.at(-1).kind, 'limit');
           const after = query.constraints.find((value: any) => value.kind === 'after')?.id;
           step('page'); if (options.denyRead) throw new Error('PRIVATE_SDK_PAGE_DENIED');
           return { docs: [...rows.entries()].filter(([path, data]) => path.startsWith(`${query.path}/`)
-            && (!after || path.split('/').at(-1)! > after) && (!predicates.length || data.phoneKey === predicates[0].value))
+            && (!after || path.split('/').at(-1)! > after) && predicates.every((item: any) => data[item.field] === item.value))
             .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).slice(0, query.constraints.at(-1).count)
             .map(([path, data]) => ({ id: path.split('/').at(-1), data: () => { step('page-data'); return data; } })) };
         },
@@ -130,7 +139,9 @@ async function harness(options: { hostname?: string; projectId?: string; appName
             },
           });
           rows.clear(); for (const [key, value] of staged) rows.set(key, value);
-          step('transaction-ack'); return result;
+          step('transaction-ack');
+          if (options.loseAck) { options.loseAck = false; throw new Error('PRIVATE_ACK_LOST'); }
+          return result;
         },
       };
       throw new Error(`Unexpected SDK import ${name}`);
@@ -143,6 +154,17 @@ async function harness(options: { hostname?: string; projectId?: string; appName
   } });
   rows.set(COUNTER, copy({ schemaVersion: 1, clinicId: 'main', lastFileNo: 0, lastOperationId: null }));
   return { service: module.exports, auth, calls, rows, payload, compiled, active, copy, location };
+}
+
+function seedIntent(h: Awaited<ReturnType<typeof harness>>, command = h.payload, createdAt = CREATED,
+  kind = 'patient-profile', actorUid = UID) {
+  const canonical = (value: any): any => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const normalized = canonical(command);
+  const intent = { schemaVersion: 1, clinicId: 'main', recordId: command.operationId, operationId: command.operationId,
+    actorUid, kind, requestHash: createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', actorUid, kind, normalized])).digest('hex'),
+    status: 'prepared', revision: 1, createdAt, command: normalized };
+  h.rows.set(`clinics/main/operationIntents/${command.operationId}`, h.copy(intent)); return intent;
 }
 
 function syntheticRecord(id = ID, fileNo = 1, mobile = '01000000001') {
@@ -179,8 +201,9 @@ test('patient adapter is explicit, lazy and isolated with no data read when fact
 
 test('patient create uses one named default Lite transaction after canonical owner check', async () => {
   const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  seedIntent(h);
   const result = await repo.commit(h.payload);
-  assert.equal(result.status, 'committed'); assert.equal(result.fileNo, 1); assert.equal(h.rows.size, 4);
+  assert.equal(result.status, 'committed'); assert.equal(result.fileNo, 1); assert.equal(h.rows.size, 5);
   assert.ok(h.calls.indexOf('member') < h.calls.indexOf('transaction'));
   for (const path of [COUNTER, `clinics/main/patientFiles/1`, `clinics/main/patientProfiles/${ID}`, `clinics/main/patientOperations/${OP}`]) {
     assert.ok(h.calls.includes(`set:${path}`));
@@ -190,6 +213,7 @@ test('patient create uses one named default Lite transaction after canonical own
 
 test('same patient operation retry returns historical receipt without allocating or writing twice', async () => {
   const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  seedIntent(h);
   await repo.commit(h.payload); const writes = h.calls.filter(call => call.startsWith('set:')).length;
   assert.equal((await repo.commit(h.payload)).status, 'already-committed');
   assert.equal(h.calls.filter(call => call.startsWith('set:')).length, writes);
@@ -250,7 +274,8 @@ test('SDK read errors never become successful empty patient/profile pages and ex
 
 test('SDK write denial leaves patient allocation unconfirmed without fallback or partial synthetic transaction writes', async () => {
   const h = await harness({ denyWrite: true }), repo = await h.service.createFirebaseCloudPatients(h.auth);
-  await assert.rejects(repo.commit(h.payload), failed); assert.equal(h.rows.size, 1); assert.equal(h.rows.get(COUNTER).lastFileNo, 0);
+  seedIntent(h);
+  await assert.rejects(repo.commit(h.payload), failed); assert.equal(h.rows.size, 2); assert.equal(h.rows.get(COUNTER).lastFileNo, 0);
 });
 
 test('revocation while a newly scheduled SDK request rejects consumes the request rejection without exposing it', async () => {
@@ -301,8 +326,9 @@ test('patient page lifecycle rechecks every query construction and snapshot call
 test('patient transaction lifecycle rejects reads/writes and late acknowledgement without claiming server rollback', async () => {
   for (const stopAt of ['transaction-read', 'transaction-exists', 'transaction-data', 'transaction-write', 'transaction-ack'] as Boundary[]) {
     const h = await harness({ stopAt }), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value });
+    seedIntent(h);
     await assert.rejects(repo.commit(h.payload), failed);
-    assert.equal(h.rows.size, stopAt === 'transaction-ack' ? 4 : 1);
+    assert.equal(h.rows.size, stopAt === 'transaction-ack' ? 5 : 2);
     if (stopAt === 'transaction-read' || stopAt === 'transaction-exists' || stopAt === 'transaction-data') {
       assert.equal(h.calls.some(call => call.startsWith('set:')), false);
     }
@@ -340,4 +366,153 @@ test('adapter raw query seam independently rejects malformed cursor/hash/limit b
   }
   for (const key of ['', 'hash', 'A'.repeat(64), `${PHONE_KEY}\n`]) await assert.rejects(adapter.findRecordsByPhone(key, null, 25), /SAFE_PATIENT_invalid/);
   assert.deepEqual(h.calls, before);
+});
+
+test('journaled patient SDK refuses unprepared domain writes and exposes a frozen bounded journal capability', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  assert.equal(Object.isFrozen(repo), true); assert.equal(Object.isFrozen(repo.journal), true);
+  assert.deepEqual(Object.keys(repo.journal).sort(), ['cancel', 'get', 'listHistoryPage', 'listPreparedPage', 'prepare']);
+  await assert.rejects(repo.commit(h.payload));
+  assert.equal(h.calls.some(call => call.startsWith('set:')), false); assert.equal(h.rows.size, 1);
+  assert.equal('auth' in repo || 'app' in repo || 'repository' in repo, false);
+});
+
+test('patient journal prepare keeps envelope time separate and validates the complete command before SDK access', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth), baseline = [...h.calls];
+  for (const input of [{ ...h.payload, createdAt: CREATED }, { ...h.payload, profile: { ...h.payload.profile, age: 999 } },
+    { ...h.payload, fileNo: 500 }, { ...h.payload, profile: { ...h.payload.profile, sessions: [] } }]) {
+    await assert.rejects(repo.journal.prepare('patient-profile', h.copy(input), CREATED));
+  }
+  for (const kind of ['clinical', 'contact', 'catalog', 'invalid']) await assert.rejects(repo.journal.prepare(kind, h.payload, CREATED));
+  for (const time of ['', '2026-02-30T09:00:00.000Z', `${CREATED}\n`]) await assert.rejects(repo.journal.prepare('patient-profile', h.payload, time));
+  assert.deepEqual(h.calls, baseline);
+  const intent = await repo.journal.prepare('patient-profile', h.payload, CREATED);
+  assert.equal(intent.createdAt, CREATED); assert.equal('createdAt' in intent.command, false);
+  assert.equal(intent.status, 'prepared'); assert.equal(h.rows.size, 2); assert.equal(h.rows.get(COUNTER).lastFileNo, 0);
+  await repo.commit(h.payload);
+  const receipt = h.rows.get(`clinics/main/patientOperations/${OP}`);
+  assert.equal(receipt.intentCreatedAt, CREATED); assert.equal(receipt.intentRequestHash, intent.requestHash);
+  assert.equal(h.rows.get(`clinics/main/operationIntents/${OP}`).status, 'committed');
+});
+
+test('patient journal snapshots command and query arguments before authorization yields', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  const original = h.copy(h.payload), pending = repo.journal.prepare('patient-profile', h.payload, CREATED);
+  h.payload.profile.name = 'mutated after click'; h.payload.recordId = OTHER;
+  const saved = await pending;
+  assert.equal(saved.command.recordId, original.recordId); assert.equal(saved.command.profile.name, original.profile.name);
+  const query = h.copy({ limit: 1 }), page = repo.journal.listHistoryPage('patient-profile', query); query.limit = 999;
+  assert.equal((await page).records.length, 1);
+  assert.ok(h.calls.some(call => call.startsWith('query:') && call.includes('"count":1')));
+});
+
+test('patient journal prepare rejects malicious getters without invoking them or scheduling a transaction', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth), before = [...h.calls];
+  const malicious = h.copy(h.payload); let invoked = 0;
+  Object.defineProperty(malicious.profile, 'name', { enumerable: true, get() { invoked++; return 'unsafe'; } });
+  await assert.rejects(repo.journal.prepare('patient-profile', malicious, CREATED));
+  assert.equal(invoked, 0); assert.deepEqual(h.calls, before);
+});
+
+test('patient journal cancellation validates domain command actor kind path and envelope before any hidden write', async () => {
+  const corruptions = [
+    (h: Awaited<ReturnType<typeof harness>>) => seedIntent(h, h.copy({ ...h.payload, createdAt: CREATED })),
+    (h: Awaited<ReturnType<typeof harness>>) => seedIntent(h, h.copy({ ...h.payload, profile: { ...h.payload.profile, age: 999 } })),
+    (h: Awaited<ReturnType<typeof harness>>) => seedIntent(h, h.payload, CREATED, 'contact'),
+    (h: Awaited<ReturnType<typeof harness>>) => seedIntent(h, h.payload, CREATED, 'patient-profile', 'different-owner'),
+    (h: Awaited<ReturnType<typeof harness>>) => seedIntent(h, h.payload, 'bad time'),
+    (h: Awaited<ReturnType<typeof harness>>) => { const saved = seedIntent(h); saved.operationId = OTHER; saved.recordId = OTHER;
+      saved.command.operationId = OTHER; h.rows.set(`clinics/main/operationIntents/${OP}`, h.copy(saved)); },
+  ];
+  for (const corrupt of corruptions) {
+    const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth); corrupt(h);
+    const before = JSON.stringify([...h.rows]);
+    await assert.rejects(repo.journal.cancel(OP));
+    assert.equal(JSON.stringify([...h.rows]), before); assert.equal(h.calls.some(call => call.startsWith('set:')), false);
+  }
+});
+
+test('patient journal all-status history is owner-kind bounded UUID paged without losing committed acknowledgements', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  const second = h.copy({ ...h.payload, operationId: OTHER });
+  await repo.journal.prepare('patient-profile', h.payload, CREATED); await repo.commit(h.payload);
+  await repo.journal.prepare('patient-profile', second, CREATED);
+  const history = await repo.journal.listHistoryPage('patient-profile', h.copy({ limit: 1 }));
+  assert.equal(history.records[0].operationId, OTHER); assert.equal(history.nextAfterId, OTHER);
+  const tail = await repo.journal.listHistoryPage('patient-profile', h.copy({ afterId: OTHER, limit: 1 }));
+  assert.equal(tail.records[0].status, 'committed'); assert.equal(tail.records[0].operationId, OP);
+  const prepared = await repo.journal.listPreparedPage('patient-profile'); assert.equal(prepared.records.length, 1);
+  assert.equal(prepared.records[0].operationId, OTHER);
+  const cancelled = await repo.journal.cancel(OTHER); assert.equal(cancelled.status, 'cancelled');
+  assert.equal((await repo.journal.listHistoryPage('patient-profile')).records.length, 2);
+  assert.equal((await repo.journal.listPreparedPage('patient-profile')).records.length, 0);
+  await assert.rejects(repo.journal.cancel(OP));
+});
+
+test('patient journal page bounds and unrelated kinds reject before another SDK query', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth), before = [...h.calls];
+  for (const kind of ['contact', 'clinical', 'catalog']) {
+    await assert.rejects(repo.journal.listPreparedPage(kind)); await assert.rejects(repo.journal.listHistoryPage(kind));
+  }
+  for (const input of [{ limit: 0 }, { limit: 51 }, { limit: 1.5 }, { afterId: `${ID}\n` }, { unexpected: true }]) {
+    await assert.rejects(repo.journal.listHistoryPage('patient-profile', h.copy(input)));
+  }
+  assert.deepEqual(h.calls, before);
+});
+
+test('patient journal lost prepare and commit ACKs recover after capability recreation without another file number', async () => {
+  const flags = { loseAck: true }, h = await harness(flags), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  await assert.rejects(repo.journal.prepare('patient-profile', h.payload, CREATED));
+  const fresh = await h.service.createFirebaseCloudPatients(h.auth);
+  assert.equal((await fresh.journal.get(OP)).status, 'prepared');
+  await fresh.journal.prepare('patient-profile', h.payload, CREATED);
+  flags.loseAck = true; await assert.rejects(fresh.commit(h.payload), failed);
+  const next = await h.service.createFirebaseCloudPatients(h.auth), writes = h.calls.filter(call => call.startsWith('set:')).length;
+  assert.equal((await next.journal.listHistoryPage('patient-profile')).records[0].status, 'committed');
+  assert.equal((await next.commit(h.payload)).status, 'already-committed');
+  assert.equal(h.calls.filter(call => call.startsWith('set:')).length, writes); assert.equal(h.rows.get(COUNTER).lastFileNo, 1);
+});
+
+test('patient SDK historical replay preserves a newer profile and counter without reading or rewriting either', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth);
+  await repo.journal.prepare('patient-profile', h.payload, CREATED); await repo.commit(h.payload);
+  const update = h.copy({ ...h.payload, operationId: OTHER, expectedRevision: 1, action: 'update',
+    profile: { ...h.payload.profile, name: 'newer synthetic patient' } });
+  await repo.journal.prepare('patient-profile', update, CREATED); await repo.commit(update);
+  h.rows.get(COUNTER).lastFileNo = 450;
+  const count = h.calls.length, before = JSON.stringify([...h.rows]);
+  assert.equal((await repo.commit(h.payload)).revision, 1); assert.equal(JSON.stringify([...h.rows]), before);
+  assert.equal(h.calls.slice(count).some(call => call === `get:${COUNTER}` || call === `get:clinics/main/patientProfiles/${ID}` || call.startsWith('set:')), false);
+});
+
+test('retained patient capability permanently revokes across same-UID identity app and runtime restoration', async () => {
+  for (const loss of ['user', 'app', 'host', 'active']) {
+    const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value });
+    const originalUser = h.auth.currentUser, originalApp = h.auth.app;
+    if (loss === 'user') h.auth.currentUser = { ...originalUser! };
+    if (loss === 'app') h.auth.app = { ...originalApp };
+    if (loss === 'host') h.location.hostname = 'public.invalid';
+    if (loss === 'active') h.active.value = false;
+    await assert.rejects(repo.journal.get(OP));
+    h.auth.currentUser = originalUser; h.auth.app = originalApp; h.location.hostname = '127.0.0.1'; h.active.value = true;
+    const before = [...h.calls];
+    for (const action of [() => repo.get(ID), () => repo.commit(h.payload), () => repo.journal.get(OP),
+      () => repo.journal.prepare('patient-profile', h.payload, CREATED), () => repo.journal.cancel(OP),
+      () => repo.journal.listHistoryPage('patient-profile')]) await assert.rejects(action());
+    assert.deepEqual(h.calls, before);
+  }
+});
+
+test('patient journal lifecycle checks every query and cancellation snapshot boundary before writes', async () => {
+  for (const stopAt of ['where', 'document-id', 'order', 'after', 'limit', 'collection', 'query', 'page', 'page-data'] as Boundary[]) {
+    const h = await harness({ stopAt }), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value });
+    seedIntent(h);
+    await assert.rejects(repo.journal.listHistoryPage('patient-profile', h.copy({ afterId: OTHER })));
+    const stop = h.calls.indexOf(stopAt); assert.ok(stop !== -1); assert.equal(h.calls.length, stop + 1);
+  }
+  for (const stopAt of ['transaction-read', 'transaction-exists', 'transaction-data'] as Boundary[]) {
+    const h = await harness({ stopAt }), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value }); seedIntent(h);
+    await assert.rejects(repo.journal.cancel(OP)); assert.equal(h.calls.some(call => call.startsWith('set:')), false);
+    assert.equal(h.rows.get(`clinics/main/operationIntents/${OP}`).status, 'prepared');
+  }
 });

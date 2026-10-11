@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { CloudPatientError, createCloudPatientRepository, parseCloudPatientRecord, prepareCloudPatientCommand,
+import { CloudPatientError, createCloudPatientRepository, createJournaledCloudPatientRepository, parseCloudPatientRecord, prepareCloudPatientCommand,
   prepareCloudPatientPageInput, prepareCloudPatientPhoneInput, type CloudPatientAdapter, type CloudPatientCommand,
   type CloudPatientTransaction } from './cloudPatientRepository';
+import { createCloudOperationIntentRepository } from './cloudOperationIntent';
 
 const ID = '10000000-0000-4000-8000-000000000001';
 const OTHER = '10000000-0000-4000-8000-000000000002';
@@ -21,6 +22,8 @@ const code = (expected: CloudPatientError['code']) => (value: unknown) => value 
 const command = (changes: Partial<CloudPatientCommand> = {}): CloudPatientCommand => ({ operationId: OP, recordId: ID,
   expectedRevision: 0, action: 'create', profile: { name: 'مريض اختبار مصطنع', mobile: '01000000001', age: 30,
     gender: '', firstVisit: '2026-10-10', notes: '', allergy: '' }, ...changes });
+const CREATED = '2026-10-12T09:00:00.000Z';
+const intentPath = (id = OP) => `${root}operationIntents/${id}`;
 
 /** Atomic in-memory synthetic adapter. Serialization is a test aid, NOT a
  * real two-device or Firestore Rules verification. */
@@ -61,6 +64,125 @@ function harness(options: { lostReply?: boolean; retry?: boolean; failWrite?: nu
   };
   return { documents, calls, adapter, repo: createCloudPatientRepository(adapter, { digest }), actor: (value: string) => { uid = value; } };
 }
+
+function journalHarness(options: Parameters<typeof harness>[0] = {}) {
+  const h = harness(options);
+  return { ...h, repo: createJournaledCloudPatientRepository(h.adapter, { digest }),
+    journal: createCloudOperationIntentRepository(h.adapter, { digest }) };
+}
+
+test('journaled patient factory is inert and has no option to fall back to unprepared commit', async () => {
+  const h = journalHarness(); assert.deepEqual(h.calls, []);
+  await assert.rejects(h.repo.commit(command()), code('invalid'));
+  assert.equal(h.documents.size, 1); assert.equal(h.calls.some(value => value.startsWith('set:')), false);
+  const attemptedBypass = createJournaledCloudPatientRepository(h.adapter, { digest, journalRequired: false } as any);
+  await assert.rejects(attemptedBypass.commit(command()), code('invalid'));
+});
+
+test('journaled patient creation writes profile number receipt and committed intent atomically', async () => {
+  const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED);
+  assert.equal(h.documents.get(counterPath).lastFileNo, 0); assert.equal(h.documents.size, 2);
+  assert.equal((await h.repo.commit(command())).fileNo, 1);
+  assert.equal(h.documents.size, 5); assert.equal(h.documents.get(intentPath()).status, 'committed');
+  assert.equal(h.documents.get(intentPath()).revision, 2);
+  const receipt = h.documents.get(operationPath());
+  assert.equal(receipt.intentCreatedAt, CREATED);
+  assert.equal(receipt.intentRequestHash, h.documents.get(intentPath()).requestHash);
+  assert.equal(receipt.requestHash, await digest(JSON.stringify([OWNER, OP, ID, 0, 'create', command().profile])));
+});
+
+test('journaled patient commit rejects wrong actor kind command fingerprint and cancelled intent before writes', async () => {
+  const cases = [
+    (intent: any) => { intent.actorUid = 'other-owner'; },
+    (intent: any) => { intent.kind = 'contact'; },
+    (intent: any) => { intent.requestHash = 'f'.repeat(64); },
+    (intent: any) => { intent.command.profile.notes = 'altered'; },
+    (intent: any) => { intent.status = 'cancelled'; intent.revision = 2; },
+  ];
+  for (const alter of cases) {
+    const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED);
+    alter(h.documents.get(intentPath())); const before = structuredClone(h.documents), count = h.calls.length;
+    await assert.rejects(h.repo.commit(command()), error => error instanceof CloudPatientError);
+    assert.deepEqual(h.documents, before); assert.equal(h.calls.slice(count).some(value => value.startsWith('set:')), false);
+  }
+});
+
+test('journaled patient receipt and intent statuses must agree in both directions', async () => {
+  for (const mismatch of ['prepared-with-receipt', 'committed-without-receipt']) {
+    const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED); await h.repo.commit(command());
+    if (mismatch === 'prepared-with-receipt') Object.assign(h.documents.get(intentPath()), { status: 'prepared', revision: 1 });
+    else h.documents.delete(operationPath());
+    const before = structuredClone(h.documents);
+    await assert.rejects(h.repo.commit(command()), code('conflict')); assert.deepEqual(h.documents, before);
+  }
+});
+
+test('journaled patient old receipt cannot replay under a replaced preparation time or missing bound envelope', async () => {
+  for (const alter of [(h: ReturnType<typeof journalHarness>) => { h.documents.get(intentPath()).createdAt = '2026-10-12T10:00:00.000Z'; },
+    (h: ReturnType<typeof journalHarness>) => { delete h.documents.get(operationPath()).intentCreatedAt; },
+    (h: ReturnType<typeof journalHarness>) => { h.documents.get(operationPath()).intentRequestHash = '0'.repeat(64); }]) {
+    const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED); await h.repo.commit(command());
+    alter(h); const before = structuredClone(h.documents);
+    await assert.rejects(h.repo.commit(command()), error => error instanceof CloudPatientError);
+    assert.deepEqual(h.documents, before);
+  }
+});
+
+test('journaled patient lost prepare and commit replies recover original identifiers without another allocation', async () => {
+  const flags = { lostReply: true }, h = journalHarness(flags);
+  await assert.rejects(h.journal.prepare('patient-profile', command(), CREATED));
+  assert.equal((await h.journal.get(OP))?.status, 'prepared');
+  assert.equal((await h.journal.prepare('patient-profile', command(), CREATED)).status, 'prepared');
+  flags.lostReply = true; await assert.rejects(h.repo.commit(command()), code('unavailable'));
+  const after = structuredClone(h.documents), fresh = createJournaledCloudPatientRepository(h.adapter, { digest });
+  assert.equal((await fresh.commit(command())).status, 'already-committed'); assert.deepEqual(h.documents, after);
+  assert.equal(h.documents.get(counterPath).lastFileNo, 1);
+});
+
+test('journaled patient historical replay never reads a newer profile or counter or replaces current details', async () => {
+  const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED); await h.repo.commit(command());
+  const update = command({ operationId: OP2, action: 'update', expectedRevision: 1, profile: { ...command().profile, name: 'newer synthetic' } });
+  await h.journal.prepare('patient-profile', update, CREATED); await h.repo.commit(update);
+  const other = command({ recordId: OTHER, operationId: OP3 });
+  await h.journal.prepare('patient-profile', other, CREATED); await h.repo.commit(other);
+  const before = structuredClone(h.documents), count = h.calls.length;
+  assert.deepEqual(await h.repo.commit(command()), { status: 'already-committed', recordId: ID, fileNo: 1, revision: 1 });
+  assert.deepEqual(h.documents, before);
+  assert.equal(h.calls.slice(count).some(value => value === `get:${counterPath}` || value === `get:${recordPath()}` || value.startsWith('set:')), false);
+  assert.equal((await h.repo.get(ID))?.data.name, 'newer synthetic');
+});
+
+test('journaled patient cancellation and commit race have one winner and no partial allocation', async () => {
+  for (const cancelFirst of [true, false]) {
+    const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED);
+    const results = await Promise.allSettled(cancelFirst
+      ? [h.journal.cancel(OP), h.repo.commit(command())] : [h.repo.commit(command()), h.journal.cancel(OP)]);
+    assert.equal(results.filter(value => value.status === 'fulfilled').length, 1);
+    const committed = h.documents.get(intentPath()).status === 'committed';
+    assert.equal(h.documents.get(counterPath).lastFileNo, committed ? 1 : 0);
+    assert.equal(h.documents.has(recordPath()), committed);
+  }
+  const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED); await h.repo.commit(command());
+  await assert.rejects(h.journal.cancel(OP)); assert.equal(h.documents.get(intentPath()).status, 'committed');
+});
+
+test('journaled patient domain failure and SDK callback replay preserve prepared intent atomically', async () => {
+  const flags = { failWrite: 4, retry: false }, h = journalHarness(flags);
+  await h.journal.prepare('patient-profile', command(), CREATED); const before = structuredClone(h.documents);
+  await assert.rejects(h.repo.commit(command()), code('unavailable')); assert.deepEqual(h.documents, before);
+  const retry = journalHarness({ retry: true }); await retry.journal.prepare('patient-profile', command(), CREATED);
+  assert.equal((await retry.repo.commit(command())).fileNo, 1); assert.equal(retry.documents.size, 5);
+});
+
+test('journaled patient missing or exhausted trusted counter never seeds or consumes a prepared intent', async () => {
+  for (const missing of [true, false]) {
+    const h = journalHarness(); await h.journal.prepare('patient-profile', command(), CREATED);
+    if (missing) h.documents.delete(counterPath);
+    else Object.assign(h.documents.get(counterPath), { lastFileNo: 2_000_000_000, lastOperationId: OP3 });
+    const before = structuredClone(h.documents); await assert.rejects(h.repo.commit(command()), code('unavailable'));
+    assert.deepEqual(h.documents, before); assert.equal(h.documents.get(intentPath()).status, 'prepared');
+  }
+});
 
 test('patient repository construction is inert, profile-only and has no implicit counter bootstrap', async () => {
   const h = harness(); assert.deepEqual(h.calls, []);

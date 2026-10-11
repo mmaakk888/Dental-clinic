@@ -12,6 +12,10 @@ export type { CloudClinicalCapability } from './cloudClinicalWorkspaceController
 export interface CloudServiceCatalogCapability {
   repository: CloudServiceCatalogRepository; journal: CloudOperationIntentRepository;
 }
+/** Optional only for legacy isolated synthetic adapters. Production SDKs
+ * require journaled commits; missing journals cannot perform recovery actions. */
+export type CloudOperatingContactCapability = CloudContactRepository & { journal?: CloudOperationIntentRepository };
+export type CloudOperatingPatientCapability = CloudPatientRepository & { journal?: CloudOperationIntentRepository };
 
 type OperatingErrorCode = 'invalid-input' | 'busy' | 'unavailable' | 'changed' | 'closed';
 
@@ -182,9 +186,9 @@ export function createCloudOperatingAuthSession(adapter: CloudOperatingAuthAdapt
 export type CloudOperatingAuthSession = ReturnType<typeof createCloudOperatingAuthSession>;
 export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
   /** Explicit, owner-authorized capability. No SDK app/Auth object escapes. */
-  getContacts(): Promise<CloudContactRepository>;
+  getContacts(): Promise<CloudOperatingContactCapability>;
   /** Prepared profile-only capability; does not activate patient UI or Rules. */
-  getPatients(): Promise<CloudPatientRepository>;
+  getPatients(): Promise<CloudOperatingPatientCapability>;
   /** Prepared clinical-only capability; no UI, Rules or Hosting activation. */
   getClinical(): Promise<CloudClinicalCapability>;
   /** Explicit catalog/settings capability. No default prices or UI activation. */
@@ -271,8 +275,8 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
     // string or the temporary UI checking phase. Retained methods must never
     // become valid again after logout/relogin, even for the same owner.
     let capabilityGeneration = 0;
-    let contactsCreation: Promise<CloudContactRepository> | null = null;
-    let patientsCreation: Promise<CloudPatientRepository> | null = null;
+    let contactsCreation: Promise<CloudOperatingContactCapability> | null = null;
+    let patientsCreation: Promise<CloudOperatingPatientCapability> | null = null;
     let clinicalCreation: Promise<CloudClinicalCapability> | null = null;
     let catalogCreation: Promise<CloudServiceCatalogCapability> | null = null;
     const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; catalogCreation = null; };
@@ -285,7 +289,7 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
       invalidate: () => { revokeCapabilities(); session.invalidate(); },
       signOut: () => { revokeCapabilities(); return session.signOut(); },
       dispose: () => { revokeCapabilities(); return session.dispose(); },
-      getContacts: async (): Promise<CloudContactRepository> => {
+      getContacts: async (): Promise<CloudOperatingContactCapability> => {
         try {
           const checked = session.getState();
           const user = auth.currentUser;
@@ -318,8 +322,8 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
             // cancelled load cannot initialize a data adapter after closure.
             const creation = Promise.resolve().then(async () => {
               requireActive();
-              const [contacts, contract] = await Promise.all([
-                import('./firebaseCloudContacts'), import('./cloudContactRepository'),
+              const [contacts, contract, recovery] = await Promise.all([
+                import('./firebaseCloudContacts'), import('./cloudContactRepository'), import('./cloudProfileContactJournal'),
               ]);
               requireActive();
               const repository = await contacts.createFirebaseCloudContacts(auth, {
@@ -348,6 +352,10 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
                 }
               };
               return Object.freeze({
+                journal: recovery.createCloudProfileContactJournal({ kind: 'contact', actorUid: uid,
+                  journal: (repository as CloudOperatingContactCapability).journal,
+                  run: async work => { await authorize(); requireActive(); const result = await work();
+                    requireActive(); await authorize(); requireActive(); return result; } }),
                 commit: async input => {
                   let prepared: ReturnType<typeof contract.prepareCloudContactCommand>;
                   try { prepared = contract.prepareCloudContactCommand(input); }
@@ -361,7 +369,7 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
                   catch { throw new contract.CloudContactError('invalid'); }
                   return run(() => repository.listPage(prepared));
                 },
-              } satisfies CloudContactRepository);
+              } satisfies CloudOperatingContactCapability);
             });
             contactsCreation = creation;
             void creation.catch(() => { if (contactsCreation === creation) contactsCreation = null; });
@@ -374,7 +382,7 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
           throw new CloudOperatingAuthError('unavailable');
         }
       },
-      getPatients: async (): Promise<CloudPatientRepository> => {
+      getPatients: async (): Promise<CloudOperatingPatientCapability> => {
         try {
           const checked = session.getState(), user = auth.currentUser;
           if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
@@ -401,8 +409,8 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
           if (!patientsCreation) {
             const creation = Promise.resolve().then(async () => {
               requireActive();
-              const [patients, contract] = await Promise.all([
-                import('./firebaseCloudPatients'), import('./cloudPatientRepository'),
+              const [patients, contract, recovery] = await Promise.all([
+                import('./firebaseCloudPatients'), import('./cloudPatientRepository'), import('./cloudProfileContactJournal'),
               ]);
               requireActive();
               const repository = await patients.createFirebaseCloudPatients(auth, {
@@ -425,6 +433,10 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
                 }
               };
               return Object.freeze({
+                journal: recovery.createCloudProfileContactJournal({ kind: 'patient-profile', actorUid: uid,
+                  journal: (repository as CloudOperatingPatientCapability).journal,
+                  run: async work => { await authorize(); requireActive(); const result = await work();
+                    requireActive(); await authorize(); requireActive(); return result; } }),
                 commit: async input => {
                   const prepared = contract.prepareCloudPatientCommand(input);
                   return run(() => repository.commit(prepared));
@@ -439,7 +451,7 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
                   const prepared = contract.prepareCloudPatientPhoneInput(input);
                   return run(() => repository.findByPhone(prepared));
                 },
-              } satisfies CloudPatientRepository);
+              } satisfies CloudOperatingPatientCapability);
             });
             patientsCreation = creation;
             void creation.catch(() => { if (patientsCreation === creation) patientsCreation = null; });

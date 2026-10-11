@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import type { CloudClinicalCapability, CloudOperatingFirebaseSession, CloudServiceCatalogCapability } from './cloudOperatingAuth';
 import type { CloudClinicalCommand } from './cloudClinicalRepository';
+import { prepareCloudIntentCommand, type CloudOperationKind } from './cloudOperationIntent';
 
 const PROJECT = 'dental-clinic-mmaakk888';
 const INSTANCE = '00000000-0000-4000-8000-000000000001';
@@ -24,6 +25,17 @@ function rawClinicalCommand(): CloudClinicalCommand {
 function rawCatalogCommand() {
   return { operationId: INSTANCE, expectedRevision: 0, createdAt: CREATED_AT,
     data: { examinationCents: 10000, services: [{ serviceId: RECORD, name: 'خدمة مصطنعة', kind: 'clinical', priceCents: 20000, active: true }] } };
+}
+function rawProfileContactCommand(kind: 'contact' | 'patient-profile') {
+  return kind === 'contact' ? { operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create',
+    contact: { id: RECORD, name: 'Synthetic contact', mobile: '01000000001', createdAt: CREATED_AT } }
+    : { operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create',
+      profile: { name: 'Synthetic profile', mobile: '', age: 0, gender: '', firstVisit: '2026-10-10', notes: '', allergy: '' } };
+}
+type ProfileKind = 'contact' | 'patient-profile';
+async function getProfileJournal(session: CloudOperatingFirebaseSession, kind: ProfileKind) {
+  const capability = kind === 'contact' ? await session.getContacts() : await session.getPatients();
+  assert.ok(capability.journal); return capability.journal;
 }
 
 function deferred() {
@@ -57,6 +69,9 @@ async function fixture(options: {
   patientsFactoryGate?: Promise<void>;
   patientsMethodGate?: Promise<void>;
   patientsFailure?: unknown;
+  profileJournals?: boolean;
+  profileJournalKind?: CloudOperationKind;
+  profileJournalActor?: string;
   clinicalImportHook?: () => void;
   clinicalFactoryGate?: Promise<void>;
   clinicalMethodGate?: Promise<void>;
@@ -108,6 +123,22 @@ async function fixture(options: {
     }
     if (options.stepFailure === name) throw new Error(`synthetic-provider-token-${PASSWORD}`);
   }
+  function profileJournal(kind: 'contact' | 'patient-profile', work: <T>(name: string, input: unknown, result: T) => Promise<T>) {
+    if (!options.profileJournals) return undefined;
+    const intent = (command: unknown, createdAt = CREATED_AT, status = 'prepared') => module.exports.__input({
+      schemaVersion: 1, clinicId: 'main', recordId: INSTANCE, operationId: INSTANCE,
+      actorUid: options.profileJournalActor ?? UID, kind: options.profileJournalKind ?? kind,
+      requestHash: '0'.repeat(64), status, revision: status === 'prepared' ? 1 : 2, createdAt,
+      command: prepareCloudIntentCommand(JSON.parse(JSON.stringify(command))),
+    });
+    return {
+      prepare: (requested: CloudOperationKind, command: unknown, createdAt: string) => work('prepare', { kind: requested, command, createdAt }, intent(command, createdAt)),
+      get: (id: string) => work('intentGet', id, intent(rawProfileContactCommand(kind))),
+      listPreparedPage: (requested: CloudOperationKind, input: unknown) => work('listPreparedPage', { kind: requested, input }, module.exports.__input({ records: [intent(rawProfileContactCommand(kind))], nextAfterId: null })),
+      listHistoryPage: (requested: CloudOperationKind, input: unknown) => work('listHistoryPage', { kind: requested, input }, module.exports.__input({ records: [intent(rawProfileContactCommand(kind), undefined, 'committed')], nextAfterId: null })),
+      cancel: (id: string) => work('cancel', id, intent(rawProfileContactCommand(kind), undefined, 'cancelled')),
+    };
+  }
   const compiled = await bundle;
   runInNewContext(`${compiled.outputFiles[0].text}\nmodule.exports.__copy = value => ({ ...value });
 module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
@@ -142,6 +173,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
             return result;
           };
           return {
+            journal: profileJournal('contact', async (name, input, result) => { contactInputs.push(input); return work(name, result); }),
             commit: (input: unknown) => {
               contactInputs.push(input);
               return work('commit', { status: 'committed', recordId: RECORD, revision: 1 });
@@ -195,6 +227,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
             return result;
           };
           return {
+            journal: profileJournal('patient-profile', work),
             commit: (input: unknown) => work('commit', input, { status: 'committed', recordId: RECORD, revision: 1, fileNo: 1 }),
             get: (input: unknown) => work('get', input, null),
             getByFileNo: (input: unknown) => work('getByFileNo', input, null),
@@ -458,7 +491,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(h.contactsActive(), true);
   assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getClinical', 'getContacts', 'getPatients', 'getServiceCatalog', 'getState',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
-  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'listPage']);
+  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'journal', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);
   const before = h.paths.length;
   assert.equal(await repository.get(RECORD), null);
@@ -682,6 +715,102 @@ test('contact method failures keep provider details and malformed Proxy exceptio
   }
 });
 
+test('profile/contact recovery is explicit, kind-bounded and includes committed history', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) {
+    const h = await fixture({ profileJournals: true }), session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind), calls = kind === 'contact' ? h.contactCalls : h.patientCalls;
+    assert.deepEqual(calls, ['factory']);
+    const before = h.paths.length;
+    const prepared = await journal.prepare(kind, h.api.__input(rawProfileContactCommand(kind)), CREATED_AT);
+    assert.equal(prepared.status, 'prepared');
+    assert.equal((await journal.get(INSTANCE))?.operationId, INSTANCE);
+    assert.equal((await journal.listPreparedPage(kind)).records[0].status, 'prepared');
+    assert.equal((await journal.listHistoryPage!(kind)).records[0].status, 'committed');
+    assert.equal((await journal.cancel(INSTANCE)).status, 'cancelled');
+    assert.equal(h.paths.length, before + 10, 'fresh membership before and after each action');
+    assert.deepEqual(calls, ['factory', 'prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel']);
+    await session.dispose();
+  }
+});
+
+test('profile/contact legacy adapters never silently substitute a prepared-only or missing journal', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind);
+    await assert.rejects(journal.prepare(kind, h.api.__input(rawProfileContactCommand(kind)), CREATED_AT));
+    await assert.rejects(journal.listHistoryPage!(kind));
+    await assert.rejects(journal.cancel(INSTANCE));
+    assert.deepEqual(kind === 'contact' ? h.contactCalls : h.patientCalls, ['factory']); await session.dispose();
+  }
+});
+
+test('profile/contact journal validation precedes authorization and any underlying mutation', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) {
+    const h = await fixture({ profileJournals: true }), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind), before = h.paths.length;
+    await assert.rejects(journal.prepare('clinical', h.api.__input(rawProfileContactCommand(kind)), CREATED_AT));
+    await assert.rejects(journal.prepare(kind, h.api.__input({ ...rawProfileContactCommand(kind), unexpected: true }), CREATED_AT));
+    await assert.rejects(journal.prepare(kind, h.api.__input(rawProfileContactCommand(kind)), '2026-02-30T00:00:00.000Z'));
+    await assert.rejects(journal.get(INSTANCE + '\n'));
+    await assert.rejects(journal.cancel('bad-id'));
+    await assert.rejects(journal.listHistoryPage!(kind, h.api.__input({ limit: 51 })));
+    assert.equal(h.paths.length, before);
+    assert.deepEqual(kind === 'contact' ? h.contactCalls : h.patientCalls, ['factory']); await session.dispose();
+  }
+});
+
+test('profile/contact journals snapshot commands and page queries before delayed membership checks', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) for (const method of ['prepare', 'listHistoryPage'] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ profileJournals: true, onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind); enabled = true;
+    const command = h.api.__input(rawProfileContactCommand(kind)), page = h.api.__input({ afterId: null as string | null, limit: 2 });
+    const pending = method === 'prepare' ? journal.prepare(kind, command, CREATED_AT) : journal.listHistoryPage!(kind, page);
+    await until(() => reached);
+    command.operationId = RECORD;
+    if ('contact' in command) command.contact!.name = 'Changed'; else command.profile!.name = 'Changed';
+    page.afterId = RECORD; page.limit = 50; gate.resolve(); await pending;
+    const input = (kind === 'contact' ? h.contactInputs : h.patientInputs)[0] as any;
+    if (method === 'prepare') { assert.equal(input.command.operationId, INSTANCE); assert.notEqual((input.command.contact ?? input.command.profile).name, 'Changed'); }
+    else { assert.equal(input.input.afterId, null); assert.equal(input.input.limit, 2); }
+    await session.dispose();
+  }
+});
+
+test('profile/contact journal methods are permanently revoked across same-UID relogin', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) {
+    const h = await fixture({ profileJournals: true }), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind); await session.signOut(); await session.signIn(EMAIL, PASSWORD);
+    await assert.rejects(journal.get(INSTANCE)); await assert.rejects(journal.cancel(INSTANCE));
+    await assert.rejects(journal.listHistoryPage!(kind));
+    assert.deepEqual(kind === 'contact' ? h.contactCalls : h.patientCalls, ['factory']); await session.dispose();
+  }
+});
+
+test('profile/contact journal results cannot escape a disabled membership or actual logout', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) for (const revoke of ['membership', 'logout'] as const) {
+    const membership: Record<string, unknown> = { schemaVersion: 1, clinicId: 'main', uid: UID, role: 'owner', status: 'active', identityVersion: 1, verifiedAfter: AUTH_TIME };
+    const gate = deferred(), h = await fixture({ membership, profileJournals: true,
+      ...(kind === 'contact' ? { contactsMethodGate: gate.promise } : { patientsMethodGate: gate.promise }) });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind), pending = journal.get(INSTANCE), rejected = assert.rejects(pending);
+    await until(() => (kind === 'contact' ? h.contactCalls : h.patientCalls).includes('intentGet'));
+    if (revoke === 'membership') membership.status = 'disabled'; else await session.signOut();
+    gate.resolve(); await rejected; assert.equal(session.getState().owner, null); await session.dispose();
+  }
+});
+
+test('profile/contact recovery refuses another actor or domain returned by an adapter', async () => {
+  for (const kind of ['contact', 'patient-profile'] as const) for (const wrong of ['actor', 'kind'] as const) {
+    const h = await fixture({ profileJournals: true, ...(wrong === 'actor' ? { profileJournalActor: 'another-owner' } : { profileJournalKind: 'clinical' }) });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const journal = await getProfileJournal(session, kind);
+    await assert.rejects(journal.get(INSTANCE)); await assert.rejects(journal.listHistoryPage!(kind)); await session.dispose();
+  }
+});
+
 test('patient capability is explicit, owner-only, lazy and exposes no SDK app or local data', async () => {
   const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
   await assert.rejects(session.getPatients());
@@ -689,7 +818,7 @@ test('patient capability is explicit, owner-only, lazy and exposes no SDK app or
   assert.deepEqual(h.patientCalls, []); assert.equal(h.imports.includes('./firebaseCloudPatients'), false);
   const repository = await session.getPatients();
   assert.equal(repository, await session.getPatients()); assert.deepEqual(h.patientCalls, ['factory']);
-  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'findByPhone', 'get', 'getByFileNo', 'listPage']);
+  assert.deepEqual(Object.keys(repository).sort(), ['commit', 'findByPhone', 'get', 'getByFileNo', 'journal', 'listPage']);
   assert.equal(h.patientsActive(), true);
   const before = h.paths.length;
   await repository.get(RECORD); await repository.getByFileNo(1);
