@@ -165,6 +165,23 @@ test('acknowledged save with failed refresh retries reads only, never prepare/co
   h.hooks.read = undefined; assert.equal(await h.controller.retry(), true);
   assert.equal(h.calls.filter(value => value === 'prepare').length, 1); assert.equal(h.submitted.length, 1);
 });
+
+test('initial post-acknowledgement read owns its ticket before a synchronous subscriber can retry', async () => {
+  const h = harness(); await h.controller.open(PATIENT);
+  let observed = false, repeated: Promise<boolean> | null = null;
+  const stop = h.controller.subscribe(value => {
+    if (value.saveStatus === 'refresh-required' && !observed) {
+      observed = true; repeated = h.controller.retry();
+    }
+  });
+  assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 10_000), true);
+  assert.equal(observed, true); assert.equal(await repeated, false);
+  assert.equal(h.controller.getState().saveStatus, 'idle');
+  assert.equal(h.controller.getState().loading, false);
+  assert.equal(h.calls.filter(value => value === 'prepare').length, 1);
+  assert.equal(h.calls.filter(value => value === 'commit').length, 1);
+  stop(); h.controller.dispose();
+});
 test('same-revision conflict retains original command until server-confirmed cancellation, without rebasing', async () => {
   const h = harness(); await h.controller.open(PATIENT); h.faults.commitBefore = true;
   assert.equal(await h.controller.saveVisit(PATIENT, visitData(), 10_000), false);

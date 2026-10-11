@@ -113,7 +113,10 @@ export function createCloudClinicalWorkspaceController(options: {
           || state.snapshot && state.snapshot.patient.id !== String(receipt.fileNo)) fail();
         acknowledged = { revision: receipt.revision, fileNo: receipt.fileNo };
       }
-      publish({ ...state, saveStatus: 'refresh-required', error: '' });
+      // Own the initial post-ACK read before notifying subscribers, just as a
+      // later explicit retry does. Re-entrant callbacks cannot start a second
+      // refresh and invalidate this accepted operation's original ticket.
+      publish({ ...state, saveStatus: 'refresh-required', loading: true, error: '' });
       const snapshot = await readSnapshot(ticket, submitted.patientId); assertActive(ticket)();
       if (snapshot.accountRevision < acknowledged.revision || snapshot.patient.id !== String(acknowledged.fileNo)) fail();
       command = null; acknowledged = null;
@@ -122,7 +125,7 @@ export function createCloudClinicalWorkspaceController(options: {
       return true;
     } catch (error) {
       if (!active(ticket)) return false;
-      publish({ ...state, saveStatus: acknowledged ? 'refresh-required' : 'retry-required',
+      publish({ ...state, loading: false, saveStatus: acknowledged ? 'refresh-required' : 'retry-required',
         error: acknowledged ? 'الحفظ مؤكد؛ تعذر تحديث العرض. أعد التحقق بالقراءة فقط دون تسجيل دفعة أخرى.'
           : errorCode(error) === 'conflict' ? 'تغيّر الملف أو حالة العملية. المسودة الأصلية محفوظة؛ أعد التحقق أو ألغِ العملية من سجلها قبل تعديلها.'
             : 'لم يصل تأكيد العملية. أعد المحاولة بنفس معرّف العملية؛ لا تسجلها كدفعة جديدة.' });

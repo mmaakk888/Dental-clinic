@@ -4,9 +4,10 @@ import { CloudOperatingAuthError, cloudOperatingAuthErrorMessage,
 import type { createCloudContactWorkspaceController } from './cloudContactWorkspaceController';
 import type { CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
 import type { CloudClinicalWorkspaceBundle } from './cloudClinicalUiStage';
+import type { CloudCatalogWorkspaceController } from './cloudCatalogWorkspaceController';
 
 export type CloudOperatingContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
-export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, 'getContacts' | 'getPatients' | 'getClinical'>>;
+export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, 'getContacts' | 'getPatients' | 'getClinical' | 'getServiceCatalog'>>;
 export type CloudOperatingPatientsWorkspace = CloudPatientWorkspaceController;
 export type CloudOperatingClinicalWorkspace = CloudClinicalWorkspaceBundle;
 export type CloudOperatingContactsState = Readonly<{
@@ -23,6 +24,7 @@ export type CloudOperatingPageState = Readonly<{
   contacts: CloudOperatingContactsState;
   patients: CloudOperatingContactsState;
   clinical: CloudOperatingContactsState;
+  catalog: CloudOperatingContactsState;
 }>;
 
 const CLEANUP_ERROR = 'تعذر تأكيد إغلاق جلسة الدخول. أعد تحميل الصفحة قبل المحاولة من جديد.';
@@ -35,6 +37,8 @@ const PATIENTS_UNAVAILABLE = 'مساحة ملفات المرضى غير متاح
 const CLINICAL_ERROR = 'تعذر فتح الملف السريري وسجل الاسترجاع. لم نستخدم بيانات محلية بديلة.';
 const CLINICAL_UNAVAILABLE = 'الملف السريري وسجل الاسترجاع غير متاحين في جلسة الدخول الحالية.';
 const CLINICAL_CLOSE_ERROR = 'أكمل المسودة أو ألغها أولًا؛ انتظر انتهاء القراءة وتحقق من العملية المعلّقة قبل الإغلاق.';
+const CATALOG_ERROR = 'تعذر فتح الخدمات والأسعار. لم نستخدم إعدادات محلية بديلة.';
+const CATALOG_UNAVAILABLE = 'الخدمات والأسعار غير متاحة في جلسة الدخول الحالية.';
 
 function contactsState(phase: CloudOperatingContactsState['phase'], error = ''): CloudOperatingContactsState {
   return Object.freeze({ phase, error });
@@ -55,7 +59,7 @@ export function createCloudOperatingPageController(
 ) {
   let state: CloudOperatingPageState = Object.freeze({ auth: authState('signed-out'),
     pending: false, closing: false, error: '', cleanupFailed: false,
-    contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed') });
+    contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed'), catalog: contactsState('closed') });
   const listeners = new Set<(value: CloudOperatingPageState) => void>();
   let epoch = 0;
   let closed = false;
@@ -80,6 +84,11 @@ export function createCloudOperatingPageController(
   let clinicalOpening: Promise<CloudOperatingClinicalWorkspace | null> | null = null;
   let clinicalIdentity: { session: CloudOperatingPageSession; uid: string } | null = null;
   let clinicalInvalidating = false;
+  let catalogLease = 0;
+  let catalogWorkspace: CloudCatalogWorkspaceController | null = null;
+  let catalogOpening: Promise<CloudCatalogWorkspaceController | null> | null = null;
+  let catalogIdentity: { session: CloudOperatingPageSession; uid: string } | null = null;
+  let catalogInvalidating = false;
   let workspaceSwitching = false;
 
   function publish(next: CloudOperatingPageState, notify = true) {
@@ -195,6 +204,33 @@ export function createCloudOperatingPageController(
     return true;
   }
 
+  function revokeCatalog() {
+    ++catalogLease;
+    const previous = catalogWorkspace;
+    catalogWorkspace = null; catalogOpening = null; catalogIdentity = null;
+    publish({ ...state, catalog: contactsState('closed') }, false);
+    const wasInvalidating = catalogInvalidating;
+    catalogInvalidating = true;
+    try { previous?.dispose(); } finally { catalogInvalidating = wasInvalidating; }
+  }
+
+  function catalogActive(ticket: number, candidate: CloudOperatingPageSession, uid: string): boolean {
+    const owned = () => !closed && !closing && !cleanupFailed && !catalogInvalidating
+      && catalogLease === ticket && session === candidate;
+    if (!owned()) return false;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    if (!owned()) return false;
+    const auth = candidate.getState();
+    if (!owned()) return false;
+    if (auth.phase === 'signed-out' || auth.phase === 'signing-out' || auth.phase === 'closed'
+      || auth.phase === 'owner-checked' && auth.owner?.uid !== uid) {
+      revokeCatalog();
+      if (!closed && !closing && !cleanupFailed && session === candidate) publish({ ...state, auth });
+      return false;
+    }
+    return true; // Transient checking does not discard an ordinary draft.
+  }
+
   async function getSession(ticket: number): Promise<CloudOperatingPageSession | null> {
     if (!active(ticket)) return null;
     if (session) return session;
@@ -222,11 +258,13 @@ export function createCloudOperatingPageController(
       if (auth.phase === 'signed-out' || auth.phase === 'signing-out' || auth.phase === 'closed'
         || auth.phase === 'owner-checked' && (contactsIdentity && auth.owner?.uid !== contactsIdentity.uid
           || patientsIdentity && auth.owner?.uid !== patientsIdentity.uid
-          || clinicalIdentity && auth.owner?.uid !== clinicalIdentity.uid)) {
+          || clinicalIdentity && auth.owner?.uid !== clinicalIdentity.uid
+          || catalogIdentity && auth.owner?.uid !== catalogIdentity.uid)) {
         publish({ ...state, auth }, false);
         revokeContacts();
         revokePatients();
         revokeClinical();
+        revokeCatalog();
         if (closed || closing || cleanupFailed || session !== candidate) return;
       }
       publish({ ...state, auth });
@@ -271,16 +309,17 @@ export function createCloudOperatingPageController(
       if (!success) cleanupFailed = true;
       publish({ auth: authState(closed ? 'closed' : 'signed-out'), pending: false,
         closing: false, error: cleanupFailed ? CLEANUP_ERROR : '', cleanupFailed,
-        contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed') }, !closed);
+        contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed'), catalog: contactsState('closed') }, !closed);
     });
     // Establish closing ownership/state before workspace disposal callbacks can
     // synchronously attempt another close, open, sign-in or view disposal.
     publish({ auth: authState(permanent ? 'closed' : 'signing-out'), pending: false,
       closing: true, error: cleanupFailed ? CLEANUP_ERROR : '', cleanupFailed,
-      contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed') }, false);
+      contacts: contactsState('closed'), patients: contactsState('closed'), clinical: contactsState('closed'), catalog: contactsState('closed') }, false);
     revokeContacts();
     revokePatients();
     revokeClinical();
+    revokeCatalog();
     try { stop?.(); } catch { /* Session disposal remains mandatory. */ }
     if (oldSession) {
       try { immediateDisposal = Promise.resolve(oldSession.dispose()).then(() => true, () => false); }
@@ -301,7 +340,7 @@ export function createCloudOperatingPageController(
 
   async function run(kind: 'sign-in' | 'refresh', email?: string, password?: string): Promise<void> {
     if (closed || closing || cleanupFailed || state.pending || contactsInvalidating || contactsOpening
-      || patientsInvalidating || patientsOpening || clinicalInvalidating || clinicalOpening || workspaceSwitching
+      || patientsInvalidating || patientsOpening || clinicalInvalidating || clinicalOpening || catalogInvalidating || catalogOpening || workspaceSwitching
       || session?.getState().phase === 'checking') return;
     if (!runtimeValid()) { await rejectRuntime(); return; }
     if (kind === 'refresh' && !session) {
@@ -310,7 +349,7 @@ export function createCloudOperatingPageController(
     }
     const ticket = ++epoch;
     publish({ ...state, auth: authState('checking'), pending: true, error: '' }, false);
-    if (kind === 'sign-in') { revokeContacts(); revokePatients(); revokeClinical(); }
+    if (kind === 'sign-in') { revokeContacts(); revokePatients(); revokeClinical(); revokeCatalog(); }
     publish(state);
     try {
       const current = await getSession(ticket);
@@ -348,7 +387,7 @@ export function createCloudOperatingPageController(
   }
 
   function openContacts(): Promise<CloudOperatingContactsWorkspace | null> {
-    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || workspaceSwitching) return Promise.resolve(null);
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
     if (contactsOpening) return contactsOpening;
     const existing = getContactsWorkspace();
@@ -372,6 +411,11 @@ export function createCloudOperatingPageController(
     if (clinicalWorkspace || clinicalOpening) {
       workspaceSwitching = true;
       try { if (!closeClinical()) return Promise.resolve(null); }
+      finally { workspaceSwitching = false; }
+    }
+    if (catalogWorkspace || catalogOpening) {
+      workspaceSwitching = true;
+      try { if (!closeCatalog()) return Promise.resolve(null); }
       finally { workspaceSwitching = false; }
     }
     // Closing the other workspace notifies subscribers; they may close Auth.
@@ -418,17 +462,22 @@ export function createCloudOperatingPageController(
   }
 
   function closeContacts(expected?: CloudOperatingContactsWorkspace): boolean {
-    if (closed || closing || contactsInvalidating || patientsInvalidating || clinicalInvalidating) return false;
+    if (closed || closing || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating) return false;
+    const lease = contactsLease;
     if (!runtimeValid()) { void rejectRuntime(); return false; }
     const workspace = getContactsWorkspace();
+    const stillOwned = () => !closed && !closing && !cleanupFailed && contactsLease === lease && contactsWorkspace === workspace;
+    if (!stillOwned()) return false;
     if (expected && workspace !== expected) return false;
     if (workspace) {
       const current = workspace.getState();
+      if (!stillOwned()) return false;
       if (current.draft || current.saveStatus !== 'idle') {
         publish({ ...state, contacts: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }
     }
+    if (!stillOwned()) return false;
     revokeContacts();
     publish(state);
     return true;
@@ -441,7 +490,7 @@ export function createCloudOperatingPageController(
   }
 
   function openPatients(): Promise<CloudOperatingPatientsWorkspace | null> {
-    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || workspaceSwitching) return Promise.resolve(null);
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
     if (patientsOpening) return patientsOpening;
     const existing = getPatientsWorkspace();
@@ -461,6 +510,11 @@ export function createCloudOperatingPageController(
     if (clinicalWorkspace || clinicalOpening) {
       workspaceSwitching = true;
       try { if (!closeClinical()) return Promise.resolve(null); }
+      finally { workspaceSwitching = false; }
+    }
+    if (catalogWorkspace || catalogOpening) {
+      workspaceSwitching = true;
+      try { if (!closeCatalog()) return Promise.resolve(null); }
       finally { workspaceSwitching = false; }
     }
     if (closed || closing || cleanupFailed || session !== candidate) return Promise.resolve(null);
@@ -505,17 +559,22 @@ export function createCloudOperatingPageController(
   }
 
   function closePatients(expected?: CloudOperatingPatientsWorkspace): boolean {
-    if (closed || closing || patientsInvalidating || contactsInvalidating || clinicalInvalidating) return false;
+    if (closed || closing || patientsInvalidating || contactsInvalidating || clinicalInvalidating || catalogInvalidating) return false;
+    const lease = patientsLease;
     if (!runtimeValid()) { void rejectRuntime(); return false; }
     const workspace = getPatientsWorkspace();
+    const stillOwned = () => !closed && !closing && !cleanupFailed && patientsLease === lease && patientsWorkspace === workspace;
+    if (!stillOwned()) return false;
     if (expected && workspace !== expected) return false;
     if (workspace) {
       const current = workspace.getState();
+      if (!stillOwned()) return false;
       if (current.draft || current.saveStatus !== 'idle') {
         publish({ ...state, patients: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }
     }
+    if (!stillOwned()) return false;
     revokePatients();
     publish(state);
     return true;
@@ -528,7 +587,7 @@ export function createCloudOperatingPageController(
   }
 
   function openClinical(): Promise<CloudOperatingClinicalWorkspace | null> {
-    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || workspaceSwitching) return Promise.resolve(null);
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
     if (clinicalOpening) return clinicalOpening;
     const existing = getClinicalWorkspace();
@@ -544,6 +603,7 @@ export function createCloudOperatingPageController(
     try {
       if ((contactsWorkspace || contactsOpening) && !closeContacts()) return Promise.resolve(null);
       if ((patientsWorkspace || patientsOpening) && !closePatients()) return Promise.resolve(null);
+      if ((catalogWorkspace || catalogOpening) && !closeCatalog()) return Promise.resolve(null);
     } finally { workspaceSwitching = false; }
     if (closed || closing || cleanupFailed || session !== candidate) return Promise.resolve(null);
     const ticket = ++clinicalLease;
@@ -595,26 +655,111 @@ export function createCloudOperatingPageController(
   }
 
   function closeClinical(expected?: CloudOperatingClinicalWorkspace): boolean {
-    if (closed || closing || contactsInvalidating || patientsInvalidating || clinicalInvalidating) return false;
+    if (closed || closing || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating) return false;
+    const lease = clinicalLease;
     if (!runtimeValid()) { void rejectRuntime(); return false; }
     const workspace = getClinicalWorkspace();
+    const stillOwned = () => !closed && !closing && !cleanupFailed && clinicalLease === lease && clinicalWorkspace === workspace;
+    if (!stillOwned()) return false;
     if (expected && workspace !== expected) return false;
     if (workspace) {
       const file = workspace.file.getState();
+      if (!stillOwned()) return false;
       const recovery = workspace.recovery.getState();
+      if (!stillOwned()) return false;
       if (file.draftDirty || file.loading || file.saveStatus !== 'idle' || file.pendingOperationId || recovery.loading) {
         publish({ ...state, clinical: contactsState('open', CLINICAL_CLOSE_ERROR) });
         return false;
       }
     }
+    if (!stillOwned()) return false;
     revokeClinical();
     publish(state);
     return true;
   }
 
+  function getCatalogWorkspace(): CloudCatalogWorkspaceController | null {
+    const identity = catalogIdentity;
+    if (!identity || !catalogActive(catalogLease, identity.session, identity.uid)) return null;
+    return catalogWorkspace;
+  }
+
+  function openCatalog(): Promise<CloudCatalogWorkspaceController | null> {
+    if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
+    if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (catalogOpening) return catalogOpening;
+    const existing = getCatalogWorkspace();
+    if (existing) return Promise.resolve(existing);
+    const candidate = session, owner = candidate?.getState().owner;
+    if (!candidate || state.pending || state.auth.phase !== 'owner-checked'
+      || candidate.getState().phase !== 'owner-checked' || !owner || typeof candidate.getServiceCatalog !== 'function') {
+      publish({ ...state, catalog: contactsState('closed', CATALOG_UNAVAILABLE) });
+      return Promise.resolve(null);
+    }
+    workspaceSwitching = true;
+    try {
+      if ((contactsWorkspace || contactsOpening) && !closeContacts()) return Promise.resolve(null);
+      if ((patientsWorkspace || patientsOpening) && !closePatients()) return Promise.resolve(null);
+      if ((clinicalWorkspace || clinicalOpening) && !closeClinical()) return Promise.resolve(null);
+    } finally { workspaceSwitching = false; }
+    if (closed || closing || cleanupFailed || session !== candidate) return Promise.resolve(null);
+    const ticket = ++catalogLease;
+    catalogIdentity = { session: candidate, uid: owner.uid };
+    const work: Promise<CloudCatalogWorkspaceController | null> = Promise.resolve().then(async () => {
+      try {
+        if (!catalogActive(ticket, candidate, owner.uid)) return null;
+        const capability = await candidate.getServiceCatalog!();
+        if (!catalogActive(ticket, candidate, owner.uid)) return null;
+        const workspace = await import('./cloudCatalogWorkspaceController');
+        if (!catalogActive(ticket, candidate, owner.uid)) return null;
+        const controller = workspace.createCloudCatalogWorkspaceController({
+          getCapability: async () => {
+            if (!catalogActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
+            return capability;
+          },
+          isActive: () => catalogActive(ticket, candidate, owner.uid),
+        });
+        if (!catalogActive(ticket, candidate, owner.uid)) { controller.dispose(); return null; }
+        catalogWorkspace = controller;
+        publish({ ...state, catalog: contactsState('open') });
+        return catalogActive(ticket, candidate, owner.uid) && catalogWorkspace === controller ? controller : null;
+      } catch {
+        if (closed || closing || cleanupFailed || session !== candidate) return null;
+        const phase = candidate.getState().phase;
+        if (catalogLease !== ticket && phase !== 'signed-out' && phase !== 'signing-out' && phase !== 'closed') return null;
+        const cleanup = beginClose(false), closingTicket = epoch;
+        await cleanup;
+        if (!closed && closingTicket === epoch && !cleanupFailed) publish({ ...state, catalog: contactsState('closed', CATALOG_ERROR) });
+        return null;
+      } finally { if (catalogOpening === work) catalogOpening = null; }
+    });
+    catalogOpening = work;
+    publish({ ...state, catalog: contactsState('opening') });
+    return work;
+  }
+
+  function closeCatalog(expected?: CloudCatalogWorkspaceController): boolean {
+    if (closed || closing || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating) return false;
+    const lease = catalogLease;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    const workspace = getCatalogWorkspace();
+    const stillOwned = () => !closed && !closing && !cleanupFailed && catalogLease === lease && catalogWorkspace === workspace;
+    if (!stillOwned()) return false;
+    if (expected && workspace !== expected) return false;
+    if (workspace) {
+      const current = workspace.getState();
+      if (!stillOwned()) return false;
+      if (current.draft || current.loading || current.historyLoading || current.saveStatus !== 'idle' || current.pendingOperationId) {
+        publish({ ...state, catalog: contactsState('open', CLINICAL_CLOSE_ERROR) }); return false;
+      }
+    }
+    if (!stillOwned()) return false;
+    revokeCatalog(); publish(state); return true;
+  }
+
   return {
     getState: () => {
-      if ((contactsIdentity || patientsIdentity || clinicalIdentity) && !runtimeValid()) void rejectRuntime();
+      if ((contactsIdentity || patientsIdentity || clinicalIdentity || catalogIdentity) && !runtimeValid()) void rejectRuntime();
       return state;
     },
     subscribe: (listener: (value: CloudOperatingPageState) => void) => {
@@ -633,6 +778,9 @@ export function createCloudOperatingPageController(
     openClinical,
     getClinicalWorkspace,
     closeClinical,
+    openCatalog,
+    getCatalogWorkspace,
+    closeCatalog,
     signOut: (): Promise<boolean> => closed ? Promise.resolve(false) : beginClose(false),
     dispose: (): Promise<void> => {
       if (disposal) return disposal;

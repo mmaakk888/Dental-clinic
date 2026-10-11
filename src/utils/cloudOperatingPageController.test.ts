@@ -97,7 +97,7 @@ test('page controller is inert until explicit sign-in, and initial refresh never
   const h = fixture();
   assert.deepEqual(h.controller.getState(), { auth: { phase: 'signed-out', owner: null },
     pending: false, closing: false, error: '', cleanupFailed: false,
-    contacts: { phase: 'closed', error: '' }, patients: { phase: 'closed', error: '' }, clinical: { phase: 'closed', error: '' } });
+    contacts: { phase: 'closed', error: '' }, patients: { phase: 'closed', error: '' }, clinical: { phase: 'closed', error: '' }, catalog: { phase: 'closed', error: '' } });
   assert.equal(Object.isFrozen(h.controller.getState()), true);
   assert.equal(Object.isFrozen(h.controller.getState().auth), true);
   await h.controller.refresh();
