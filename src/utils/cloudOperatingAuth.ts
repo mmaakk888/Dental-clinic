@@ -4,6 +4,10 @@ import { assessCloudOwnerMembership, type CloudOwnerMembership } from './cloudMe
 import { isLocalClinicHost } from './localRuntime';
 import type { CloudContactRepository } from './cloudContactRepository';
 import type { CloudPatientRepository } from './cloudPatientRepository';
+import type { CloudClinicalRepository } from './cloudClinicalRepository';
+import type { CloudOperationIntentRepository } from './cloudOperationIntent';
+import type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
+export type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
 
 type OperatingErrorCode = 'invalid-input' | 'busy' | 'unavailable' | 'changed' | 'closed';
 
@@ -177,6 +181,8 @@ export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
   getContacts(): Promise<CloudContactRepository>;
   /** Prepared profile-only capability; does not activate patient UI or Rules. */
   getPatients(): Promise<CloudPatientRepository>;
+  /** Prepared clinical-only capability; no UI, Rules or Hosting activation. */
+  getClinical(): Promise<CloudClinicalCapability>;
 };
 
 /**
@@ -261,7 +267,8 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
     let capabilityGeneration = 0;
     let contactsCreation: Promise<CloudContactRepository> | null = null;
     let patientsCreation: Promise<CloudPatientRepository> | null = null;
-    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; };
+    let clinicalCreation: Promise<CloudClinicalCapability> | null = null;
+    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; };
     session.subscribe(value => {
       if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeCapabilities();
     });
@@ -431,6 +438,161 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
             void creation.catch(() => { if (patientsCreation === creation) patientsCreation = null; });
           }
           const repository = await patientsCreation; requireActive(); return repository;
+        } catch { throw new CloudOperatingAuthError('unavailable'); }
+      },
+      getClinical: async (): Promise<CloudClinicalCapability> => {
+        try {
+          const checked = session.getState(), user = auth.currentUser;
+          if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
+            throw new CloudOperatingAuthError('changed');
+          }
+          const generation = capabilityGeneration, uid = checked.owner.uid;
+          const requireActive = () => {
+            try { requireRuntime(); }
+            catch { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+            const phase = session.getState().phase;
+            if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
+              || phase === 'signed-out' || phase === 'signing-out' || phase === 'closed') {
+              if (generation === capabilityGeneration) revokeCapabilities();
+              throw new CloudOperatingAuthError('changed');
+            }
+          };
+          const authorize = async () => {
+            requireActive();
+            const owner = await session.authorizeOwner();
+            requireActive();
+            if (owner.uid !== uid) { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+          };
+          await authorize(); requireActive();
+          if (!clinicalCreation) {
+            const creation = Promise.resolve().then(async () => {
+              requireActive();
+              const [clinical, contract, intents] = await Promise.all([
+                import('./firebaseCloudClinical'), import('./cloudClinicalRepository'), import('./cloudOperationIntent'),
+              ]);
+              requireActive();
+              const capability = await clinical.createFirebaseCloudClinical(auth, {
+                isActive: () => { try { requireActive(); return true; } catch { return false; } },
+              });
+              requireActive();
+              const run = async <T>(work: () => Promise<T>): Promise<T> => {
+                try {
+                  await authorize(); requireActive();
+                  const result = await work(); requireActive();
+                  // A completed server request is not rolled back by logout.
+                  // Recheck current membership before publishing its result.
+                  await authorize(); requireActive(); return result;
+                } catch (error) {
+                  let safe: Error = new CloudOperatingAuthError('unavailable');
+                  try {
+                    if (error instanceof CloudOperatingAuthError) safe = new CloudOperatingAuthError(error.code);
+                    if (error instanceof contract.CloudClinicalError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) {
+                      safe = new contract.CloudClinicalError(error.code);
+                    }
+                    if (error instanceof intents.CloudOperationIntentError && ['invalid', 'conflict', 'unavailable'].includes(error.code)) {
+                      safe = new intents.CloudOperationIntentError(error.code);
+                    }
+                  } catch { /* No raw provider, clinical or hostile Proxy errors. */ }
+                  throw safe;
+                }
+              };
+              const uuid = (value: unknown): value is string => typeof value === 'string' && value.length === 36
+                && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+              const clinicalId = (value: unknown) => { if (!uuid(value)) throw new contract.CloudClinicalError('invalid'); return value; };
+              const intentId = (value: unknown) => { if (!uuid(value)) throw new intents.CloudOperationIntentError('invalid'); return value; };
+              const clinicalKind = (kind: unknown) => { if (kind !== 'clinical') throw new intents.CloudOperationIntentError('invalid'); };
+              const pageInput = (value: unknown): { afterId: string | null; limit: number } => {
+                try {
+                  const input = value === undefined ? {} : value;
+                  if (!input || typeof input !== 'object' || Array.isArray(input)
+                    || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new Error();
+                  const keys = Reflect.ownKeys(input);
+                  if (keys.some(key => typeof key !== 'string' || !['afterId', 'limit'].includes(key))) throw new Error();
+                  const copy: Record<string, unknown> = {};
+                  for (const key of keys as string[]) {
+                    const property = Object.getOwnPropertyDescriptor(input, key);
+                    if (!property || !('value' in property) || !property.enumerable) throw new Error();
+                    copy[key] = property.value;
+                  }
+                  const afterId = copy.afterId === undefined ? null : copy.afterId, limit = copy.limit === undefined ? 25 : copy.limit;
+                  if (afterId !== null && !uuid(afterId) || typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error();
+                  return { afterId: afterId as string | null, limit };
+                } catch { throw new intents.CloudOperationIntentError('invalid'); }
+              };
+              const checkedIntent = (value: unknown, id?: string, expectedCommand?: object) => {
+                const result = intents.parseCloudOperationIntent(value);
+                if (result.kind !== 'clinical' || result.actorUid !== uid || id !== undefined && result.operationId !== id) {
+                  throw new intents.CloudOperationIntentError('invalid');
+                }
+                const command = contract.prepareCloudClinicalCommand(result.command);
+                if (command.createdAt !== result.createdAt || JSON.stringify(intents.prepareCloudIntentCommand(command)) !== JSON.stringify(result.command)
+                  || expectedCommand !== undefined && JSON.stringify(result.command) !== JSON.stringify(expectedCommand)) {
+                  throw new intents.CloudOperationIntentError('invalid');
+                }
+                return result;
+              };
+              const repository = Object.freeze({
+                commit: async input => {
+                  const prepared = contract.prepareCloudClinicalCommand(input);
+                  return run(() => capability.repository.commit(prepared));
+                },
+                getProfile: async patientId => {
+                  const prepared = clinicalId(patientId);
+                  return run(() => capability.repository.getProfile(prepared));
+                },
+                getAccount: async patientId => {
+                  const prepared = clinicalId(patientId);
+                  return run(() => capability.repository.getAccount(prepared));
+                },
+                getSession: async sessionId => {
+                  const prepared = clinicalId(sessionId);
+                  return run(() => capability.repository.getSession(prepared));
+                },
+                listSessions: async input => {
+                  const prepared = contract.prepareCloudClinicalPageInput(input);
+                  return run(() => capability.repository.listSessions(prepared));
+                },
+                listReceipts: async input => {
+                  const prepared = contract.prepareCloudClinicalPageInput(input);
+                  return run(() => capability.repository.listReceipts(prepared));
+                },
+              } satisfies CloudClinicalRepository);
+              const journal = Object.freeze({
+                prepare: async (kind, input, createdAt) => {
+                  clinicalKind(kind);
+                  const clinicalCommand = contract.prepareCloudClinicalCommand(input);
+                  const prepared = intents.prepareCloudIntentCommand(clinicalCommand);
+                  if (createdAt !== clinicalCommand.createdAt) throw new intents.CloudOperationIntentError('invalid');
+                  return run(async () => checkedIntent(await capability.journal.prepare('clinical', prepared, createdAt), clinicalCommand.operationId, prepared));
+                },
+                get: async id => {
+                  const prepared = intentId(id);
+                  return run(async () => {
+                    const result = await capability.journal.get(prepared);
+                    return result === null ? null : checkedIntent(result, prepared);
+                  });
+                },
+                listPreparedPage: async (kind, input) => {
+                  clinicalKind(kind); const prepared = pageInput(input);
+                  return run(async () => {
+                    const page = await capability.journal.listPreparedPage('clinical', prepared);
+                    // The repository validates cursor/schema; this capability
+                    // additionally fences kind and actor before returning it.
+                    return { records: page.records.map(value => checkedIntent(value)), nextAfterId: page.nextAfterId };
+                  });
+                },
+                cancel: async id => {
+                  const prepared = intentId(id);
+                  return run(async () => checkedIntent(await capability.journal.cancel(prepared), prepared));
+                },
+              } satisfies CloudOperationIntentRepository);
+              return Object.freeze({ repository, journal });
+            });
+            clinicalCreation = creation;
+            void creation.catch(() => { if (clinicalCreation === creation) clinicalCreation = null; });
+          }
+          const capability = await clinicalCreation;
+          requireActive(); await authorize(); requireActive(); return capability;
         } catch { throw new CloudOperatingAuthError('unavailable'); }
       },
     });

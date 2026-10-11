@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import type { CloudOperatingFirebaseSession } from './cloudOperatingAuth';
+import type { CloudClinicalCapability, CloudOperatingFirebaseSession } from './cloudOperatingAuth';
+import type { CloudClinicalCommand } from './cloudClinicalRepository';
 
 const PROJECT = 'dental-clinic-mmaakk888';
 const INSTANCE = '00000000-0000-4000-8000-000000000001';
@@ -11,6 +12,15 @@ const UID = 'synthetic-owner';
 const PASSWORD = 'synthetic-password-only';
 const AUTH_TIME = 1_700_000_000;
 const RECORD = '00000000-0000-4000-8000-000000000002';
+const CREATED_AT = '2026-10-10T10:00:00.000Z';
+function rawClinicalCommand(): CloudClinicalCommand {
+  return { operationId: INSTANCE, patientId: RECORD, sessionId: INSTANCE, expectedRevision: 0,
+    createdAt: CREATED_AT, action: 'visit', paidCents: 10000, data: {
+      type: 'حشو مصطنع', date: '2026-10-10', teethIds: ['ur1'], examinationCents: 10000,
+      services: [{ id: RECORD, name: 'حشو مصطنع', priceCents: 20000, tooth: 'ur1' }],
+      notes: '', treatmentStage: 'first', rootCanalStatus: '', visitStatus: 'follow_up',
+    } };
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -24,7 +34,7 @@ async function until(check: () => boolean) {
 }
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -43,6 +53,12 @@ async function fixture(options: {
   patientsFactoryGate?: Promise<void>;
   patientsMethodGate?: Promise<void>;
   patientsFailure?: unknown;
+  clinicalImportHook?: () => void;
+  clinicalFactoryGate?: Promise<void>;
+  clinicalMethodGate?: Promise<void>;
+  clinicalFailure?: unknown;
+  clinicalIntentKind?: 'clinical' | 'contact';
+  clinicalIntentActor?: string;
   onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
@@ -54,6 +70,8 @@ async function fixture(options: {
   let contactsActive: (() => boolean) | null = null;
   const patientCalls: string[] = [], patientInputs: unknown[] = [];
   let patientsActive: (() => boolean) | null = null;
+  const clinicalCalls: string[] = [], clinicalInputs: unknown[] = [];
+  let clinicalActive: (() => boolean) | null = null;
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -84,7 +102,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     window: { location,
       get localStorage() { throw new Error('No clinic records or remembered accounts may be read.'); },
       get sessionStorage() { throw new Error('No local sessions may be read.'); } },
-    crypto: { randomUUID: () => INSTANCE },
+    crypto: { randomUUID: () => INSTANCE }, TextEncoder,
     fetch: () => { throw new Error('Synthetic SDK test forbids real network requests.'); },
     require: (name: string) => {
       imports.push(name);
@@ -172,6 +190,42 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           };
         } };
       }
+      if (name === './firebaseCloudClinical') {
+        options.clinicalImportHook?.();
+        return { createFirebaseCloudClinical: async (target: unknown, settings: { isActive: () => boolean }) => {
+          assert.equal(target, auth); assert.equal(settings.isActive(), true);
+          clinicalCalls.push('factory'); clinicalActive = settings.isActive;
+          await options.clinicalFactoryGate;
+          const work = async <T>(name: string, input: unknown, result: T) => {
+            clinicalCalls.push(name); clinicalInputs.push(input);
+            await options.clinicalMethodGate;
+            if (options.clinicalFailure !== undefined) throw options.clinicalFailure;
+            return result;
+          };
+          const intent = (command: unknown, createdAt = '2026-10-10T10:00:00.000Z', status = 'prepared') => module.exports.__input({
+            schemaVersion: 1, clinicId: 'main', recordId: INSTANCE, operationId: INSTANCE,
+            actorUid: options.clinicalIntentActor ?? UID, kind: options.clinicalIntentKind ?? 'clinical', requestHash: '0'.repeat(64),
+            status, revision: status === 'prepared' ? 1 : 2, createdAt, command,
+          });
+          const recovered = () => rawClinicalCommand();
+          return {
+            repository: {
+              commit: (input: unknown) => work('commit', input, { status: 'committed', patientId: RECORD, sessionId: INSTANCE, revision: 1, fileNo: 1 }),
+              getProfile: (input: unknown) => work('getProfile', input, null),
+              getAccount: (input: unknown) => work('getAccount', input, null),
+              getSession: (input: unknown) => work('getSession', input, null),
+              listSessions: (input: unknown) => work('listSessions', input, { records: [], nextAfterId: null }),
+              listReceipts: (input: unknown) => work('listReceipts', input, { records: [], nextAfterId: null }),
+            },
+            journal: {
+              prepare: (kind: unknown, command: unknown, createdAt: string) => work('prepare', { kind, command, createdAt }, intent(command, createdAt)),
+              get: (id: string) => work('intentGet', id, intent(recovered())),
+              listPreparedPage: (kind: unknown, input: unknown) => work('listPreparedPage', { kind, input }, { records: [intent(recovered())], nextAfterId: null }),
+              cancel: (id: string) => work('cancel', id, intent(recovered(), undefined, 'cancelled')),
+            },
+          };
+        } };
+      }
       if (name === 'firebase/firestore/lite') return {
         getFirestore: (target: unknown, databaseId: string) => {
           assert.equal(target, app); assert.equal(databaseId, '(default)'); step('getFirestore'); return database;
@@ -198,6 +252,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
   return { api: module.exports, imports, calls, paths, forced, auth, location, contactCalls, contactInputs,
     contactsActive: () => contactsActive?.() ?? false,
     patientCalls, patientInputs, patientsActive: () => patientsActive?.() ?? false,
+    clinicalCalls, clinicalInputs, clinicalActive: () => clinicalActive?.() ?? false,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
     replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
@@ -212,7 +267,7 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical'].sort());
 });
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
@@ -356,7 +411,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(again, repository);
   assert.equal(Object.isFrozen(repository), true);
   assert.equal(h.contactsActive(), true);
-  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getContacts', 'getPatients', 'getState',
+  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getClinical', 'getContacts', 'getPatients', 'getState',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
   assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);
@@ -676,4 +731,193 @@ test('patient command/query validation and provider failures never expose payloa
   }
   assert.equal(h.paths.length, before); assert.deepEqual(h.patientCalls, ['factory']);
   await assert.rejects(repository.get(RECORD), error => !String(error).includes(PASSWORD)); await session.dispose();
+});
+
+type ClinicalTestMethod = 'commit' | 'getProfile' | 'getAccount' | 'getSession' | 'listSessions' | 'listReceipts'
+  | 'prepare' | 'intentGet' | 'listPreparedPage' | 'cancel';
+const CLINICAL_METHODS: readonly ClinicalTestMethod[] = ['commit', 'getProfile', 'getAccount', 'getSession', 'listSessions', 'listReceipts',
+  'prepare', 'intentGet', 'listPreparedPage', 'cancel'];
+function invokeClinical(capability: CloudClinicalCapability, method: ClinicalTestMethod, copy: <T>(value: T) => T): Promise<unknown> {
+  switch (method) {
+    case 'commit': return capability.repository.commit(copy(rawClinicalCommand()));
+    case 'getProfile': return capability.repository.getProfile(RECORD);
+    case 'getAccount': return capability.repository.getAccount(RECORD);
+    case 'getSession': return capability.repository.getSession(INSTANCE);
+    case 'listSessions': return capability.repository.listSessions(copy({ patientId: RECORD, limit: 2 }));
+    case 'listReceipts': return capability.repository.listReceipts(copy({ patientId: RECORD, limit: 2 }));
+    case 'prepare': return capability.journal.prepare('clinical', copy(rawClinicalCommand()), CREATED_AT);
+    case 'intentGet': return capability.journal.get(INSTANCE);
+    case 'listPreparedPage': return capability.journal.listPreparedPage('clinical', copy({ limit: 2 }));
+    case 'cancel': return capability.journal.cancel(INSTANCE);
+  }
+}
+
+test('clinical capability is explicit, lazy, frozen, clinical-only and reauthorizes before AND after each method', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+  await assert.rejects(session.getClinical()); assert.equal(h.imports.includes('./firebaseCloudClinical'), false);
+  await session.signIn(EMAIL, PASSWORD);
+  assert.deepEqual(h.clinicalCalls, []); assert.equal(h.imports.includes('./firebaseCloudClinical'), false);
+  const capability = await session.getClinical(); assert.equal(capability, await session.getClinical());
+  assert.deepEqual(h.clinicalCalls, ['factory']);
+  assert.deepEqual(Object.keys(capability).sort(), ['journal', 'repository']);
+  assert.deepEqual(Object.keys(capability.repository).sort(), ['commit', 'getAccount', 'getProfile', 'getSession', 'listReceipts', 'listSessions']);
+  assert.deepEqual(Object.keys(capability.journal).sort(), ['cancel', 'get', 'listPreparedPage', 'prepare']);
+  assert.equal(Object.isFrozen(capability), true); assert.equal(Object.isFrozen(capability.repository), true); assert.equal(Object.isFrozen(capability.journal), true);
+  assert.equal(h.clinicalActive(), true);
+  for (const method of CLINICAL_METHODS) {
+    const before = h.paths.length;
+    await invokeClinical(capability, method, h.api.__input);
+    assert.equal(h.paths.length, before + 2, method);
+  }
+  assert.deepEqual(h.clinicalCalls, ['factory', ...CLINICAL_METHODS]);
+  assert.deepEqual(h.contactCalls, []); assert.deepEqual(h.patientCalls, []);
+  await session.dispose(); assert.equal(h.clinicalActive(), false);
+});
+
+test('all retained clinical and journal methods stay revoked across same-UID relogin or runtime and identity loss', async () => {
+  for (const event of ['signOut', 'invalidate', 'replacement', 'hostname', 'emulator', 'dispose', 'observerFailure'] as const) {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const old = await session.getClinical();
+    if (event === 'signOut') { await session.signOut(); await session.signIn(EMAIL, PASSWORD); }
+    if (event === 'invalidate') session.invalidate();
+    if (event === 'replacement') h.replaceIdentity();
+    if (event === 'hostname') h.location.hostname = 'outside.example.invalid';
+    if (event === 'emulator') h.auth.emulatorConfig = {};
+    if (event === 'dispose') await session.dispose();
+    if (event === 'observerFailure') h.observerFailure();
+    for (const method of CLINICAL_METHODS) await assert.rejects(invokeClinical(old, method, h.api.__input), undefined, `${event}/${method}`);
+    assert.equal(h.clinicalActive(), false, event);
+    h.location.hostname = '127.0.0.1'; h.auth.emulatorConfig = null;
+    await assert.rejects(old.repository.getAccount(RECORD), undefined, 'restored runtime cannot resurrect a generation');
+    assert.deepEqual(h.clinicalCalls, ['factory']);
+    if (event === 'signOut') { const fresh = await session.getClinical(); assert.notEqual(fresh, old); await fresh.repository.getAccount(RECORD); }
+    await session.dispose();
+  }
+});
+
+test('clinical lazy import closed during loading never creates an adapter or returns a capability', async () => {
+  let dispose!: () => Promise<void>, closing: Promise<void> | null = null;
+  const h = await fixture({ clinicalImportHook: () => { closing = dispose(); } });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD); dispose = session.dispose;
+  await assert.rejects(session.getClinical()); await closing; assert.deepEqual(h.clinicalCalls, []);
+});
+
+test('deferred clinical factories reject after logout or same-UID object replacement', async () => {
+  for (const event of ['signOut', 'replaceIdentity'] as const) {
+    const gate = deferred(), h = await fixture({ clinicalFactoryGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const loading = session.getClinical(), rejected = assert.rejects(loading);
+    await until(() => h.clinicalCalls.includes('factory'));
+    if (event === 'signOut') await session.signOut(); else h.replaceIdentity();
+    assert.equal(h.clinicalActive(), false); gate.resolve(); await rejected;
+    assert.deepEqual(h.clinicalCalls, ['factory']); await session.dispose();
+  }
+});
+
+test('logout during initial clinical or journal authorization prevents every underlying data invocation', async () => {
+  for (const method of ['getClinical', ...CLINICAL_METHODS] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const capability = method === 'getClinical' ? null : await session.getClinical(); enabled = true;
+    const pending = method === 'getClinical' ? session.getClinical() : invokeClinical(capability!, method, h.api.__input);
+    const rejected = assert.rejects(pending); await until(() => reached);
+    const stopping = session.signOut(); gate.resolve(); await rejected; await stopping;
+    assert.deepEqual(h.clinicalCalls, method === 'getClinical' ? [] : ['factory'], method);
+    await session.dispose();
+  }
+});
+
+test('server-accepted clinical or recovery work may finish after logout but cannot publish its late result', async () => {
+  for (const method of CLINICAL_METHODS) {
+    const gate = deferred(), h = await fixture({ clinicalMethodGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const capability = await session.getClinical(), pending = invokeClinical(capability, method, h.api.__input);
+    const rejected = assert.rejects(pending); await until(() => h.clinicalCalls.includes(method));
+    await session.signOut(); gate.resolve(); await rejected;
+    assert.deepEqual(h.clinicalCalls, ['factory', method]); assert.equal(h.clinicalActive(), false);
+    await session.dispose();
+  }
+});
+
+test('clinical results require a fresh server membership check after the underlying method returns', async () => {
+  const membership: Record<string, unknown> = { schemaVersion: 1, clinicId: 'main', uid: UID, role: 'owner', status: 'active',
+    identityVersion: 1, verifiedAfter: AUTH_TIME };
+  const gate = deferred(), h = await fixture({ membership, clinicalMethodGate: gate.promise });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const capability = await session.getClinical(), pending = capability.repository.getAccount(RECORD), rejected = assert.rejects(pending);
+  await until(() => h.clinicalCalls.includes('getAccount')); membership.status = 'disabled'; gate.resolve(); await rejected;
+  assert.equal(session.getState().owner, null); assert.equal(h.clinicalActive(), false); await session.dispose();
+});
+
+test('clinical commands, page queries and journal preparation/page arguments snapshot before delayed authorization', async () => {
+  for (const method of ['commit', 'listSessions', 'listReceipts', 'prepare', 'listPreparedPage'] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getClinical(); enabled = true;
+    const command = h.api.__input(rawClinicalCommand()), page = h.api.__input({ patientId: RECORD, afterId: INSTANCE, limit: 2 });
+    const intentPage = h.api.__input({ afterId: INSTANCE, limit: 2 });
+    const pending = method === 'commit' ? cap.repository.commit(command) : method === 'prepare' ? cap.journal.prepare('clinical', command, CREATED_AT)
+      : method === 'listPreparedPage' ? cap.journal.listPreparedPage('clinical', intentPage) : cap.repository[method](page);
+    await until(() => reached);
+    command.operationId = RECORD; if (command.action === 'visit') { command.data.notes = 'Changed'; command.data.services[0].priceCents = 1; }
+    page.patientId = INSTANCE; page.limit = 50; intentPage.limit = 50; intentPage.afterId = RECORD;
+    gate.resolve(); await pending;
+    const received = h.clinicalInputs[0] as any;
+    if (method === 'commit' || method === 'prepare') {
+      const value = method === 'prepare' ? received.command : received;
+      assert.equal(value.operationId, INSTANCE); assert.equal(value.data.notes, ''); assert.equal(value.data.services[0].priceCents, 20000);
+      if (method === 'prepare') { assert.equal(received.kind, 'clinical'); assert.equal(received.createdAt, CREATED_AT); }
+    } else {
+      const value = method === 'listPreparedPage' ? received.input : received;
+      assert.equal(value.limit, 2); assert.equal(value.afterId, INSTANCE);
+      if (method !== 'listPreparedPage') assert.equal(value.patientId, RECORD);
+    }
+    await session.dispose();
+  }
+});
+
+test('malformed clinical or journal inputs and nonclinical kinds fail asynchronously before authorization or data calls', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const cap = await session.getClinical(), before = h.paths.length;
+  const malicious = new Proxy({}, { ownKeys() { throw new Error(PASSWORD); } });
+  for (const value of [{}, malicious]) {
+    for (const work of [() => cap.repository.commit(value as never), () => cap.repository.listSessions(value as never),
+      () => cap.repository.listReceipts(value as never), () => cap.journal.prepare('clinical', value, CREATED_AT)]) {
+      let pending!: Promise<unknown>; assert.doesNotThrow(() => { pending = work(); });
+      await assert.rejects(pending, error => !String(error).includes(PASSWORD));
+    }
+  }
+  for (const value of [h.api.__input({ limit: 0 }), malicious]) await assert.rejects(cap.journal.listPreparedPage('clinical', value), error => !String(error).includes(PASSWORD));
+  for (const id of ['', `${RECORD}\n`, Object.assign({}, { toString: () => { throw new Error(PASSWORD); } })]) {
+    for (const work of [() => cap.repository.getProfile(id as never), () => cap.repository.getAccount(id as never), () => cap.repository.getSession(id as never),
+      () => cap.journal.get(id as never), () => cap.journal.cancel(id as never)]) await assert.rejects(work(), error => !String(error).includes(PASSWORD));
+  }
+  for (const kind of ['contact', 'patient-profile'] as const) {
+    await assert.rejects(cap.journal.prepare(kind, h.api.__input(rawClinicalCommand()), CREATED_AT));
+    await assert.rejects(cap.journal.listPreparedPage(kind));
+  }
+  await assert.rejects(cap.journal.prepare('clinical', h.api.__input(rawClinicalCommand()), '2026-10-11T10:00:00.000Z'));
+  assert.equal(h.paths.length, before); assert.deepEqual(h.clinicalCalls, ['factory']); await session.dispose();
+});
+
+test('clinical and journal provider and hostile Proxy failures stay fixed and never leak account payloads', async () => {
+  for (const clinicalFailure of [new Error(PASSWORD), new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } })]) {
+    const h = await fixture({ clinicalFailure }), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getClinical();
+    for (const method of CLINICAL_METHODS) await assert.rejects(invokeClinical(cap, method, h.api.__input), error => {
+      assert.equal(String(error).includes(PASSWORD), false); assert.equal(h.api.cloudOperatingAuthErrorMessage(error).includes(PASSWORD), false); return true;
+    });
+    await session.dispose();
+  }
+});
+
+test('clinical journal rejects another domain or another actor returned by its adapter', async () => {
+  for (const options of [{ clinicalIntentKind: 'contact' as const }, { clinicalIntentActor: 'different-synthetic-owner' }]) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getClinical();
+    for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'cancel'] as const) await assert.rejects(invokeClinical(cap, method, h.api.__input));
+    await session.dispose();
+  }
 });
