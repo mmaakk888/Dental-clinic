@@ -150,6 +150,33 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const [expenseNote, setExpenseNote] = useState('');
   const [isFixedExpense, setIsFixedExpense] = useState(false);
   const [expenseInvoiceImage, setExpenseInvoiceImage] = useState<string | undefined>(undefined);
+  const [isCompressingInvoice, setIsCompressingInvoice] = useState(false);
+  const [invoiceImageSize, setInvoiceImageSize] = useState<number | null>(null);
+  const invoiceUploadRef = useRef({ request: 0, editor: 0, controller: null as AbortController | null, pending: false });
+  // Retained upload callbacks must consult the current render, not their old permission closure.
+  const invoiceAccessRef = useRef({ mounted: true, canViewExpenses, expenseOpen: isExpenseModalOpen, ocrOpen: isOcrModalOpen, ocrEditor: 0, saving });
+  Object.assign(invoiceAccessRef.current, { canViewExpenses, expenseOpen: isExpenseModalOpen, ocrOpen: isOcrModalOpen, saving });
+  const invoiceEditor = invoiceUploadRef.current.editor;
+  const ocrEditor = invoiceAccessRef.current.ocrEditor;
+  const invalidateInvoiceUpload = () => {
+    invoiceUploadRef.current.request += 1;
+    invoiceUploadRef.current.controller?.abort();
+    invoiceUploadRef.current.controller = null;
+    invoiceUploadRef.current.pending = false;
+  };
+  const resetInvoiceUpload = () => {
+    invalidateInvoiceUpload();
+    invoiceUploadRef.current.editor += 1;
+    setIsCompressingInvoice(false);
+    setInvoiceImageSize(null);
+  };
+  const canEditExpenseInvoice = () => invoiceAccessRef.current.mounted
+    && invoiceAccessRef.current.canViewExpenses && invoiceAccessRef.current.expenseOpen
+    && !invoiceAccessRef.current.saving && invoiceUploadRef.current.editor === invoiceEditor;
+  React.useEffect(() => {
+    invoiceAccessRef.current.mounted = true;
+    return () => { invoiceAccessRef.current.mounted = false; invalidateInvoiceUpload(); };
+  }, []);
   const [expenseFilterCategory, setExpenseFilterCategory] = useState<'all' | 'fixed' | 'supplies' | 'maintenance'>('all');
   const currentMonth = localDateKey().slice(0, 7);
   const [expenseMonth, setExpenseMonth] = useState<string | 'all'>(currentMonth);
@@ -177,6 +204,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   React.useEffect(() => {
     if ((activeTab === 'expenses' && !canViewExpenses) || (activeTab === 'analytics' && !canViewAnalytics)) setActiveTab('overview');
     if (!canViewExpenses) {
+      invoiceAccessRef.current.expenseOpen = false;
+      invoiceAccessRef.current.ocrOpen = false;
+      invoiceAccessRef.current.ocrEditor += 1;
+      resetInvoiceUpload();
       setIsExpenseModalOpen(false);
       setIsOcrModalOpen(false);
       setViewingExpenseDetail(null);
@@ -186,7 +217,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
   // Close Expense Modal Handler
   const handleCloseExpenseModal = () => {
-    if (saving) return;
+    if (!invoiceAccessRef.current.mounted || invoiceAccessRef.current.saving || invoiceUploadRef.current.editor !== invoiceEditor) return;
+    invoiceAccessRef.current.expenseOpen = false;
+    resetInvoiceUpload();
     setIsExpenseModalOpen(false);
     if (onCloseAddExpenseModal) {
       onCloseAddExpenseModal();
@@ -200,6 +233,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       return;
     }
     if (isOpenAddExpenseModal && canViewExpenses) {
+      resetInvoiceUpload();
+      invoiceAccessRef.current.expenseOpen = true;
       setActiveTab('expenses');
       setEditingExpense(null);
       setExpenseTitle('');
@@ -268,31 +303,53 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     return `${amt.toLocaleString()} ج.م`;
   };
 
-  const handleInvoiceFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!canViewExpenses) return;
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-        showToast('اختر صورة بصيغة JPG أو PNG أو WEBP', 'warning');
-        e.target.value = '';
-        return;
+  const handleInvoiceFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = ''; // A failed selection may be selected again, including on iPhone.
+    if (!file || !canEditExpenseInvoice()) return;
+    invalidateInvoiceUpload();
+    setIsCompressingInvoice(false);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) {
+      showToast('اختر صورة JPG أو PNG أو WebP بحجم أقل من ٨ ميجابايت.', 'warning');
+      return;
+    }
+    const request = invoiceUploadRef.current.request;
+    const controller = new AbortController();
+    invoiceUploadRef.current.controller = controller;
+    invoiceUploadRef.current.pending = true;
+    setIsCompressingInvoice(true);
+    const isCurrent = () => canEditExpenseInvoice() && request === invoiceUploadRef.current.request && !controller.signal.aborted;
+    try {
+      const { compressInvoiceImage } = await import('../../utils/invoiceImageCompression');
+      if (!isCurrent()) return;
+      const compressed = await compressInvoiceImage(file, { signal: controller.signal });
+      if (!isCurrent()) return;
+      setExpenseInvoiceImage(compressed.dataUrl);
+      setInvoiceImageSize(compressed.byteLength);
+      showToast('تم تجهيز نسخة صغيرة من الفاتورة. راجع وضوحها ثم احفظ المصروف.', 'success');
+    } catch {
+      if (isCurrent()) showToast('تعذر تصغير الصورة بوضوح مناسب. جرّب صورة أوضح؛ بيانات المصروف لم تتغير.', 'warning');
+    } finally {
+      if (isCurrent()) {
+        invoiceUploadRef.current.pending = false;
+        invoiceUploadRef.current.controller = null;
+        setIsCompressingInvoice(false);
       }
-      if (file.size > 8 * 1024 * 1024) {
-        showToast('حجم صورة الفاتورة كبير جداً، يرجى اختيار صورة أقل من 8 ميجابايت', 'warning');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setExpenseInvoiceImage(reader.result as string);
-        showToast('تم إرفاق صورة الفاتورة بنجاح 📷', 'success');
-      };
-      reader.onerror = () => showToast('تعذر قراءة الصورة، حاول اختيارها مرة أخرى', 'error');
-      reader.readAsDataURL(file);
     }
   };
 
+  const handleRemoveInvoiceImage = () => {
+    if (!canEditExpenseInvoice()) return;
+    invalidateInvoiceUpload();
+    setIsCompressingInvoice(false);
+    setInvoiceImageSize(null);
+    setExpenseInvoiceImage(undefined);
+  };
+
   const handleOpenAddExpense = (presetTitle?: string, presetCat?: 'fixed' | 'supplies' | 'maintenance' | 'other', presetType?: NonNullable<Expense['expenseType']>) => {
-    if (!canViewExpenses) return;
+    if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses || invoiceAccessRef.current.saving) return;
+    resetInvoiceUpload();
+    invoiceAccessRef.current.expenseOpen = true;
     setEditingExpense(null);
     setExpenseTitle(presetTitle || '');
     setExpenseCategory(presetCat || 'supplies');
@@ -306,7 +363,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   };
 
   const handleOpenEditExpense = (exp: Expense) => {
-    if (!canViewExpenses) return;
+    if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses || invoiceAccessRef.current.saving) return;
+    resetInvoiceUpload();
+    invoiceAccessRef.current.expenseOpen = true;
     setEditingExpense(exp);
     setExpenseTitle(exp.title);
     setExpenseCategory(exp.category);
@@ -321,7 +380,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
   const handleSaveExpenseForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canViewExpenses || saving) return;
+    if (!canEditExpenseInvoice() || invoiceUploadRef.current.pending) return;
     if (!expenseTitle.trim()) {
       showToast('يرجى كتابة بيان / عنوان المصروف', 'warning');
       return;
@@ -359,8 +418,20 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     };
     const savedPayload = { ...payload, ...(editingExpense?.invoiceDate ? { invoiceDate: expenseDate } : {}) };
 
-    await confirmSave(() => onSaveExpense ? onSaveExpense(savedPayload, editingExpense ?? undefined) : onAddExpense(savedPayload), () => {
-      handleCloseExpenseModal();
+    await confirmSave(() => {
+      if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses
+        || !invoiceAccessRef.current.expenseOpen || invoiceUploadRef.current.editor !== invoiceEditor || invoiceUploadRef.current.pending) {
+        throw new Error('أُغلق نموذج المصروف أو لم تعد صلاحية تسجيله متاحة.');
+      }
+      return onSaveExpense ? onSaveExpense(savedPayload, editingExpense ?? undefined) : onAddExpense(savedPayload);
+    }, () => {
+      // This save owns its busy flag. Close only its accepted draft, not a later editor.
+      if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses
+        || !invoiceAccessRef.current.expenseOpen || invoiceUploadRef.current.editor !== invoiceEditor) return;
+      invoiceAccessRef.current.expenseOpen = false;
+      resetInvoiceUpload();
+      setIsExpenseModalOpen(false);
+      onCloseAddExpenseModal?.();
       showToast(editingExpense ? 'تم تعديل بيانات المصروف بنجاح' : 'تم تسجيل المصروف وإرفاق الفاتورة بنجاح', 'success');
     });
   };
@@ -521,7 +592,12 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
             <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto min-w-0">
               <button
                 type="button"
-                onClick={() => setIsOcrModalOpen(true)}
+                onClick={() => {
+                  if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses || invoiceAccessRef.current.ocrOpen) return;
+                  invoiceAccessRef.current.ocrEditor += 1;
+                  invoiceAccessRef.current.ocrOpen = true;
+                  setIsOcrModalOpen(true);
+                }}
                 className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-700 to-indigo-800 hover:from-emerald-800 hover:to-indigo-900 text-white text-xs font-black shadow-md cursor-pointer transition-all flex items-center justify-center gap-2 shrink-0 border border-emerald-400/30"
               >
                 <Sparkles className="w-4 h-4 text-emerald-300" />
@@ -778,7 +854,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </button>
             </div>
 
-            <form onSubmit={handleSaveExpenseForm} aria-busy={saving} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveExpenseForm} aria-busy={saving || isCompressingInvoice} className="space-y-4 text-xs">
               <fieldset disabled={saving} className="contents">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -888,7 +964,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   {expenseInvoiceImage && (
                     <button
                       type="button"
-                      onClick={() => setExpenseInvoiceImage(undefined)}
+                      onClick={handleRemoveInvoiceImage}
                       className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
                     >
                       حذف الصورة
@@ -897,7 +973,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 </div>
 
                 <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  أرفق الصورة للرجوع إليها. لتسجيل الأصناف والكميات استخدم «قراءة صورة فاتورة» من سجل المصروفات.
+                  تُجهّز نسخة JPEG صغيرة داخل جهازك، ولا تُحفظ قبل اعتماد المصروف. راجع وضوح الصورة؛ الأصل لا يُرفع. لتسجيل الأصناف استخدم «قراءة صورة فاتورة».
+                </p>
+                <p role="status" aria-live="polite" className="text-[11px] text-emerald-800">
+                  {isCompressingInvoice ? 'جارٍ تصغير صورة الفاتورة…' : invoiceImageSize !== null ? `النسخة المرفقة: ${Math.ceil(invoiceImageSize / 1024)} كيلوبايت. راجع الأرقام قبل الحفظ.` : ''}
                 </p>
 
                 {expenseInvoiceImage ? (
@@ -949,6 +1028,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 </button>
                 <button
                   type="submit"
+                  disabled={saving || isCompressingInvoice}
                   className="px-5 py-2 rounded-xl bg-[#0f3d3e] hover:bg-[#1b5e5a] text-white text-xs font-bold shadow-md cursor-pointer active:scale-95 transition"
                 >
                   {editingExpense ? 'حفظ التعديلات' : 'حفظ المصروف'}
@@ -1026,16 +1106,18 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       {/* ERP OCR Invoice Modal */}
       {canViewExpenses && <InvoiceOcrModal
         isOpen={isOcrModalOpen}
-        onClose={() => setIsOcrModalOpen(false)}
+        canUseInvoice={() => invoiceAccessRef.current.mounted && invoiceAccessRef.current.canViewExpenses && invoiceAccessRef.current.ocrOpen && invoiceAccessRef.current.ocrEditor === ocrEditor}
+        onClose={() => { invoiceAccessRef.current.ocrOpen = false; invoiceAccessRef.current.ocrEditor += 1; setIsOcrModalOpen(false); }}
         existingExpenses={expenses}
         onSaveExpense={async (newExp) => {
-          if (!canViewExpenses) throw new Error('هذا الحساب لا يملك صلاحية تسجيل المصروفات.');
+          if (!invoiceAccessRef.current.mounted || !invoiceAccessRef.current.canViewExpenses || !invoiceAccessRef.current.ocrOpen || invoiceAccessRef.current.ocrEditor !== ocrEditor) throw new Error('هذا الحساب لا يملك صلاحية تسجيل المصروفات.');
           if (onSaveExpense) {
             await onSaveExpense(newExp);
           } else {
             await onAddExpense(newExp);
           }
-          showToast('تم تسجيل الفاتورة وبنودها بنجاح 🧾', 'success');
+          if (invoiceAccessRef.current.mounted && invoiceAccessRef.current.canViewExpenses
+            && invoiceAccessRef.current.ocrOpen && invoiceAccessRef.current.ocrEditor === ocrEditor) showToast('تم تسجيل الفاتورة وبنودها بنجاح 🧾', 'success');
         }}
       />}
 

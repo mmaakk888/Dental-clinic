@@ -1,4 +1,5 @@
 import { Patient, Appointment, Expense, ExpenseItem } from '../types';
+import { parseInvoiceExtraction } from '../utils/invoiceExtraction';
 import { appointmentDuration, appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, occupiesAppointmentSlot } from '../components/appointments/appointmentScheduling';
 
 export interface ExtractedInvoice {
@@ -79,7 +80,7 @@ export const AiService = {
         body: JSON.stringify({ imageBase64, mimeType }),
       });
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      return parseInvoiceExtraction(await res.json());
     } catch (err) {
       throw new Error('تعذر استخراج بيانات الفاتورة. راجع اتصال الخدمة أو أدخل البنود يدويًا.');
     }

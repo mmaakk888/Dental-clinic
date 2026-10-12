@@ -7,12 +7,14 @@ import { localDateISO, isValidAppointmentDate } from '../appointments/appointmen
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { assertUniqueSupplierInvoice } from '../../utils/expenseUtils';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { invoiceFinancialDraft } from '../../utils/invoiceFinancialDraft';
 import '../common/ActionDialog.css';
 
 interface InvoiceOcrModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveExpense: (expense: Omit<Expense, 'id'>) => void | Promise<void>;
+  canUseInvoice: () => boolean;
   existingExpenses?: Expense[];
 }
 
@@ -20,14 +22,52 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   isOpen,
   onClose,
   onSaveExpense,
+  canUseInvoice,
   existingExpenses = [],
 }) => {
   const { showToast } = useToastAndConfirm();
   const { saving, run: confirmSave } = useConfirmedAction();
   const committingRef = useRef(false);
-  const handleClose = () => { if (!committingRef.current) onClose(); };
+  const uploadRef = useRef({ request: 0, epoch: 0, controller: null as AbortController | null, pending: false });
+  const accessRef = useRef({ mounted: true, isOpen, canUseInvoice, onClose, onSaveExpense });
+  if (accessRef.current.isOpen !== isOpen) {
+    uploadRef.current.request += 1;
+    uploadRef.current.epoch += 1;
+    uploadRef.current.controller?.abort();
+    uploadRef.current.controller = null;
+    uploadRef.current.pending = false;
+  }
+  Object.assign(accessRef.current, { isOpen, canUseInvoice, onClose, onSaveExpense });
+  const viewEpoch = uploadRef.current.epoch;
+  const canAct = () => {
+    const access = accessRef.current;
+    if (!access.mounted || !access.isOpen || viewEpoch !== uploadRef.current.epoch) return false;
+    let allowed = false;
+    try { allowed = access.canUseInvoice(); } catch { return false; }
+    return allowed && accessRef.current.mounted && accessRef.current.isOpen && viewEpoch === uploadRef.current.epoch;
+  };
+  const invalidateUpload = () => {
+    uploadRef.current.request += 1;
+    uploadRef.current.controller?.abort();
+    uploadRef.current.controller = null;
+    uploadRef.current.pending = false;
+  };
+  const handleClose = () => {
+    if (committingRef.current || !canAct()) return;
+    invalidateUpload();
+    accessRef.current.isOpen = false;
+    uploadRef.current.epoch += 1;
+    setIsExtracting(false);
+    setIsCompressing(false);
+    resetInvoiceDraft();
+    setHasInvoiceDraft(false);
+    accessRef.current.onClose();
+  };
   const dialogRef = useAppointmentDialog(isOpen, handleClose);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [hasInvoiceDraft, setHasInvoiceDraft] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [invoiceImageSize, setInvoiceImageSize] = useState<number | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractedData, setExtractedData] = useState<ExtractedInvoice | null>(null);
 
@@ -65,34 +105,68 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
 
-  const extractionRequest = useRef(0);
+  const resetInvoiceDraft = () => {
+    setImagePreview(null); setInvoiceImageSize(null); setExtractedData(null);
+    setSupplierName(''); setSupplierPhone(''); setSupplierAddress(''); setInvoiceNumber('');
+    setTaxNumber(''); setCommercialRecord(''); setNotes(''); setTitle('');
+    setLineItems([]); setFieldConfidence({}); setPriceVarianceAlerts([]);
+    setSubtotal(''); setTotalAmount(''); setDiscount(''); setTax(''); setPaidAmount(''); setRemainingAmount('');
+    setInvoiceDate(localDateISO()); setInvoiceTime('12:00'); setPaymentMethod('cash'); setCategory('supplies'); setCurrency('ج.م');
+    setZoomLevel(1); setRotationDegree(0);
+  };
+
   useEffect(() => {
-    if (!isOpen) { extractionRequest.current += 1; setIsExtracting(false); }
-    return () => { extractionRequest.current += 1; };
+    if (!isOpen) {
+      invalidateUpload();
+      setIsExtracting(false);
+      setIsCompressing(false);
+      resetInvoiceDraft();
+      setHasInvoiceDraft(false);
+    }
+    return () => { invalidateUpload(); };
   }, [isOpen]);
+  useEffect(() => {
+    accessRef.current.mounted = true;
+    return () => { accessRef.current.mounted = false; invalidateUpload(); };
+  }, []);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) return showToast('اختر صورة JPG أو PNG أو WebP بحجم أقل من ٨ ميجابايت.', 'warning');
-      const requestId = ++extractionRequest.current;
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = '';
+    if (!file || !canAct() || committingRef.current) return;
+    invalidateUpload();
+    setIsExtracting(false);
+    setIsCompressing(false);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) {
+      showToast('اختر صورة JPG أو PNG أو WebP بحجم أقل من ٨ ميجابايت.', 'warning');
+      return;
+    }
+    const request = uploadRef.current.request;
+    const controller = new AbortController();
+    uploadRef.current.controller = controller;
+    uploadRef.current.pending = true;
+    const isCurrent = () => canAct() && request === uploadRef.current.request && !controller.signal.aborted;
+    setHasInvoiceDraft(true);
+    setIsCompressing(true);
+    resetInvoiceDraft();
+    try {
+      const { compressInvoiceImage } = await import('../../utils/invoiceImageCompression');
+      if (!isCurrent()) return;
+      const compressed = await compressInvoiceImage(file, { signal: controller.signal });
+      if (!isCurrent()) return;
+      setImagePreview(compressed.dataUrl);
+      setInvoiceImageSize(compressed.byteLength);
+      setIsCompressing(false);
       setIsExtracting(true);
-      setSupplierName(''); setSupplierPhone(''); setSupplierAddress(''); setInvoiceNumber('');
-      setTaxNumber(''); setCommercialRecord(''); setNotes(''); setTitle('');
-      setLineItems([]); setFieldConfidence({}); setExtractedData(null);
-      setSubtotal(''); setTotalAmount(''); setDiscount(''); setTax(''); setPaidAmount(''); setRemainingAmount('');
-      setInvoiceDate(localDateISO()); setInvoiceTime('12:00'); setPaymentMethod('cash'); setCategory('supplies'); setCurrency('ج.م');
-      const reader = new FileReader();
-      reader.onerror = () => { if (requestId === extractionRequest.current) { setIsExtracting(false); showToast('تعذر فتح الصورة. جرّب اختيارها مرة أخرى.', 'warning'); } };
-      reader.onload = async () => {
-        if (requestId !== extractionRequest.current) return;
-        const base64 = reader.result as string;
-        setImagePreview(base64);
-        setIsExtracting(true);
-
-        try {
-        const data = await AiService.extractInvoice(base64, file.type || 'image/jpeg');
-        if (requestId !== extractionRequest.current) return;
+      try {
+        // Existing disabled-by-default endpoint only; compression never enables an AI provider.
+        const data = await AiService.extractInvoice(compressed.dataUrl, compressed.mimeType);
+        if (!isCurrent()) return;
+        const financialDraft = invoiceFinancialDraft(data);
+        if (data.paymentMethod && !['cash', 'card', 'transfer', 'credit', 'deferred'].includes(data.paymentMethod)
+          || data.category && !['supplies', 'fixed', 'maintenance', 'other'].includes(data.category)) {
+          throw new Error('Invalid invoice classification.');
+        }
         setExtractedData(data);
 
         // Populate fields
@@ -105,20 +179,18 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
         if (data.invoiceNumber) setInvoiceNumber(data.invoiceNumber);
         if (data.invoiceDate) setInvoiceDate(data.invoiceDate);
         if (data.invoiceTime) setInvoiceTime(data.invoiceTime);
-        if (data.paymentMethod) setPaymentMethod(data.paymentMethod as any);
-        if (data.category) setCategory(data.category as any);
+        if (data.paymentMethod) setPaymentMethod(data.paymentMethod);
+        if (data.category) setCategory(data.category);
         if (data.currency) setCurrency(data.currency);
         if (data.notes) setNotes(data.notes);
 
         // Amounts
-        const netTotal = data.totalAmount || 0;
-        setTotalAmount(netTotal);
-        setSubtotal(data.subtotal ?? netTotal);
-        setDiscount(data.discount || 0);
-        setTax(data.tax || 0);
-        const extractedPaid = data.paidAmount ?? (data.remainingAmount !== undefined ? Math.max(0, netTotal - data.remainingAmount) : ['credit', 'deferred'].includes(data.paymentMethod || '') ? 0 : netTotal);
-        setPaidAmount(extractedPaid);
-        setRemainingAmount(Math.max(0, netTotal - extractedPaid));
+        setTotalAmount(financialDraft.totalAmount);
+        setSubtotal(financialDraft.subtotal);
+        setDiscount(financialDraft.discount);
+        setTax(financialDraft.tax);
+        setPaidAmount(financialDraft.paidAmount);
+        setRemainingAmount(financialDraft.remainingAmount);
 
         // Line Items
         if (data.lineItems && data.lineItems.length > 0) {
@@ -143,17 +215,38 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
           setFieldConfidence(data.fieldConfidence);
         }
 
-        } catch (error) {
-          if (requestId !== extractionRequest.current) return;
+        } catch {
+          if (!isCurrent()) return;
           setExtractedData(null);
           setLineItems([]);
-          showToast(error instanceof Error ? error.message : 'تعذر قراءة الفاتورة. أدخل التفاصيل يدويًا.', 'warning');
-        } finally {
-          if (requestId === extractionRequest.current) setIsExtracting(false);
+          showToast('الاستخراج التلقائي غير متاح الآن. الصورة الصغيرة مرفقة؛ أدخل البيانات وراجعها يدويًا.', 'warning');
         }
-      };
-      reader.readAsDataURL(file);
+    } catch {
+      if (isCurrent()) showToast('تعذر تصغير الصورة بوضوح مناسب. جرّب صورة أوضح أو أكمل التفاصيل يدويًا بدون مرفق.', 'warning');
+    } finally {
+      if (isCurrent()) {
+        uploadRef.current.pending = false;
+        uploadRef.current.controller = null;
+        setIsExtracting(false);
+        setIsCompressing(false);
+      }
     }
+  };
+
+  const handleStopReading = () => {
+    if (!canAct() || committingRef.current) return;
+    invalidateUpload();
+    setIsExtracting(false);
+    setIsCompressing(false);
+  };
+  const handleRemoveImage = () => {
+    if (!canAct() || committingRef.current) return;
+    invalidateUpload();
+    setIsExtracting(false);
+    setIsCompressing(false);
+    setImagePreview(null);
+    setInvoiceImageSize(null);
+    setExtractedData(null);
   };
 
   // Re-calculate Line Item Total
@@ -258,21 +351,34 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   }, [lineItems, existingExpenses]);
 
   const handleSave = async () => {
-    if (committingRef.current) return;
-    if (isExtracting) return showToast('انتظر انتهاء قراءة الصورة أو أدخل الفاتورة بعد توقف القراءة.', 'warning');
+    if (committingRef.current || !canAct()) return;
+    if (uploadRef.current.pending || isExtracting || isCompressing) return showToast('انتظر تجهيز الصورة أو أوقف القراءة لإدخال التفاصيل يدويًا.', 'warning');
     if (!isValidAppointmentDate(invoiceDate)) return showToast('اختر تاريخ فاتورة صحيحًا.', 'warning');
-    const finalAmount = typeof totalAmount === 'number' ? totalAmount : itemsSum;
+    if (totalAmount === '') return showToast('أدخل الإجمالي صراحةً أو استخدم زر مطابقة إجمالي الأصناف.', 'warning');
+    const finalAmount = totalAmount;
     if (!Number.isFinite(finalAmount) || finalAmount <= 0) return showToast('أدخل إجمالي فاتورة صحيحًا أكبر من صفر.', 'warning');
-    const finalPaid = typeof paidAmount === 'number' ? paidAmount : ['credit', 'deferred'].includes(paymentMethod) ? 0 : finalAmount;
+    if (paidAmount === '') return showToast('أدخل المبلغ المسدّد فعلًا؛ اكتب صفرًا إن لم تدفع.', 'warning');
+    const finalPaid = paidAmount;
     if (!Number.isFinite(finalPaid) || finalPaid < 0 || finalPaid > finalAmount) return showToast('المبلغ المسدّد يجب أن يكون بين صفر وإجمالي الفاتورة.', 'warning');
+    let verifiedFinancials: ReturnType<typeof invoiceFinancialDraft>;
+    try {
+      verifiedFinancials = invoiceFinancialDraft({ totalAmount: finalAmount, paidAmount: finalPaid,
+        ...(typeof subtotal === 'number' ? { subtotal } : {}),
+        ...(typeof discount === 'number' ? { discount } : {}),
+        ...(typeof tax === 'number' ? { tax } : {}) });
+    } catch {
+      return showToast('راجع مبالغ الفاتورة؛ استخدم أرقامًا غير سالبة بحد أقصى منزلتين للقروش.', 'warning');
+    }
     if ([subtotal, discount, tax].some(value => value !== '' && (!Number.isFinite(value) || value < 0))) return showToast('راجع الإجمالي والخصم والضريبة؛ لا تقبل مبالغ سالبة أو غير صحيحة.', 'warning');
-    if (lineItems.some(item => !item.itemName.trim() || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0 || !Number.isFinite(item.total) || item.total < 0)) return showToast('راجع أسماء الأصناف والكميات والأسعار قبل الحفظ.', 'warning');
+    if (lineItems.some(item => !item.itemName.trim() || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0 || !Number.isFinite(item.total) || item.total < 0 || [item.discount, item.tax].some(value => value !== undefined && (!Number.isFinite(value) || value < 0)))) return showToast('راجع أسماء الأصناف والكميات والأسعار قبل الحفظ.', 'warning');
     const finalSupplier = supplierName.trim() || title.trim() || 'مورد مستلزمات طبية';
     try { assertUniqueSupplierInvoice(existingExpenses, { title: finalSupplier, supplierName: finalSupplier, invoiceNumber }); }
     catch (error) { return showToast(error instanceof Error ? error.message : 'راجع رقم الفاتورة والمورّد.', 'warning'); }
 
     committingRef.current = true;
-    try { await confirmSave(() => onSaveExpense({
+    try { await confirmSave(() => {
+      if (!canAct()) throw new Error('لم تعد صلاحية تسجيل المصروفات متاحة.');
+      return accessRef.current.onSaveExpense({
       title: finalSupplier,
       supplierName: finalSupplier,
       supplierPhone: supplierPhone.trim() || undefined,
@@ -289,7 +395,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       discount: typeof discount === 'number' ? discount : 0,
       tax: typeof tax === 'number' ? tax : 0,
       paidAmount: finalPaid,
-      remainingAmount: finalAmount - finalPaid,
+      remainingAmount: verifiedFinancials.remainingAmount as number,
       currency,
       date: invoiceDate,
       note: notes.trim() || undefined,
@@ -308,7 +414,12 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
       ],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    }), onClose); }
+    });
+    }, () => {
+      if (!canAct()) return;
+      invalidateUpload(); accessRef.current.isOpen = false; uploadRef.current.epoch += 1;
+      resetInvoiceDraft(); setHasInvoiceDraft(false); accessRef.current.onClose();
+    }); }
     finally { committingRef.current = false; }
   };
 
@@ -330,7 +441,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
   if (!isOpen) return null;
   return (
-    <div onClick={handleClose} aria-busy={saving} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
+    <div onClick={handleClose} aria-busy={saving || isExtracting || isCompressing} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="invoice-action-title" tabIndex={-1} dir="rtl" data-action-tone="rose" onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed clinic-action-dialog bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-5xl flex flex-col overflow-hidden">
         
         {/* Header */}
@@ -353,7 +464,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"><fieldset disabled={saving} className="contents">
           
           {/* Image Uploader Area if no preview */}
-          {!imagePreview ? (
+          {!imagePreview && (
             <div className="border-2 border-dashed border-emerald-300 hover:border-emerald-500 bg-emerald-50/40 rounded-3xl p-10 text-center transition cursor-pointer relative shadow-xs group">
               <input
                 type="file"
@@ -371,11 +482,17 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                 أرفق الصورة وأدخل البيانات يدويًا. الاستخراج التلقائي يحتاج إعداد خدمة الذكاء الاصطناعي؛ راجع أي نتيجة قبل الحفظ.
               </p>
             </div>
-          ) : (
+          )}
+          {!hasInvoiceDraft && <button type="button" onClick={() => { if (canAct()) { resetInvoiceDraft(); setHasInvoiceDraft(true); } }} className="clinic-action-cancel w-full">إدخال تفاصيل الفاتورة يدويًا بدون صورة</button>}
+          {(isCompressing || isExtracting) && <div role="status" aria-live="polite" className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-900">
+            <p>{isCompressing ? 'جارٍ تجهيز نسخة صغيرة من الصورة داخل جهازك…' : 'جارٍ محاولة قراءة الفاتورة عبر الخدمة الحالية؛ لم يُحفظ أي شيء.'}</p>
+            <button type="button" onClick={handleStopReading} className="mt-2 min-h-11 font-bold underline">إيقاف القراءة والإدخال يدويًا</button>
+          </div>}
+          {(imagePreview || hasInvoiceDraft) && (
             <div className="space-y-6">
               
               {/* Image Preview Card with Zoom Controls */}
-              <div className="bg-slate-950 rounded-2xl border border-slate-800 p-3 flex flex-col sm:flex-row items-center gap-3">
+              {imagePreview && <div className="bg-slate-950 rounded-2xl border border-slate-800 p-3 flex flex-col sm:flex-row items-center gap-3">
                 <div className="relative overflow-hidden rounded-xl bg-slate-900 border border-slate-800 w-full sm:w-1/3 min-h-[160px] max-h-[220px] flex items-center justify-center">
                   <img
                     src={imagePreview}
@@ -399,30 +516,19 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                 <div className="flex-1 space-y-2 text-white">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                      <Sparkles className="w-4 h-4" /> المستند الأصلي المرفق
+                      <Sparkles className="w-4 h-4" /> نسخة صغيرة للمراجعة
                     </span>
                     <button
                       type="button"
-                      onClick={() => { setImagePreview(null); setExtractedData(null); }}
+                      onClick={handleRemoveImage}
                       className="px-3 py-1.5 rounded-xl bg-rose-600/90 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-1"
                     >
                       <Trash2 className="w-3.5 h-3.5" /> تغيير الصورة
                     </button>
                   </div>
-                  <p className="text-xs text-slate-300">الصورة مرفقة للمعاينة. راجع البنود والمبالغ ثم اضغط حفظ لتسجيل الفاتورة.</p>
+                  <p className="text-xs text-slate-300">{invoiceImageSize !== null && `${Math.ceil(invoiceImageSize / 1024)} كيلوبايت. `}الأصل لا يُرفع. راجع وضوح الصورة والبنود والمبالغ ثم احفظ الفاتورة؛ الضغط لا يفعّل خدمة ذكاء اصطناعي مجانية.</p>
                 </div>
-              </div>
-
-              {/* Extraction Processing State */}
-              {isExtracting && (
-                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-300 flex items-center gap-3 animate-pulse">
-                  <Sparkles className="w-6 h-6 text-emerald-600 animate-spin" />
-                  <div>
-                    <h5 className="text-sm font-black text-emerald-900">جاري قراءة وتفنيط الفاتورة بالذكاء الاصطناعي (Gemini 3.6)...</h5>
-                    <p className="text-xs text-emerald-700">استخراج اسم المورد، الرقم الضريبي، جدول الأصناف، الخصم، والضريبة...</p>
-                  </div>
-                </div>
-              )}
+              </div>}
 
               {/* Price Variance Alert Banner if detected */}
               {priceVarianceAlerts.length > 0 && (
@@ -441,6 +547,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                 </div>
               )}
 
+              <fieldset disabled={saving || isCompressing || isExtracting} className="contents">
               {/* SECTION 1: Supplier & Invoice Metadata Fields */}
               <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200/90 space-y-4">
                 <h4 className="text-xs font-black text-slate-800 flex items-center gap-2 border-b border-slate-200 pb-2">
@@ -752,11 +859,12 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                   <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-200">
                     <div>
                       <label htmlFor="invoice-paid-amount" className="block font-bold text-slate-600 mb-1">المسدّد فعليًا</label>
-                      <input id="invoice-paid-amount" type="number" min="0" max={totalVal || undefined} step="0.01" value={paidAmount} onChange={e => setPaidAmount(e.target.value === '' ? '' : Number(e.target.value))} className="w-full px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-mono" placeholder={['credit', 'deferred'].includes(paymentMethod) ? '0' : 'كامل الإجمالي'} />
+                      <input id="invoice-paid-amount" type="number" min="0" max={totalVal || undefined} step="0.01" value={paidAmount} onChange={e => setPaidAmount(e.target.value === '' ? '' : Number(e.target.value))} className="w-full px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-mono" placeholder="اكتب المبلغ الفعلي" />
+                      <p className="mt-1 text-[11px] text-slate-500">المبلغ المسدّد فعلًا؛ اكتب صفرًا إن لم تدفع.</p>
                     </div>
                     <div className="rounded-xl bg-amber-50 border border-amber-200 p-2">
                       <span className="block font-bold text-slate-600">المتبقي للمورّد</span>
-                      <strong>{Math.max(0, totalVal - (typeof paidAmount === 'number' ? paidAmount : ['credit', 'deferred'].includes(paymentMethod) ? 0 : totalVal)).toLocaleString('ar-EG')} {currency}</strong>
+                      <strong>{typeof totalAmount === 'number' && typeof paidAmount === 'number' ? `${Math.max(0, totalAmount - paidAmount).toLocaleString('ar-EG')} ${currency}` : 'يظهر بعد تحديد الإجمالي والمسدّد'}</strong>
                     </div>
                   </div>
                 </div>
@@ -773,6 +881,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
                 </div>
               </div>
 
+              </fieldset>
             </div>
           )}
         </fieldset></div>
@@ -782,11 +891,11 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
           <button type="button" disabled={saving} onClick={handleClose} className="clinic-action-cancel">
             إلغاء وإغلاق
           </button>
-          {imagePreview && (
+          {hasInvoiceDraft && (
             <button
               type="button"
               onClick={handleSave}
-              disabled={isExtracting || saving}
+              disabled={isCompressing || isExtracting || saving}
               className="clinic-action-primary"
             >
               <Check className="w-4 h-4" />
