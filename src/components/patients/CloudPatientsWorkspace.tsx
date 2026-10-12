@@ -5,12 +5,14 @@ import { normalizeDirectoryDigits, normalizeDirectoryName } from '../../utils/pa
 import { getWhatsAppUrl } from '../../utils/whatsappUtils';
 import type { CloudPatientProfile, CloudPatientRecord } from '../../utils/cloudPatientRepository';
 import type { CloudPatientWorkspaceController, CloudPatientWorkspaceDraft, CloudPatientWorkspaceState } from '../../utils/cloudPatientWorkspaceController';
+import type { CloudProfileContactRecoveryController } from '../../utils/cloudProfileContactRecoveryController';
+import CloudProfileContactRecoveryPanel from '../shared/CloudProfileContactRecoveryPanel';
 import './CloudPatientsWorkspace.css';
 
 const buttonClass = 'cpw-button';
 const secondaryClass = `${buttonClass} cpw-button-secondary`;
 const primaryClass = `${buttonClass} cpw-button-primary`;
-const locked = (state: CloudPatientWorkspaceState) => state.loading || state.saveStatus !== 'idle';
+const locked = (state: CloudPatientWorkspaceState) => state.loading || state.recoveryLoading || state.saveStatus !== 'idle' || Boolean(state.pendingOperationId);
 const fileNumber = (value: number) => value.toLocaleString('ar-EG', { useGrouping: false });
 
 export interface CloudPatientsWorkspaceViewProps {
@@ -39,6 +41,10 @@ export interface CloudPatientsWorkspaceViewProps {
   onCancel: (expected: CloudPatientWorkspaceDraft) => void;
   onRefresh: () => void;
   onLoadMore: () => void;
+  recoveryController?: CloudProfileContactRecoveryController;
+  onResume?: (operationId: string) => void;
+  onCancelPending?: (expected: CloudPatientWorkspaceDraft) => void;
+  recoveryCanAct?: () => boolean;
 }
 
 /** Profile-only presentation. Rendering never creates Auth, a repository or a read. */
@@ -65,7 +71,7 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
   const invalidAge = Boolean(draft) && (!/^[0-9]{1,3}$/.test(ageDigits) || Number(ageDigits) > 120);
   const guard = (action: () => void, block = disabled) => { if (!block) action(); };
   const save = () => {
-    if (!unavailable && !closing && !state.loading && state.saveStatus !== 'saving' && draft && !invalidAge) props.onSave(draft);
+    if (!unavailable && !closing && !state.loading && !state.recoveryLoading && !['saving', 'preparing'].includes(state.saveStatus) && draft && !invalidAge) props.onSave(draft);
   };
   const context = unavailable || state.query.kind === 'all' ? 'صفحات الملفات المحمّلة'
     : state.query.kind === 'phone' ? 'نتائج البحث برقم الموبايل الكامل' : `نتيجة البحث عن ملف ${fileNumber(state.query.fileNo)}`;
@@ -85,7 +91,8 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
       : state.closed ? <p role="status" className="cpw-message">أُغلقت مساحة العمل. لا توجد ملفات معروضة أو عملية جديدة متاحة هنا.</p> : null}
     {!unavailable && (retry || refresh) && <div role="status" className="cpw-message cpw-warning"><strong>{refresh ? 'الحفظ مؤكّد — العرض يحتاج تحديثًا' : 'عملية الحفظ تحتاج تأكيدًا من الخادم'}</strong>
       {refresh ? 'إعادة التحقق تقرأ النتيجة فقط، دون إرسال عملية حفظ جديدة.' : 'قد تكون العملية وصلت بالفعل. أعد نفس المحاولة دون تغيير المسودة أو إنشاء ملف آخر.'}
-      <p>المسودة في ذاكرة هذه الشاشة فقط؛ إعادة تحميل الصفحة أو تسجيل الخروج يفقدانها ولا يُلغيان كتابة وصلت للخادم.</p></div>}
+      <p>العملية الأصلية محفوظة في سجل الاسترجاع بعد تأكيد التحضير. الخروج يمسح العرض فقط ولا يُلغي كتابة قبلها الخادم.</p>
+      {state.pendingOperationId && <p className="cpw-operation-id">معرّف العملية: <bdi dir="ltr">{state.pendingOperationId}</bdi></p>}</div>}
     {!unavailable && state.error && <p role="alert" className="cpw-message cpw-error">{state.error}</p>}
     {!unavailable && state.notice && <p role="status" className="cpw-message cpw-info">{state.notice}</p>}
 
@@ -163,11 +170,24 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
             <div><label htmlFor={`${prefix}-notes`}>ملاحظات الملف <span>— اختياري</span></label><textarea id={`${prefix}-notes`} className="cpw-input" rows={3} maxLength={4000} value={draft.profile.notes} onChange={event => guard(() => props.onChangeDraft({ notes: event.target.value }, draft))} /></div>
             <details className="cpw-optional"><summary>معلومة صحية إضافية — اختياري</summary><div><label htmlFor={`${prefix}-allergy`}>الحساسية أو ملاحظة صحية</label><textarea id={`${prefix}-allergy`} className="cpw-input" rows={2} maxLength={1000} value={draft.profile.allergy} onChange={event => guard(() => props.onChangeDraft({ allergy: event.target.value }, draft))} /></div></details>
           </fieldset>
-          <div className="cpw-editor-actions"><button type="submit" className={primaryClass} disabled={unavailable || closing || state.loading || state.saveStatus === 'saving' || invalidAge}>{refresh ? <RefreshCw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}{state.saveStatus === 'saving' ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : 'حفظ بيانات الملف'}</button>
-            <button type="button" className={secondaryClass} disabled={disabled} onClick={() => guard(() => props.onCancel(draft))}><X size={18} aria-hidden="true" />إلغاء المسودة</button></div>
+          <div className="cpw-editor-actions"><button type="submit" className={primaryClass} disabled={unavailable || closing || state.loading || state.recoveryLoading || ['saving', 'preparing'].includes(state.saveStatus) || invalidAge}>{refresh ? <RefreshCw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}{state.saveStatus === 'preparing' ? 'جارٍ تحضير العملية…' : state.saveStatus === 'saving' ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : 'حفظ بيانات الملف'}</button>
+            {state.pendingOperationId ? <button type="button" className={secondaryClass} disabled={unavailable || closing || state.loading || state.recoveryLoading || state.saveStatus !== 'retry-required' || !props.onCancelPending}
+              onClick={() => { const current = latest.current; if (!current.previewOnly && !current.closing && !current.state.closed
+                && !current.state.loading && !current.state.recoveryLoading && current.state.saveStatus === 'retry-required'
+                && current.state.draft === draft && current.state.pendingOperationId) current.onCancelPending?.(draft); }}><X size={18} aria-hidden="true" />تأكيد إلغاء العملية</button>
+              : <button type="button" className={secondaryClass} disabled={disabled} onClick={() => guard(() => props.onCancel(draft))}><X size={18} aria-hidden="true" />إلغاء المسودة</button>}</div>
         </form>
       </section>}
     </div>
+    {props.recoveryController && <CloudProfileContactRecoveryPanel controller={props.recoveryController}
+      previewOnly={unavailable} disabled={closing || isLocked || Boolean(draft)} canAct={() => {
+        const current = latest.current;
+        return !current.previewOnly && !current.closing && !current.state.closed && !locked(current.state) && !current.state.draft
+          && (!current.recoveryCanAct || current.recoveryCanAct());
+      }} onResume={operationId => {
+        const current = latest.current;
+        if (!current.previewOnly && !current.closing && !current.state.closed && !locked(current.state) && !current.state.draft) current.onResume?.(operationId);
+      }} />}
     <footer className="cpw-footer"><ShieldCheck size={18} aria-hidden="true" /><p>لا استيراد أو تصدير هنا، ولا دمج تلقائي للملفات. تشابه الموبايل ليس موافقة على الحملات. فتح واتساب لا يؤكد إرسال رسالة.</p></footer>
   </section>;
 }
@@ -184,12 +204,14 @@ export default function CloudPatientsWorkspace({ controller, onClose, onOpenClin
   const [ageQuery, setAgeQuery] = useState<string | null>(null);
   const ageQueryRef = useRef<string | null>(null);
   ageQueryRef.current = ageQuery;
-  const clinicalProps = useRef({ controller, onOpenClinical, previewOnly, closing });
-  clinicalProps.current = { controller, onOpenClinical, previewOnly, closing };
-  const fresh = () => { const value = controller.getState(); return !previewOnly && !closing && !value.closed && !locked(value) ? value : null; };
+  const clinicalProps = useRef({ controller, onOpenClinical, onClose, previewOnly, closing });
+  clinicalProps.current = { controller, onOpenClinical, onClose, previewOnly, closing };
+  const live = () => { const current = clinicalProps.current; return current.controller === controller && !current.previewOnly && !current.closing; };
+  const fresh = () => { if (!live()) return null; const value = controller.getState(); return live() && !value.closed && !locked(value) ? value : null; };
   const listsAvailable = () => { const value = fresh(); return value && !value.draft ? value : null; };
   const sameDraft = (expected: CloudPatientWorkspaceDraft, retry = false) => {
-    const value = controller.getState(); return !previewOnly && !closing && !value.closed && !value.loading && value.saveStatus !== 'saving'
+    if (!live()) return false;
+    const value = controller.getState(); return live() && !value.closed && !value.loading && !value.recoveryLoading && !['saving', 'preparing'].includes(value.saveStatus)
       && (retry || value.saveStatus === 'idle') && value.draft === expected;
   };
   return <CloudPatientsWorkspaceView state={state} previewOnly={previewOnly} closing={closing} loadedQuery={loadedQuery} fileQuery={fileQuery} phoneQuery={phoneQuery} ageQuery={ageQuery}
@@ -197,7 +219,9 @@ export default function CloudPatientsWorkspace({ controller, onClose, onOpenClin
     onAgeQueryChange={(value, expected) => { if (!sameDraft(expected)) return; ageQueryRef.current = value; setAgeQuery(value); const digits = normalizeDirectoryDigits(value); if (/^[0-9]{1,3}$/.test(digits) && Number(digits) <= 120) controller.updateProfile({ age: Number(digits) }); }}
     onFindFile={value => { if (!listsAvailable()) return; const digits = normalizeDirectoryDigits(value.trim()); if (/^[0-9]{1,10}$/.test(digits) && Number(digits) >= 1 && Number(digits) <= 2_000_000_000) void controller.findByFileNo(Number(digits)); }}
     onFindPhone={value => { if (listsAvailable()) void controller.findByPhone({ mobile: value }); }}
-    onClose={() => { const value = controller.getState(); if (!closing && (previewOnly || value.closed || !locked(value) && !value.draft)) onClose(); }}
+    onClose={() => { const current = clinicalProps.current; if (current.controller !== controller || current.closing) return;
+      const value = controller.getState(); if (clinicalProps.current !== current) return;
+      if (current.previewOnly || value.closed || !locked(value) && !value.draft) current.onClose(); }}
     onCreate={() => { if (listsAvailable() && controller.beginCreate()) { ageQueryRef.current = null; setAgeQuery(null); } }}
     onSelect={record => { if (listsAvailable()?.records.includes(record)) void controller.select(record.recordId); }}
     onEdit={record => { if (listsAvailable()?.selected === record && controller.beginEdit(record)) { ageQueryRef.current = null; setAgeQuery(null); } }}
@@ -211,5 +235,8 @@ export default function CloudPatientsWorkspace({ controller, onClose, onOpenClin
     onChangeDraft={(patch, expected) => { if (sameDraft(expected)) controller.updateProfile(patch); }}
     onSave={expected => { const digits = ageQueryRef.current === null ? null : normalizeDirectoryDigits(ageQueryRef.current); if (sameDraft(expected, true) && (digits === null || /^[0-9]{1,3}$/.test(digits) && Number(digits) <= 120)) void controller.save(); }}
     onCancel={expected => { if (sameDraft(expected) && controller.cancelDraft()) { ageQueryRef.current = null; setAgeQuery(null); } }}
+    onCancelPending={expected => { const value = live() ? controller.getState() : null;
+      if (live() && value && !value.closed && !value.loading && !value.recoveryLoading && value.saveStatus === 'retry-required' && value.draft === expected && value.pendingOperationId) void controller.cancelPending(); }}
+    recoveryController={controller.recovery} recoveryCanAct={() => Boolean(listsAvailable())} onResume={operationId => { if (listsAvailable()) { ageQueryRef.current = null; setAgeQuery(null); void controller.resume(operationId); } }}
     onRefresh={() => { if (listsAvailable()) void controller.refresh(); }} onLoadMore={() => { if (listsAvailable()) void controller.loadMore(); }} />;
 }

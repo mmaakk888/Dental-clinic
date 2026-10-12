@@ -81,3 +81,5 @@
 @media (min-width: 1024px) { .cloud-patients-workspace .cpw-layout-detail { grid-template-columns: minmax(0,1.35fr) minmax(19rem,.85fr); align-items: start; } .cloud-patients-workspace .cpw-detail { order: 0; position: sticky; top: 1rem; } }
 @media (prefers-reduced-motion: no-preference) { .cloud-patients-workspace .cpw-panel { animation: cpw-panel-in 140ms ease-out; } @keyframes cpw-panel-in { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } } }
 @media (prefers-reduced-motion: reduce) { .cloud-patients-workspace .cpw-button, .cloud-patients-workspace .cpw-patient-open { transition: none; } }
+.cloud-patients-workspace .cpw-operation-id { font-size: .82rem; overflow-wrap: anywhere; }
+.cloud-patients-workspace .cpw-operation-id bdi { display: inline-block; max-width: 100%; font-variant-numeric: tabular-nums; }

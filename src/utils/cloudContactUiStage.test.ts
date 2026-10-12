@@ -20,6 +20,11 @@ test('empty design preview initializes no SDK, has no records, and cannot obtain
   await preview.loadFirst();
   await preview.loadMore();
   await preview.save();
+  assert.equal(await preview.resume('20000000-0000-4000-8000-000000000001'), false);
+  assert.equal(await preview.cancelPending(), false);
+  await preview.recovery.loadFirst(); await preview.recovery.loadMore();
+  assert.deepEqual(preview.recovery.getState().records, []);
+  assert.equal(preview.recovery.getState().loaded, false); assert.equal(preview.recovery.getState().error, '');
   assert.equal(preview.beginCreate(), false);
   assert.equal(preview.changeDraft({ name: 'Synthetic preview', mobile: '01000000000' }), false);
   assert.equal(preview.cancelDraft(), false);
@@ -27,8 +32,11 @@ test('empty design preview initializes no SDK, has no records, and cannot obtain
   assert.equal(preview.getState().loaded, false);
   assert.equal(preview.getState().error, '');
   assert.equal(preview.getState().draft, null);
+  assert.equal(preview.getState().pendingOperationId, null);
+  assert.equal(preview.getState().recoveryLoading, false);
   alive = false;
   assert.equal(preview.getState().closed, true);
+  assert.equal(preview.recovery.getState().closed, true);
   assert.equal(preview.beginCreate(), false);
 });
 

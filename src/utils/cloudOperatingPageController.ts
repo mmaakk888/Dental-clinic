@@ -31,7 +31,7 @@ const CLEANUP_ERROR = 'تعذر تأكيد إغلاق جلسة الدخول. أ�
 const SIGN_IN_FIRST = 'سجّل الدخول أولًا لتحديث حالة الحساب.';
 const CONTACTS_ERROR = 'تعذر فتح مساحة جهات الاتصال. لم نستخدم بيانات محلية بديلة.';
 const CONTACTS_UNAVAILABLE = 'مساحة جهات الاتصال غير متاحة في جلسة الدخول الحالية.';
-const CONTACTS_CLOSE_ERROR = 'أكمل المسودة أو ألغها أولًا؛ العملية غير المؤكدة تحتاج إعادة التحقق قبل الإغلاق.';
+const CONTACTS_CLOSE_ERROR = 'أكمل المسودة أو ألغها أولًا؛ انتظر القراءة وتحقق من العملية غير المؤكدة قبل الإغلاق.';
 const PATIENTS_ERROR = 'تعذر فتح مساحة ملفات المرضى. لم نستخدم بيانات محلية بديلة.';
 const PATIENTS_UNAVAILABLE = 'مساحة ملفات المرضى غير متاحة في جلسة الدخول الحالية.';
 const CLINICAL_ERROR = 'تعذر فتح الملف السريري وسجل الاسترجاع. لم نستخدم بيانات محلية بديلة.';
@@ -92,10 +92,11 @@ export function createCloudOperatingPageController(
   let workspaceSwitching = false;
 
   function publish(next: CloudOperatingPageState, notify = true) {
-    state = Object.freeze(next);
+    const published = Object.freeze(next);
+    state = published;
     if (!notify) return;
     for (const listener of [...listeners]) {
-      try { listener(state); } catch { /* A view cannot interrupt cleanup. */ }
+      try { listener(published); } catch { /* A view cannot interrupt cleanup. */ }
     }
   }
 
@@ -475,7 +476,9 @@ export function createCloudOperatingPageController(
     if (workspace) {
       const current = workspace.getState();
       if (!stillOwned()) return false;
-      if (current.draft || current.saveStatus !== 'idle') {
+      const recovery = workspace.recovery.getState();
+      if (!stillOwned()) return false;
+      if (current.draft || current.loading || recovery.loading || current.pendingOperationId || current.saveStatus !== 'idle') {
         publish({ ...state, contacts: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }
@@ -572,7 +575,9 @@ export function createCloudOperatingPageController(
     if (workspace) {
       const current = workspace.getState();
       if (!stillOwned()) return false;
-      if (current.draft || current.saveStatus !== 'idle') {
+      const recovery = workspace.recovery.getState();
+      if (!stillOwned()) return false;
+      if (current.draft || current.loading || recovery.loading || current.pendingOperationId || current.saveStatus !== 'idle') {
         publish({ ...state, patients: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }

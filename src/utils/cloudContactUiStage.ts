@@ -20,6 +20,10 @@ export function createCloudContactUiPreview(isViewActive: () => boolean): Return
   // Defense against a retained or mistakenly wired action: the preview cannot
   // even construct a contact draft, and never acquires a repository.
   return Object.freeze({ ...controller,
+    recovery: Object.freeze({ ...controller.recovery,
+      loadFirst: async () => undefined,
+      loadMore: async () => undefined,
+    }),
     loadFirst: async () => undefined,
     loadMore: async () => undefined,
     beginCreate: () => false,
@@ -28,5 +32,7 @@ export function createCloudContactUiPreview(isViewActive: () => boolean): Return
     changeDraft: () => false,
     cancelDraft: () => false,
     save: async () => undefined,
+    resume: async () => false,
+    cancelPending: async () => false,
   });
 }

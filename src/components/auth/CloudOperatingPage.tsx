@@ -97,7 +97,7 @@ export default function CloudOperatingPage() {
     const catalog = controller.getCatalogWorkspace()?.getState();
     if (([contacts, patients, catalog].some(current => current?.draft || current && current.saveStatus !== 'idle')
       || clinical?.draftDirty || clinical && (clinical.saveStatus !== 'idle' || clinical.pendingOperationId !== null))
-      && !window.confirm('الخروج يمسح المسودة من هذه الصفحة. إذا وصلت عملية للخادم فلن يلغيها الخروج. هل تريد المتابعة؟')) return;
+      && !window.confirm('الخروج يمسح المسودة غير المحضّرة من هذه الصفحة. العمليات التي وصلت لسجل الخادم يمكن مراجعتها بعد الدخول، والخروج لا يلغي حفظًا مقبولًا. هل تريد المتابعة؟')) return;
     previewRef.current?.dispose();
     previewRef.current = null;
     setPreview(null);

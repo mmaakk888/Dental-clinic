@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createCloudOperatingAuthSession, type CloudOperatingAuthAdapter } from './cloudOperatingAuth';
 import { createCloudOperatingPageController } from './cloudOperatingPageController';
-import { createCloudPatientRepository, type CloudPatientAdapter } from './cloudPatientRepository';
+import { createJournaledCloudPatientRepository, type CloudPatientAdapter } from './cloudPatientRepository';
+import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
 
 // Composition only: actual pure lifecycle/workspace/repository modules with a
 // fabricated membership and atomic in-memory server. Not a live owner login,
@@ -32,7 +33,8 @@ function fixture() {
   const hooks: { ownerGate?: ReturnType<typeof deferred>; ownerStarted?: ReturnType<typeof deferred>;
     readGate?: ReturnType<typeof deferred>; readStarted?: ReturnType<typeof deferred>;
     accepted?: ReturnType<typeof deferred>; replyGate?: ReturnType<typeof deferred>;
-    loseReply?: boolean; failRead?: boolean } = {};
+    loseReply?: boolean; failRead?: boolean; losePrepareReply?: boolean;
+    historyGate?: ReturnType<typeof deferred>; historyStarted?: ReturnType<typeof deferred> } = {};
   let writes = 0, commits = 0, tail = Promise.resolve();
   const auth = createCloudOperatingAuthSession({
     signIn: async () => { calls.push('auth:signIn'); },
@@ -58,25 +60,40 @@ function fixture() {
       const previous = tail; let release!: () => void;
       tail = new Promise<void>(accept => { release = accept; }); await previous;
       try {
-        ++commits; calls.push('data:transaction'); const staged = structuredClone(rows); let changed = 0, wrote = false;
+        ++commits; calls.push('data:transaction'); const staged = structuredClone(rows); let changed = 0, wrote = false, domainWrite = false;
         const result = await work({
           get: async path => { assert.equal(wrote, false); return structuredClone(staged.get(path) ?? null); },
-          set: (path, value) => { wrote = true; ++changed; staged.set(path, structuredClone(value)); },
+          set: (path, value) => { wrote = true; ++changed; domainWrite ||= path.includes('/patientProfiles/'); staged.set(path, structuredClone(value)); },
         });
         rows.clear(); for (const [path, value] of staged) rows.set(path, value); writes += changed;
-        if (changed) {
+        if (domainWrite) {
           hooks.accepted?.resolve(); await hooks.replyGate?.promise;
           if (hooks.loseReply) { hooks.loseReply = false; throw new Error('SYNTHETIC_LOST_ACK'); }
+        }
+        if (changed === 1 && !domainWrite && hooks.losePrepareReply) {
+          hooks.losePrepareReply = false; throw new Error('SYNTHETIC_LOST_PREPARE_ACK');
         }
         return result;
       } finally { release(); }
     },
   };
   const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
-  const repository = createCloudPatientRepository(adapter, { digest });
+  const journalAdapter: CloudIntentAdapter = { authorizeOwner: adapter.authorizeOwner, runTransaction: adapter.runTransaction,
+    readRecord: adapter.readRecord, listHistoryPage: async (kind, actorUid, afterId, limit) => {
+      calls.push('data:history'); hooks.historyStarted?.resolve(); await hooks.historyGate?.promise;
+      return [...rows].filter(([path, value]) => path.startsWith(`${ROOT}operationIntents/`)
+        && value.kind === kind && value.actorUid === actorUid && (afterId === null || value.operationId > afterId))
+        .sort((a, b) => a[0] < b[0] ? -1 : 1).slice(0, limit).map(([, data]) => ({ id: data.operationId, data: structuredClone(data) }));
+    } };
+  const journal = createCloudOperationIntentRepository(journalAdapter, { digest });
+  const repository = { ...createJournaledCloudPatientRepository(adapter, { digest }), journal };
   const session = { ...auth, getPatients: async () => { calls.push('capability:patients'); await auth.authorizeOwner(); return repository; } };
   const page = createCloudOperatingPageController(async () => session, () => true);
-  const independent = createCloudPatientRepository({ ...adapter, authorizeOwner: async () => UID }, { digest });
+  const independentCore = createJournaledCloudPatientRepository({ ...adapter, authorizeOwner: async () => UID }, { digest });
+  const independentJournal = createCloudOperationIntentRepository({ ...journalAdapter, authorizeOwner: async () => UID }, { digest });
+  const independent = { commit: async (command: Parameters<typeof independentCore.commit>[0]) => {
+    await independentJournal.prepare('patient-profile', command, '2026-10-12T12:00:00.000Z'); return independentCore.commit(command);
+  } };
   const open = async () => { await page.signIn(EMAIL, PASSWORD); const workspace = await page.openPatients(); assert.ok(workspace); return workspace; };
   const draft = (workspace: NonNullable<Awaited<ReturnType<typeof page.openPatients>>>) => {
     assert.equal(workspace.beginCreate(), true);
@@ -90,7 +107,7 @@ test('patient Auth/page/workspace opens inertly and only an explicit save alloca
   const h = fixture(); assert.deepEqual(h.calls, []); const workspace = await h.open();
   assert.equal(h.calls.some(call => call.startsWith('data:')), false);
   h.draft(workspace); assert.equal(h.writes(), 0); await workspace.save();
-  assert.equal(h.writes(), 4); assert.equal(workspace.getState().selected?.fileNo, 1);
+  assert.equal(h.writes(), 6); assert.equal(workspace.getState().selected?.fileNo, 1);
   assert.equal(workspace.getState().selected?.data.name, 'مريض مصطنع'); assert.equal(workspace.getState().draft, null);
   assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 1); await h.page.dispose();
 });
@@ -110,7 +127,7 @@ test('lost patient acknowledgment retries immutable command once and rereads a n
   const h = fixture(), workspace = await h.open(); h.draft(workspace); h.hooks.loseReply = true;
   await workspace.save(); const state = workspace.getState(); assert.equal(state.saveStatus, 'retry-required');
   const id = state.draft!.recordId, saved = h.rows.get(`${ROOT}patientProfiles/${id}`);
-  assert.equal(h.writes(), 4); assert.equal(h.page.closePatients(), false);
+  assert.equal(h.writes(), 6); assert.equal(h.page.closePatients(), false);
   assert.equal(workspace.cancelDraft(), false); assert.equal(workspace.updateProfile({ name: 'must not change' }), false);
   await h.independent.commit({ operationId: OP, recordId: id, expectedRevision: 1, action: 'update', profile: { ...saved.data, name: 'تعديل أحدث مصطنع' } });
   const beforeRetry = h.writes(); await workspace.save();
@@ -123,7 +140,7 @@ test('acknowledged patient save with failed read retries only refresh, never a s
   const h = fixture(), workspace = await h.open(); h.draft(workspace); h.hooks.failRead = true;
   await workspace.save(); assert.equal(workspace.getState().saveStatus, 'refresh-required');
   const commits = h.commits(); await workspace.save(); assert.equal(h.commits(), commits);
-  assert.equal(workspace.getState().saveStatus, 'idle'); assert.equal(h.writes(), 4); assert.equal(workspace.getState().selected?.fileNo, 1); await h.page.dispose();
+  assert.equal(workspace.getState().saveStatus, 'idle'); assert.equal(h.writes(), 6); assert.equal(workspace.getState().selected?.fileNo, 1); await h.page.dispose();
 });
 
 test('stale profile edit is never silently rebased to overwrite a newer clinical identity', async () => {
@@ -131,9 +148,10 @@ test('stale profile edit is never silently rebased to overwrite a newer clinical
   const stale = workspace.getState().selected!; assert.equal(workspace.beginEdit(stale), true);
   assert.equal(workspace.updateProfile({ name: 'stale submitted edit' }), true);
   await h.independent.commit({ operationId: OP, recordId: stale.recordId, expectedRevision: 1, action: 'update', profile: { ...stale.data, name: 'newer saved edit' } });
-  const before = h.writes(); await workspace.save(); assert.equal(h.writes(), before);
-  assert.equal(workspace.getState().draft?.expectedRevision, 1); assert.equal(workspace.getState().saveStatus, 'idle');
-  assert.ok(workspace.getState().error); assert.equal(workspace.cancelDraft(), true);
+  const before = h.writes(); await workspace.save(); assert.equal(h.writes(), before + 1, 'failed CAS keeps only a durable prepared intent');
+  assert.equal(workspace.getState().draft?.expectedRevision, 1); assert.equal(workspace.getState().saveStatus, 'retry-required');
+  assert.ok(workspace.getState().error); assert.equal(workspace.cancelDraft(), false);
+  assert.equal(await workspace.cancelPending(), true);
   await workspace.select(stale.recordId); assert.equal(workspace.getState().selected?.data.name, 'newer saved edit'); await h.page.dispose();
 });
 
@@ -154,8 +172,34 @@ test('late patient read after logout cannot repopulate rows or selected details'
 
 test('accepted patient write after logout is not represented as server rollback or late UI success', async () => {
   const h = fixture(), workspace = await h.open(); h.draft(workspace); h.hooks.accepted = deferred(); h.hooks.replyGate = deferred();
-  const saving = workspace.save(); await h.hooks.accepted.promise; assert.equal(h.writes(), 4);
+  const saving = workspace.save(); await h.hooks.accepted.promise; assert.equal(h.writes(), 6);
   const logout = h.page.signOut(); h.hooks.replyGate.resolve(); await saving; await logout;
   assert.equal(workspace.getState().closed, true); assert.equal(workspace.getState().selected, null);
   assert.equal(workspace.getState().notice, ''); assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 1); await h.page.dispose();
+});
+
+test('patient history read blocks page close and new drafts then clears late output on actual logout', async () => {
+  const h = fixture(), workspace = await h.open();
+  assert.equal(h.calls.includes('data:history'), false);
+  h.hooks.historyGate = deferred(); h.hooks.historyStarted = deferred();
+  const reading = workspace.recovery.loadFirst(); await h.hooks.historyStarted.promise;
+  assert.equal(h.page.closePatients(), false); assert.equal(workspace.beginCreate(), false);
+  assert.equal(h.page.getPatientsWorkspace(), workspace);
+  const logout = h.page.signOut(); h.hooks.historyGate.resolve(); await reading; await logout;
+  assert.equal(workspace.recovery.getState().closed, true); assert.deepEqual(workspace.recovery.getState().records, []);
+  assert.equal(h.writes(), 0); await h.page.dispose();
+});
+
+test('patient cached history cannot bypass a draft or unresolved preparation; cancellation never allocates a file', async () => {
+  const h = fixture(), workspace = await h.open(); await workspace.recovery.loadFirst();
+  const historyCalls = () => h.calls.filter(call => call === 'data:history').length;
+  h.draft(workspace); await workspace.recovery.loadFirst(); assert.equal(historyCalls(), 1);
+  h.hooks.losePrepareReply = true; await workspace.save();
+  assert.equal(workspace.getState().saveStatus, 'retry-required'); assert.ok(workspace.getState().pendingOperationId);
+  assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 0);
+  await workspace.recovery.loadFirst(); assert.equal(historyCalls(), 1);
+  assert.equal(await workspace.cancelPending(), true); await workspace.recovery.loadFirst();
+  assert.equal(historyCalls(), 2); assert.equal(workspace.recovery.getState().records[0].status, 'cancelled');
+  assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 0);
+  assert.equal(h.page.closePatients(), true); await h.page.dispose();
 });

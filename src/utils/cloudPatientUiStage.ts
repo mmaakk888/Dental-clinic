@@ -22,6 +22,9 @@ export function createCloudPatientUiPreview(isViewActive: () => boolean): CloudP
     updateProfile: () => false,
     cancelDraft: () => false,
     save: async () => undefined,
+    cancelPending: async () => false,
+    resume: async () => false,
+    recovery: Object.freeze({ ...controller.recovery, loadFirst: async () => undefined, loadMore: async () => undefined }),
     findByFileNo: async () => undefined,
     findByPhone: async () => undefined,
   });

@@ -23,7 +23,7 @@ const record = (changes: Partial<CloudPatientRecord> = {}): CloudPatientRecord =
   fileNo: 401, revision: 1, lastOperationId: OP, phoneKey: createHash('sha256').update('patient-phone-v1:201000000001').digest('hex'),
   data: { name: 'أحمد اختبار مصطنع', mobile: '٠١٠٠٠٠٠٠٠٠١', age: 30, gender: 'ذكر', firstVisit: '2026-10-10', notes: 'ملاحظة مصطنعة', allergy: 'معلومة اختيارية مصطنعة' }, ...changes });
 const state = (changes: Partial<CloudPatientWorkspaceState> = {}): CloudPatientWorkspaceState => ({ records: [], nextAfterId: null,
-  loaded: false, loading: false, saveStatus: 'idle', selected: null, draft: null, query: { kind: 'all' }, error: '', notice: '', closed: false, ...changes });
+  loaded: false, loading: false, recoveryLoading: false, saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, query: { kind: 'all' }, error: '', notice: '', closed: false, ...changes });
 function viewProps(changes: Partial<CloudPatientsWorkspaceViewProps> = {}) {
   const calls: string[] = [];
   const props: CloudPatientsWorkspaceViewProps = { state: state(), loadedQuery: '', fileQuery: '', phoneQuery: '', ageQuery: null,
@@ -285,4 +285,60 @@ test('retained clinical wrapper cannot bypass a later preview/closing state or r
   }
   invoke(CloudPatientsWorkspace, base, undefined, refs); retained(selected); assert.deepEqual(opened, [ID]);
   h.controller.dispose();
+});
+
+test('patient preparing and history reads block navigation editor and duplicate saves while pending UUID is not a file number', () => {
+  const data = record(), draft = { action: 'update' as const, recordId: ID, expectedRevision: 1, profile: data.data };
+  for (const change of [{ saveStatus: 'preparing' as const, pendingOperationId: OP }, { recoveryLoading: true }]) {
+    const h = viewProps({ state: state({ draft, ...change }) }), view = rendered(h.props);
+    assert.equal(view.button('إلغاء وإغلاق').props.disabled, true);
+    assert.equal(view.elements.find(item => item.type === 'fieldset')!.props.disabled, true);
+    for (const form of view.elements.filter(item => item.type === 'form')) form.props.onSubmit({ preventDefault() {} });
+    assert.deepEqual(h.calls, []);
+  }
+});
+
+test('patient pending recovery action explicitly confirms cancellation and acknowledged state cannot cancel', () => {
+  const data = record(), draft = { action: 'update' as const, recordId: ID, expectedRevision: 1, profile: data.data };
+  let cancellations = 0;
+  const h = viewProps({ state: state({ draft, pendingOperationId: OP, saveStatus: 'retry-required' }), onCancelPending: () => cancellations++ });
+  const view = rendered(h.props);
+  assert.match(h.html(), /معرّف العملية|سجل الاسترجاع/); assert.doesNotMatch(h.html(), /ذاكرة هذه الشاشة فقط/);
+  assert.equal(view.button('تأكيد إلغاء العملية').props.disabled, false); view.button('تأكيد إلغاء العملية').props.onClick(); assert.equal(cancellations, 1);
+  h.props.state = state({ draft, pendingOperationId: OP, saveStatus: 'refresh-required' });
+  const acknowledged = rendered(h.props); assert.equal(acknowledged.button('تأكيد إلغاء العملية').props.disabled, true);
+  acknowledged.button('تأكيد إلغاء العملية').props.onClick(); assert.equal(cancellations, 1);
+  h.props.previewOnly = true; assert.doesNotMatch(h.html(), new RegExp(OP));
+});
+
+test('patient retained resume cancel and history callbacks recheck current parent props and live pending state', () => {
+  const h = harness(), data = record(), draft = { action: 'update' as const, recordId: ID, expectedRevision: 1, profile: data.data };
+  let current = state(), resumes = 0, cancels = 0;
+  const controller = { ...h.controller, getState: () => current, resume: async () => { resumes++; return true; }, cancelPending: async () => { cancels++; return true; } };
+  const refs: Array<{ current: any }> = [], base = { controller, onClose() {} };
+  const initial = invoke(CloudPatientsWorkspace, base, undefined, refs).props as CloudPatientsWorkspaceViewProps;
+  assert.equal(initial.recoveryCanAct?.(), true); initial.onResume?.(OP); assert.equal(resumes, 1);
+  current = state({ draft, pendingOperationId: OP, saveStatus: 'retry-required' });
+  assert.equal(initial.recoveryCanAct?.(), false); initial.onResume?.(OP); assert.equal(resumes, 1);
+  initial.onCancelPending?.(draft); assert.equal(cancels, 1);
+  current = state({ draft, pendingOperationId: OP, saveStatus: 'refresh-required' }); initial.onCancelPending?.(draft); assert.equal(cancels, 1);
+  for (const changed of [{ previewOnly: true }, { closing: true }, { controller: harness().controller }]) {
+    current = state({ draft, pendingOperationId: OP, saveStatus: 'retry-required' });
+    invoke(CloudPatientsWorkspace, { ...base, ...changed }, undefined, refs);
+    initial.onResume?.(OP); initial.onCancelPending?.(draft); assert.equal(initial.recoveryCanAct?.(), false);
+  }
+  assert.equal(resumes, 1); assert.equal(cancels, 1);
+});
+
+test('patient view history panel fresh guard masks supplied data and rejects retained callbacks on preview or ordinary drafts', () => {
+  const h = viewProps({ recoveryController: harness().controller.recovery, onResume: () => h.calls.push('resume') });
+  const refs: Array<{ current: any }> = [];
+  const first = invoke(CloudPatientsWorkspaceView, h.props, undefined, refs);
+  const panel = all(first).find(item => item.props.controller === h.props.recoveryController)!;
+  assert.ok(panel); assert.equal(panel.props.canAct(), true); panel.props.onResume(OP); assert.deepEqual(h.calls, ['resume']);
+  const data = record();
+  invoke(CloudPatientsWorkspaceView, { ...h.props, state: state({ draft: { action: 'create', recordId: ID, expectedRevision: 0, profile: data.data } }) }, undefined, refs);
+  assert.equal(panel.props.canAct(), false); panel.props.onResume(OP);
+  invoke(CloudPatientsWorkspaceView, { ...h.props, previewOnly: true }, undefined, refs);
+  assert.equal(panel.props.canAct(), false); panel.props.onResume(OP); assert.deepEqual(h.calls, ['resume']);
 });

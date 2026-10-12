@@ -1,4 +1,4 @@
-import React, { useCallback, useId, useMemo, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDown, ArrowRight, Check, ContactRound, MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import type { ClinicContact } from '../../types';
 import { CONTACT_MOBILE_MAX_LENGTH, CONTACT_NAME_MAX_LENGTH, CONTACT_NOTES_MAX_LENGTH,
@@ -6,6 +6,8 @@ import { CONTACT_MOBILE_MAX_LENGTH, CONTACT_NAME_MAX_LENGTH, CONTACT_NOTES_MAX_L
 import { getWhatsAppUrl } from '../../utils/whatsappUtils';
 import type { CloudContactRecord } from '../../utils/cloudContactRepository';
 import type { CloudContactWorkspaceDraft, CloudContactWorkspaceState, createCloudContactWorkspaceController } from '../../utils/cloudContactWorkspaceController';
+import type { CloudProfileContactRecoveryController } from '../../utils/cloudProfileContactRecoveryController';
+import CloudProfileContactRecoveryPanel from '../shared/CloudProfileContactRecoveryPanel';
 
 export type CloudContactsWorkspaceController = ReturnType<typeof createCloudContactWorkspaceController>;
 type DraftFields = Pick<ClinicContact, 'name' | 'mobile'> & Pick<Partial<ClinicContact>, 'notes'>;
@@ -15,7 +17,7 @@ const primaryClass = `${buttonClass} bg-blue-700 text-white hover:bg-blue-800`;
 const inputClass = 'min-h-12 w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-500';
 
 function locked(state: CloudContactWorkspaceState): boolean {
-  return state.loading || state.saveStatus !== 'idle';
+  return state.loading || state.recoveryLoading || state.saveStatus !== 'idle' || Boolean(state.pendingOperationId);
 }
 
 export interface CloudContactsWorkspaceViewProps {
@@ -33,6 +35,10 @@ export interface CloudContactsWorkspaceViewProps {
   onCancel: (expected: CloudContactWorkspaceDraft) => void;
   onLoadFirst: () => void;
   onLoadMore: () => void;
+  recoveryController?: CloudProfileContactRecoveryController;
+  onResume?: (id: string) => void;
+  onCancelPending?: (expected: CloudContactWorkspaceDraft, operationId: string) => void;
+  canRecover?: () => boolean;
 }
 
 /** Pure presentation; never initializes Auth, obtains a capability or reads records. */
@@ -53,7 +59,8 @@ export function CloudContactsWorkspaceView(props: CloudContactsWorkspaceViewProp
   const refresh = state.saveStatus === 'refresh-required';
   const closeBlocked = !previewOnly && !state.closed && (isLocked || Boolean(draft));
   const guarded = (action: () => void) => { if (!disabled) action(); };
-  const runSave = () => { if (!unavailable && !state.loading && state.saveStatus !== 'saving' && draft) props.onSave(draft); };
+  const saving = state.saveStatus === 'preparing' || state.saveStatus === 'saving';
+  const runSave = () => { if (!unavailable && !state.loading && !state.recoveryLoading && !saving && draft) props.onSave(draft); };
 
   return <section dir="rtl" aria-labelledby={`${prefix}-title`} className="cloud-contacts-workspace mx-auto w-full min-w-0 max-w-6xl space-y-4 text-slate-900">
     <header className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
@@ -75,7 +82,10 @@ export function CloudContactsWorkspaceView(props: CloudContactsWorkspaceViewProp
     {!unavailable && (retry || refresh) && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">
       <strong className="block">{refresh ? 'الحفظ مؤكّد — العرض يحتاج تحديثًا' : 'العملية تحتاج تأكيدًا من الخادم'}</strong>
       {refresh ? 'إعادة التحقق تقرأ النتيجة فقط، دون إرسال عملية حفظ جديدة.' : 'قد تكون العملية وصلت بالفعل. احتفظ بهذه الشاشة وأعد نفس المحاولة؛ لا تغيّر المسودة أو تنشئ عملية أخرى.'}
-      <p>المسودة محفوظة في ذاكرة هذه الشاشة فقط؛ إعادة تحميل الصفحة أو تسجيل الخروج يفقدانها ولا يُلغيان كتابة وصلت للخادم.</p>
+      <p>العملية مرتبطة بسجل دائم على الخادم إذا وصل التحضير. بعد إعادة فتح الصفحة راجع سجل الاسترجاع بنفس المعرف؛ الخروج لا يلغي كتابة وصلت للخادم.</p>
+      {state.pendingOperationId && <bdi dir="ltr" className="block break-all text-xs tabular-nums">{state.pendingOperationId}</bdi>}
+      {retry && draft && state.pendingOperationId && props.onCancelPending && <button type="button" className={`${secondaryClass} mt-2`} disabled={state.loading || state.recoveryLoading}
+        onClick={() => { if (!unavailable && !state.loading && !state.recoveryLoading && state.saveStatus === 'retry-required') props.onCancelPending?.(draft, state.pendingOperationId!); }}><X aria-hidden="true" size={18} />التحقق وإلغاء العملية قبل تنفيذها</button>}
     </div>}
     {!unavailable && state.error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm leading-7 text-rose-900">{state.error}</p>}
     {!unavailable && state.notice && <p role="status" className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm leading-7 text-blue-950">{state.notice}</p>}
@@ -89,8 +99,8 @@ export function CloudContactsWorkspaceView(props: CloudContactsWorkspaceViewProp
           </div>
           <label htmlFor={`${prefix}-search`} className="mb-1 mt-3 block text-sm font-medium">البحث في الأرقام المحمّلة</label>
           <div className="relative"><Search aria-hidden="true" size={19} className="pointer-events-none absolute right-3 top-3.5 text-slate-400" />
-            <input id={`${prefix}-search`} type="search" inputMode="search" value={query} maxLength={200} className={`${inputClass} pr-10`} disabled={state.closed && !previewOnly}
-              onChange={event => props.onQueryChange(event.target.value)} placeholder="الاسم أو رقم الموبايل" aria-describedby={`${prefix}-search-help`} /></div>
+            <input id={`${prefix}-search`} type="search" inputMode="search" value={unavailable ? '' : query} maxLength={200} className={`${inputClass} pr-10`} disabled={unavailable}
+              onChange={event => { if (!unavailable) props.onQueryChange(event.target.value); }} placeholder="الاسم أو رقم الموبايل" aria-describedby={`${prefix}-search-help`} /></div>
           <p id={`${prefix}-search-help`} className="mt-2 text-xs leading-6 text-slate-500">البحث هنا في الصفحات التي حمّلتها فقط، وليس بحثًا شاملًا في قاعدة البيانات. العرض يحتفظ بآخر ٥٠٠ سجل محمّل.</p>
           <div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryClass} disabled={disabled || Boolean(draft)} onClick={() => guarded(props.onLoadFirst)}><RefreshCw aria-hidden="true" size={17} />{state.loaded ? 'تحديث من البداية' : 'تحميل أول صفحة'}</button>
             {!unavailable && state.loading && <span role="status" className="self-center text-sm text-slate-600">جارٍ التحقق من الخادم…</span>}</div>
@@ -137,12 +147,15 @@ export function CloudContactsWorkspaceView(props: CloudContactsWorkspaceViewProp
             <div><label htmlFor={`${prefix}-notes`} className="mb-1 block text-sm font-semibold">ملاحظة تواصل <span className="font-normal text-slate-500">— اختياري</span></label><textarea id={`${prefix}-notes`} rows={3} maxLength={CONTACT_NOTES_MAX_LENGTH} className={`${inputClass} resize-y py-3`} value={draft.contact.notes ?? ''}
               onChange={event => { if (!disabled) props.onChangeDraft({ ...draft.contact!, notes: event.target.value }, draft); }} /><p className="mt-1 text-xs leading-5 text-slate-500">للتواصل فقط؛ لا تكتب معلومات علاجية هنا.</p></div>
           </fieldset>}
-          <div className="mt-4 flex flex-wrap gap-2"><button type="submit" className={deletion && !retry && !refresh ? `${buttonClass} bg-rose-700 text-white hover:bg-rose-800` : primaryClass} disabled={unavailable || state.loading || state.saveStatus === 'saving'}>
-            {refresh ? <RefreshCw aria-hidden="true" size={18} /> : <Check aria-hidden="true" size={18} />}{state.saveStatus === 'saving' ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : deletion ? 'تأكيد الحذف' : 'حفظ جهة الاتصال'}</button>
+          <div className="mt-4 flex flex-wrap gap-2"><button type="submit" className={deletion && !retry && !refresh ? `${buttonClass} bg-rose-700 text-white hover:bg-rose-800` : primaryClass} disabled={unavailable || state.loading || state.recoveryLoading || saving}>
+            {refresh ? <RefreshCw aria-hidden="true" size={18} /> : <Check aria-hidden="true" size={18} />}{saving ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : deletion ? 'تأكيد الحذف' : 'حفظ جهة الاتصال'}</button>
             <button type="button" className={secondaryClass} disabled={disabled} onClick={() => { if (!disabled) props.onCancel(draft); }}><X aria-hidden="true" size={18} />إلغاء المسودة</button></div>
         </form>
       </section>}
     </div>
+    {props.recoveryController && <CloudProfileContactRecoveryPanel controller={props.recoveryController}
+      disabled={isLocked || Boolean(draft)} previewOnly={unavailable} canAct={props.canRecover ?? (() => false)}
+      onResume={id => { if (!disabled && !draft) props.onResume?.(id); }} />}
     <footer className="flex items-start gap-2 rounded-xl bg-slate-50 p-3 text-xs leading-6 text-slate-500"><ShieldCheck aria-hidden="true" size={18} className="mt-1 shrink-0" /><p>الربط بملفات المرضى وموافقة الحملات غير متاحين في هذه المرحلة. تشابه رقم الهاتف لا يثبت هوية المريض، وإضافة الرقم ليست موافقة تسويقية. فتح واتساب لا يؤكد إرسال رسالة.</p></footer>
   </section>;
 }
@@ -157,15 +170,19 @@ export default function CloudContactsWorkspace({ controller, onClose, previewOnl
   const getSnapshot = useCallback(() => controller.getState(), [controller]);
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const [query, setQuery] = useState('');
-  const fresh = () => { const value = controller.getState(); return !previewOnly && !value.closed && !locked(value) ? value : null; };
+  const owner = useRef({ controller, previewOnly }); owner.current = { controller, previewOnly };
+  const live = () => owner.current.controller === controller && owner.current.previewOnly === previewOnly && !previewOnly;
+  const fresh = () => { if (!live()) return null; const value = controller.getState(); return live() && !value.closed && !locked(value) ? value : null; };
   const sameDraft = (expected: CloudContactWorkspaceDraft, allowRetry = false) => {
-    const value = controller.getState();
-    return !previewOnly && !value.closed && !value.loading && value.saveStatus !== 'saving'
+    if (!live()) return false; const value = controller.getState();
+    return live() && !value.closed && !value.loading && !value.recoveryLoading && !['saving', 'preparing'].includes(value.saveStatus)
       && (allowRetry || value.saveStatus === 'idle') && value.draft === expected;
   };
   const currentRow = (record: CloudContactRecord) => fresh()?.records.find(value => value === record && !value.deleted && value.data) ?? null;
   return <CloudContactsWorkspaceView state={state} query={query} onQueryChange={setQuery} previewOnly={previewOnly}
-    onClose={() => { const value = controller.getState(); if (previewOnly || value.closed || !locked(value) && !value.draft) onClose(); }}
+    onClose={() => { if (owner.current.controller !== controller || owner.current.previewOnly !== previewOnly) return;
+      const value = controller.getState(); if (owner.current.controller !== controller || owner.current.previewOnly !== previewOnly) return;
+      if (previewOnly || value.closed || !locked(value) && !value.draft) onClose(); }}
     onCreate={() => { if (fresh()) controller.beginCreate(); }}
     onEdit={record => { const current = currentRow(record); if (current) controller.beginEdit(current); }}
     onDelete={record => { const current = currentRow(record); if (current) controller.beginDelete(current); }}
@@ -173,6 +190,11 @@ export default function CloudContactsWorkspace({ controller, onClose, previewOnl
     onChangeDraft={(fields, expected) => { if (sameDraft(expected)) controller.changeDraft({ name: fields.name, mobile: fields.mobile, ...(fields.notes === undefined ? {} : { notes: fields.notes }) }); }}
     onSave={expected => { if (sameDraft(expected, true)) void controller.save(); }}
     onCancel={expected => { if (sameDraft(expected)) controller.cancelDraft(); }}
-    onLoadFirst={() => { if (fresh() && !controller.getState().draft) void controller.loadFirst(); }}
-    onLoadMore={() => { if (fresh() && !controller.getState().draft) void controller.loadMore(); }} />;
+    onLoadFirst={() => { const value = fresh(); if (value && !value.draft) void controller.loadFirst(); }}
+    onLoadMore={() => { const value = fresh(); if (value && !value.draft) void controller.loadMore(); }}
+    recoveryController={controller.recovery} canRecover={() => { const value = fresh(); return Boolean(value && !value.draft); }}
+    onResume={id => { const value = fresh(); if (value && !value.draft) void controller.resume(id); }}
+    onCancelPending={(expected, operationId) => { if (!live()) return; const value = controller.getState();
+      if (live() && !value.closed && !value.loading && !value.recoveryLoading && value.saveStatus === 'retry-required'
+        && value.pendingOperationId === operationId && value.draft === expected) void controller.cancelPending(); }} />;
 }

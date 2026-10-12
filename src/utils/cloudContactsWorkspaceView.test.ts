@@ -16,7 +16,7 @@ const record = (changes: Partial<CloudContactRecord> = {}): CloudContactRecord =
   phoneKey: createHash('sha256').update('contact-phone-v1:201000000001').digest('hex'),
   data: { id: ID, name: 'أحمد اختبار', mobile: '٠١٠٠٠٠٠٠٠٠١', createdAt: TIME, notes: 'للتواصل التجريبي فقط' }, ...changes });
 const state = (changes: Partial<CloudContactWorkspaceState> = {}): CloudContactWorkspaceState => ({ records: [], nextAfterId: null,
-  loaded: false, loading: false, saveStatus: 'idle', draft: null, error: '', notice: '', closed: false, ...changes });
+  loaded: false, loading: false, recoveryLoading: false, pendingOperationId: null, saveStatus: 'idle', draft: null, error: '', notice: '', closed: false, ...changes });
 
 function viewProps(changes: Partial<CloudContactsWorkspaceViewProps> = {}) {
   const calls: string[] = [];
@@ -34,11 +34,12 @@ const all = (node: any): Element[] => children(node).flatMap(item => item && typ
 const text = (node: any): string => children(node).map(item => typeof item === 'string' || typeof item === 'number' ? String(item) : item?.props ? text(item.props.children) : '').join('');
 
 /** Deterministic hook invocation only; no DOM, browser storage or live SDK. */
-function invoke(component: (props: any) => any, props: any, subscriptions?: Array<(notify: () => void) => () => void>) {
+function invoke(component: (props: any) => any, props: any, subscriptions?: Array<(notify: () => void) => () => void>, refs?: any[]) {
   const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
   const previous = internals.H;
+  let refIndex = 0;
   internals.H = { useId: () => 'synthetic-cloud-contacts', useMemo: (factory: () => unknown) => factory(),
-    useCallback: (callback: unknown) => callback,
+    useCallback: (callback: unknown) => callback, useRef: (value: unknown) => refs ? refs[refIndex++] ??= { current: value } : { current: value },
     useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => undefined],
     useSyncExternalStore: (subscribe: (notify: () => void) => () => void, snapshot: () => unknown) => { subscriptions?.push(subscribe); return snapshot(); } };
   try { return component(props); } finally { internals.H = previous; }
@@ -225,4 +226,75 @@ test('cloud workspace dependency graph excludes local clinic UI/storage, Firebas
   for (const input of Object.keys(compiled.metafile!.inputs)) {
     assert.doesNotMatch(input, /(?:App\.tsx|components\/settings|utils\/(?:storage|localClinicBackup|firebaseService|offlineSync|cloudOperatingAuth|firebaseCloudContacts)|firebase(?:-admin)?\/|financial|patientFinancial)/i);
   }
+});
+
+test('inert wrapper includes explicit all-status recovery without reading it on mount or showing preview data', () => {
+  const h = controllerHarness(); const html = renderToStaticMarkup(React.createElement(CloudContactsWorkspace,
+    { controller: h.controller, onClose() {}, previewOnly: true }));
+  assert.match(html, /سجل الحفظ والاسترجاع|تحميل سجل العمليات|معاينة فارغة/);
+  assert.deepEqual(h.calls, []); assert.equal(h.controller.recovery.getState().loaded, false);
+  const preview = viewProps({ previewOnly: true, query: 'PRIVATE_QUERY', state: state({ notice: 'PRIVATE_NOTICE', error: 'PRIVATE_ERROR' }) });
+  assert.doesNotMatch(preview.html(), /PRIVATE_QUERY|PRIVATE_NOTICE|PRIVATE_ERROR/);
+  const input = rendered(preview.props).elements.find(element => element.type === 'input')!;
+  assert.equal(input.props.disabled, true); input.props.onChange({ target: { value: 'unsafe' } }); assert.deepEqual(preview.calls, []);
+});
+
+test('preparing and recovery loading lock close, form and retained ordinary actions', () => {
+  for (const change of [{ saveStatus: 'preparing' as const }, { recoveryLoading: true }]) {
+    const data = record(), h = viewProps({ state: state({ ...change, draft: { action: 'update', recordId: ID, expectedRevision: 1, contact: data.data } }) });
+    const view = rendered(h.props); view.button('إلغاء وإغلاق').props.onClick(); view.button('إلغاء المسودة').props.onClick();
+    view.elements.find(element => element.type === 'form')!.props.onSubmit({ preventDefault() {} });
+    assert.deepEqual(h.calls, []); assert.equal(view.button('إلغاء وإغلاق').props.disabled, true);
+    assert.equal(view.elements.find(element => element.type === 'fieldset')?.props.disabled, true);
+  }
+});
+
+test('pending cancellation is an explicit separate action bound to its exact draft and operation', () => {
+  const data = record(), expected = { action: 'update' as const, recordId: ID, expectedRevision: 1, contact: data.data };
+  const cancelled: unknown[][] = [];
+  const h = viewProps({ state: state({ saveStatus: 'retry-required', pendingOperationId: OP, draft: expected }),
+    onCancelPending: (...args) => cancelled.push(args) });
+  const view = rendered(h.props), button = view.button('التحقق وإلغاء العملية قبل تنفيذها');
+  assert.equal(button.props.disabled, false); button.props.onClick(); assert.deepEqual(cancelled, [[expected, OP]]);
+  assert.match(h.html(), /سجل دائم|معرف|العملية الأصلية|20000000/);
+  const refreshed = viewProps({ state: state({ saveStatus: 'refresh-required', pendingOperationId: OP, draft: expected }), onCancelPending() {} });
+  assert.doesNotMatch(refreshed.html(), /التحقق وإلغاء العملية قبل تنفيذها/);
+});
+
+test('retained pending-A cancellation cannot cancel a later pending-B operation', () => {
+  const h = controllerHarness(), draftA = { action: 'update' as const, recordId: ID, expectedRevision: 1, contact: record().data };
+  const draftB = { ...draftA, expectedRevision: 2 }, opB = '20000000-0000-4000-8000-000000000002';
+  let current = state({ saveStatus: 'retry-required', pendingOperationId: OP, draft: draftA }), cancels = 0;
+  const controller = { ...h.controller, getState: () => current, cancelPending: async () => { cancels++; return true; } };
+  const old = invoke(CloudContactsWorkspace, { controller, onClose() {} }).props as CloudContactsWorkspaceViewProps;
+  current = state({ saveStatus: 'retry-required', pendingOperationId: opB, draft: draftB });
+  old.onCancelPending?.(draftA, OP); assert.equal(cancels, 0);
+  old.onCancelPending?.(draftB, OP); old.onCancelPending?.(draftA, opB); assert.equal(cancels, 0);
+  const fresh = invoke(CloudContactsWorkspace, { controller, onClose() {} }).props as CloudContactsWorkspaceViewProps;
+  fresh.onCancelPending?.(draftB, opB); assert.equal(cancels, 1);
+});
+
+test('retained owner callbacks cannot run after preview or controller replacement in the same component lifetime', () => {
+  for (const replace of ['preview', 'controller'] as const) {
+    const h = controllerHarness(), refs: any[] = []; let resumes = 0, closes = 0;
+    const controller = { ...h.controller, resume: async () => { resumes++; return true; } };
+    const old = invoke(CloudContactsWorkspace, { controller, onClose: () => closes++ }, undefined, refs).props as CloudContactsWorkspaceViewProps;
+    invoke(CloudContactsWorkspace, { controller: replace === 'preview' ? controller : controllerHarness().controller,
+      previewOnly: replace === 'preview', onClose() {} }, undefined, refs);
+    old.onCreate(); old.onLoadFirst(); old.onLoadMore(); old.onResume?.(OP); old.onClose();
+    assert.equal(old.canRecover?.(), false); assert.equal(h.controller.getState().draft, null);
+    assert.deepEqual(h.calls, []); assert.equal(resumes, 0); assert.equal(closes, 0);
+  }
+});
+
+test('fresh recovery and ordinary callbacks recheck component ownership after getter callbacks', () => {
+  const h = controllerHarness(), refs: any[] = []; let switchNow = false, resumes = 0;
+  const controller = { ...h.controller,
+    getState: () => { const value = h.controller.getState(); if (switchNow) { switchNow = false;
+      invoke(CloudContactsWorkspace, { controller, previewOnly: true, onClose() {} }, undefined, refs); } return value; },
+    resume: async () => { resumes++; return true; },
+  };
+  const props = invoke(CloudContactsWorkspace, { controller, onClose() {} }, undefined, refs).props as CloudContactsWorkspaceViewProps;
+  switchNow = true; props.onResume?.(OP); assert.equal(resumes, 0); assert.deepEqual(h.calls, []);
+  assert.equal(props.canRecover?.(), false); props.onLoadFirst(); assert.deepEqual(h.calls, []);
 });

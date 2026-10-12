@@ -20,6 +20,8 @@ test('patient preview is empty and all retained read/draft/save callbacks are in
   assert.equal(preview.getState().draft, null);
   assert.equal(preview.getState().loaded, false);
   await actions.refresh(); await actions.loadMore(); await actions.save();
+  assert.equal(await actions.cancelPending(), false); assert.equal(await actions.resume('20000000-0000-4000-8000-000000000001'), false);
+  await actions.recovery.loadFirst(); await actions.recovery.loadMore();
   await actions.findByFileNo(1); await actions.findByPhone({ mobile: '01000000001' });
   await actions.select('00000000-0000-4000-8000-000000000001');
   assert.equal(actions.beginCreate(), false);
@@ -29,8 +31,11 @@ test('patient preview is empty and all retained read/draft/save callbacks are in
   assert.equal(preview.getState().draft, null);
   assert.equal(preview.getState().error, '');
   assert.equal(preview.getState().loaded, false);
+  assert.equal(preview.getState().pendingOperationId, null); assert.equal(preview.getState().recoveryLoading, false);
+  assert.deepEqual(preview.recovery.getState().records, []); assert.equal(preview.recovery.getState().error, '');
   alive = false;
   assert.equal(preview.getState().closed, true);
+  assert.equal(preview.recovery.getState().closed, true);
   await actions.refresh(); await actions.findByFileNo(1); await actions.save();
   assert.equal(actions.beginCreate(), false);
   preview.dispose(); preview.dispose();

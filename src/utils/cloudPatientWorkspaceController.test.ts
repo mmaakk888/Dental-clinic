@@ -2,14 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
-import { createCloudPatientWorkspaceController, type CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
+import { createCloudPatientWorkspaceController, type CloudPatientWorkspaceController, type CloudPatientWorkspaceCapability } from './cloudPatientWorkspaceController';
 import { CloudPatientError, type CloudPatientCommand, type CloudPatientCommit, type CloudPatientPage,
   type CloudPatientRecord, type CloudPatientRepository } from './cloudPatientRepository';
+import { createJournaledCloudPatientRepository, type CloudPatientAdapter } from './cloudPatientRepository';
+import { createCloudOperationIntentRepository, prepareCloudIntentCommand, type CloudOperationIntent } from './cloudOperationIntent';
 
 const ID = '10000000-0000-4000-8000-000000000001';
 const OTHER = '10000000-0000-4000-8000-000000000002';
 const OP = '20000000-0000-4000-8000-000000000001';
 const DAY = '2026-10-10';
+const NOW = '2026-10-12T09:00:00.000Z';
 const phoneKey = createHash('sha256').update('patient-phone-v1:201000000001').digest('hex');
 function record(revision = 1, name = 'مريض اختبار مصطنع', n = 1): CloudPatientRecord {
   return { schemaVersion: 1, clinicId: 'main', recordId: `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -21,7 +24,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-async function tick() { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); }
+async function tick() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
 function harness() {
   const calls: string[] = [], commands: CloudPatientCommand[] = [];
   let active = true, ids = [ID, OP], current: CloudPatientRecord | null = record();
@@ -30,7 +33,20 @@ function harness() {
     commitResult?: CloudPatientCommit; commitDelay?: Promise<CloudPatientCommit>;
     getDelay?: Promise<CloudPatientRecord | null>; listDelay?: Promise<CloudPatientPage>;
     factoryDelay?: Promise<CloudPatientRepository> } = {};
-  const repository: CloudPatientRepository = {
+  const intents = new Map<string, CloudOperationIntent>();
+  const repository: CloudPatientWorkspaceCapability = {
+    journal: {
+      prepare: async (kind, input, createdAt) => {
+        const command = prepareCloudIntentCommand(input), id = command.operationId as string;
+        if (!intents.has(id)) intents.set(id, { schemaVersion: 1, clinicId: 'main', recordId: id, operationId: id,
+          actorUid: 'synthetic-owner', kind, requestHash: 'a'.repeat(64), status: 'prepared', revision: 1, createdAt, command });
+        return intents.get(id)!;
+      },
+      get: async id => intents.get(id) ?? null,
+      cancel: async id => { const result = { ...intents.get(id)!, status: 'cancelled' as const, revision: 2 as const }; intents.set(id, result); return result; },
+      listPreparedPage: async () => ({ records: [], nextAfterId: null }),
+      listHistoryPage: async () => ({ records: [], nextAfterId: null }),
+    },
     commit: async command => {
       calls.push('commit'); commands.push(command);
       if (handlers.commitError) throw handlers.commitError;
@@ -61,7 +77,7 @@ function harness() {
   };
   const controller = createCloudPatientWorkspaceController({
     getRepository: async () => { calls.push('factory'); return handlers.factoryDelay ?? repository; },
-    isActive: () => active, newId: () => ids.shift()!, today: () => DAY,
+    isActive: () => active, newId: () => ids.shift()!, today: () => DAY, now: () => NOW,
   });
   const createDraft = () => {
     assert.equal(controller.beginCreate(), true);
@@ -318,14 +334,14 @@ test('CAS conflict preserves stale expected revision without rebasing and requir
   await h.controller.select(ID); const selected = h.controller.getState().selected!;
   assert.equal(h.controller.beginEdit(selected), true); h.controller.updateProfile({ name: 'stale edited draft' });
   h.handlers.commitError = new CloudPatientError('conflict'); await h.controller.save();
-  assert.equal(h.controller.getState().saveStatus, 'idle'); assert.equal(h.controller.getState().draft?.expectedRevision, 1);
-  assert.match(h.controller.getState().error, /ألغِها/); assert.equal(h.controller.getState().selected, selected);
+  assert.equal(h.controller.getState().saveStatus, 'retry-required'); assert.equal(h.controller.getState().draft?.expectedRevision, 1);
+  assert.match(h.controller.getState().error, /إلغاء العملية/); assert.equal(h.controller.getState().selected, selected);
   h.setCurrent(record(5, 'newer server version')); await h.controller.select(ID);
   assert.equal(h.controller.getState().selected, selected, 'ordinary stale draft blocks changing its base');
   h.controller.updateProfile({ name: 'second stale edit' }); await h.controller.save();
   assert.deepEqual(h.commands.map(command => command.expectedRevision), [1, 1]);
-  assert.notEqual(h.commands[0].operationId, h.commands[1].operationId);
-  assert.equal(h.controller.cancelDraft(), true); await h.controller.select(ID);
+  assert.equal(h.commands[0].operationId, h.commands[1].operationId);
+  assert.equal(h.controller.cancelDraft(), false); assert.equal(await h.controller.cancelPending(), true); await h.controller.select(ID);
   assert.equal(h.controller.beginEdit(h.controller.getState().selected!), true);
   assert.equal(h.controller.getState().draft?.expectedRevision, 5);
 });
@@ -341,10 +357,11 @@ test('update receipt cannot change the original public file number or downgrade 
   assert.equal(h.commands.length, 2, 'post-ack stale reads never resubmit the mutation');
 });
 
-test('invalid definite-save errors retain an editable draft without leaking raw errors', async () => {
+test('domain errors retain the original immutable journal command until explicit confirmed cancellation', async () => {
   const h = harness(); h.createDraft(); h.handlers.commitError = new CloudPatientError('invalid'); await h.controller.save();
-  assert.equal(h.controller.getState().saveStatus, 'idle'); assert.ok(h.controller.getState().draft);
-  assert.equal(h.controller.updateProfile({ name: 'fixed input' }), true); assert.equal(h.controller.cancelDraft(), true);
+  assert.equal(h.controller.getState().saveStatus, 'retry-required'); assert.ok(h.controller.getState().draft);
+  assert.equal(h.controller.updateProfile({ name: 'fixed input' }), false); assert.equal(h.controller.cancelDraft(), false);
+  assert.equal(await h.controller.cancelPending(), true);
 });
 
 test('duplicate clicks during commit or reads cannot issue extra requests and disposal ignores a late accepted write', async () => {
@@ -396,7 +413,7 @@ test('reentrant lifetime and patch callbacks cannot publish a closed draft or st
 test('listener-triggered disposal during a loading/save publication happens before factory or SDK boundaries', async () => {
   for (const save of [false, true]) {
     const h = harness(); if (save) h.createDraft();
-    h.controller.subscribe(value => { if (value.loading || value.saveStatus === 'saving') h.controller.dispose(); });
+    h.controller.subscribe(value => { if (value.loading || value.saveStatus === 'preparing') h.controller.dispose(); });
     if (save) await h.controller.save(); else await h.controller.refresh();
     assert.deepEqual(h.calls, []); assert.equal(h.controller.getState().closed, true);
   }
@@ -427,4 +444,198 @@ test('workspace dependencies exclude local App, storage, Auth SDK and clinical f
   const built = await build({ entryPoints: ['src/utils/cloudPatientWorkspaceController.ts'], bundle: true,
     write: false, metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
   assert.equal(Object.keys(built.metafile!.inputs).some(path => /(?:App\.tsx|components\/|utils\/(?:storage|localClinicBackup|firebaseService|offlineSync|cloudOperatingAuth)|node_modules\/.*firebase)/.test(path)), false);
+});
+
+/** Real pure journal + journaled profile core, serial atomic cloned-map adapter.
+ * This is synthetic, not live Firebase, Rules-engine or a two-device test. */
+function durableHarness() {
+  const root = 'clinics/main/', counter = `${root}counters/patientFiles`;
+  const documents = new Map<string, any>([[counter, { schemaVersion: 1, clinicId: 'main', lastFileNo: 0, lastOperationId: null }]]);
+  const calls: string[] = [], flags = { losePrepare: false, loseCommit: false, failRead: false, failCancel: false,
+    beforeCommit: null as (() => void) | null, afterAccepted: null as (() => void) | null };
+  const digest = async (input: string) => createHash('sha256').update(input).digest('hex');
+  let tail = Promise.resolve();
+  const adapter: CloudPatientAdapter = {
+    authorizeOwner: async () => 'synthetic-owner',
+    readRecord: async path => { calls.push(`read:${path}`); if (flags.failRead) throw Error('PRIVATE_READ'); return structuredClone(documents.get(path) ?? null); },
+    listRecordsPage: async (after, limit) => {
+      calls.push('list'); if (flags.failRead) throw Error('PRIVATE_PAGE');
+      return [...documents].filter(([path]) => path.startsWith(`${root}patientProfiles/`) && (!after || path.split('/').at(-1)! > after))
+        .sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([path, data]) => ({ id: path.split('/').at(-1)!, data: structuredClone(data) }));
+    },
+    findRecordsByPhone: async () => [],
+    runTransaction: async work => {
+      const previous = tail; let release!: () => void; tail = new Promise<void>(resolve => { release = resolve; }); await previous;
+      try {
+        const staged = structuredClone(documents), writes: Array<[string, any]> = []; let writing = false;
+        const result = await work({
+          get: async path => { assert.equal(writing, false); calls.push(`get:${path}`); return structuredClone(staged.get(path) ?? null); },
+          set: (path, value) => { writing = true; writes.push([path, structuredClone(value)]); staged.set(path, structuredClone(value)); },
+        });
+        const domain = writes.some(([path]) => path.includes('/patientOperations/'));
+        const cancelling = writes.some(([, value]) => value.status === 'cancelled');
+        if (cancelling && flags.failCancel) throw Error('PRIVATE_CANCEL');
+        if (domain) flags.beforeCommit?.();
+        documents.clear(); for (const [path, value] of staged) documents.set(path, value);
+        calls.push(...writes.map(([path]) => `set:${path}`));
+        if (domain) flags.afterAccepted?.();
+        if (domain && flags.loseCommit) { flags.loseCommit = false; throw Error('PRIVATE_COMMIT_ACK'); }
+        if (!domain && !cancelling && writes.length && flags.losePrepare) { flags.losePrepare = false; throw Error('PRIVATE_PREPARE_ACK'); }
+        return result;
+      } finally { release(); }
+    },
+  };
+  const journal = createCloudOperationIntentRepository({ ...adapter,
+    listHistoryPage: async (kind, actorUid, after, limit) => {
+      calls.push('history'); return [...documents].filter(([path, value]) => path.startsWith(`${root}operationIntents/`)
+        && value.kind === kind && value.actorUid === actorUid && (!after || value.operationId > after))
+        .sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([, data]) => ({ id: data.operationId, data: structuredClone(data) }));
+    },
+  }, { digest });
+  const repository: CloudPatientWorkspaceCapability = { ...createJournaledCloudPatientRepository(adapter, { digest }), journal };
+  function view(ids = [ID, OP], time = NOW) {
+    let alive = true;
+    const controller = createCloudPatientWorkspaceController({ getRepository: async () => repository, isActive: () => alive,
+      newId: () => ids.shift()!, today: () => DAY, now: () => time });
+    return { controller, setActive: (value: boolean) => { alive = value; }, create: () => {
+      assert.equal(controller.beginCreate(), true); assert.equal(controller.updateProfile({ name: 'synthetic durable patient', mobile: '01000000001' }), true);
+    } };
+  }
+  return { documents, repository, journal, flags, calls, view, counter, intent: (id = OP) => `${root}operationIntents/${id}` };
+}
+
+test('patient workspace actual core prepares durably before allocation and commits one exact command/time', async () => {
+  const h = durableHarness(), v = h.view(); v.create();
+  assert.deepEqual(h.calls, []); await v.controller.save();
+  assert.equal(v.controller.getState().saveStatus, 'idle'); assert.equal(v.controller.getState().pendingOperationId, null);
+  const intent = h.documents.get(h.intent()); assert.equal(intent.status, 'committed'); assert.equal(intent.createdAt, NOW);
+  assert.equal('createdAt' in intent.command, false); assert.equal(h.documents.get(h.counter).lastFileNo, 1);
+  assert.ok(h.calls.indexOf(`set:${h.intent()}`) < h.calls.indexOf(`set:${h.counter}`));
+  assert.equal(v.controller.getState().selected?.data.name, 'synthetic durable patient');
+});
+
+test('patient workspace lost preparation ACK retains exact UUID profile revision and independent time across a fresh view', async () => {
+  const h = durableHarness(), first = h.view(); first.create(); h.flags.losePrepare = true; await first.controller.save();
+  assert.equal(first.controller.getState().saveStatus, 'retry-required'); assert.equal(first.controller.getState().pendingOperationId, OP);
+  assert.equal(h.documents.get(h.counter).lastFileNo, 0); assert.equal(h.documents.get(h.intent()).status, 'prepared');
+  const original = structuredClone(h.documents.get(h.intent())); first.controller.dispose();
+  const next = h.view([], '2026-10-12T20:00:00.000Z'); assert.equal(await next.controller.resume(OP), true);
+  assert.deepEqual(h.documents.get(h.intent()).command, original.command); assert.equal(h.documents.get(h.intent()).createdAt, NOW);
+  assert.equal(h.documents.get(h.counter).lastFileNo, 1); assert.equal(next.controller.getState().selected?.fileNo, 1);
+});
+
+test('patient workspace committed lost ACK is found in all-status history and recovered without replacing a newer profile', async () => {
+  const h = durableHarness(), first = h.view(); first.create(); h.flags.loseCommit = true; await first.controller.save();
+  assert.equal(h.documents.get(h.intent()).status, 'committed'); first.controller.dispose();
+  const saved = h.documents.get(h.intent()).command;
+  const update = { ...saved, operationId: OTHER, action: 'update', expectedRevision: 1, profile: { ...saved.profile, name: 'newer synthetic profile' } };
+  await h.journal.prepare('patient-profile', update, NOW); await h.repository.commit(update);
+  const next = h.view([]), before = structuredClone(h.documents), count = h.calls.length;
+  await next.controller.recovery.loadFirst();
+  assert.ok(next.controller.recovery.getState().records.some(intent => intent.operationId === OP && intent.status === 'committed'));
+  assert.equal(await next.controller.resume(OP), true); assert.deepEqual(h.documents, before);
+  assert.equal(next.controller.getState().selected?.data.name, 'newer synthetic profile');
+  assert.equal(h.calls.slice(count).some(call => call.startsWith('set:')), false);
+});
+
+test('patient workspace post-ACK refresh retry uses reads only even from a synchronous subscriber', async () => {
+  const h = durableHarness(), v = h.view(); v.create(); h.flags.afterAccepted = () => { h.flags.failRead = true; };
+  let reentered = 0;
+  v.controller.subscribe(state => { if (state.saveStatus === 'refresh-required' && state.loading) { reentered++; void v.controller.save(); } });
+  await v.controller.save(); assert.equal(v.controller.getState().saveStatus, 'refresh-required'); assert.equal(reentered, 1);
+  const count = h.calls.length; h.flags.failRead = false; h.flags.afterAccepted = null; await v.controller.save();
+  assert.equal(v.controller.getState().saveStatus, 'idle'); assert.equal(h.calls.slice(count).some(call => call.startsWith('set:')), false);
+  assert.equal(h.documents.get(h.counter).lastFileNo, 1);
+});
+
+test('patient workspace actual conflict preserves original command until confirmed cancellation then fresh selection', async () => {
+  const h = durableHarness(), first = h.view(); first.create(); await first.controller.save();
+  const stale = h.view([OTHER]); await stale.controller.select(ID); stale.controller.beginEdit(stale.controller.getState().selected!);
+  stale.controller.updateProfile({ name: 'stale draft' });
+  const create = h.documents.get(h.intent()).command, newer = { ...create, operationId: '20000000-0000-4000-8000-000000000003', action: 'update',
+    expectedRevision: 1, profile: { ...create.profile, name: 'newer synthetic edit' } };
+  await h.journal.prepare('patient-profile', newer, NOW); await h.repository.commit(newer); await stale.controller.save();
+  assert.equal(stale.controller.getState().saveStatus, 'retry-required'); assert.equal(stale.controller.getState().draft?.expectedRevision, 1);
+  assert.equal(stale.controller.updateProfile({ name: 'unsafe rebase' }), false); assert.equal(stale.controller.cancelDraft(), false);
+  const original = structuredClone(h.documents.get(h.intent(OTHER))); await stale.controller.save();
+  assert.deepEqual(h.documents.get(h.intent(OTHER)), original);
+  assert.equal(await stale.controller.cancelPending(), true); await stale.controller.select(ID);
+  assert.equal(stale.controller.getState().selected?.revision, 2); assert.equal(h.documents.get(h.counter).lastFileNo, 1);
+});
+
+test('patient workspace cancel failure or accepted-write race never discards unresolved original command', async () => {
+  const h = durableHarness(), v = h.view(); v.create(); h.flags.losePrepare = true; await v.controller.save();
+  h.flags.failCancel = true; assert.equal(await v.controller.cancelPending(), false);
+  assert.equal(v.controller.getState().pendingOperationId, OP); assert.equal(v.controller.cancelDraft(), false);
+  h.flags.failCancel = false;
+  const operation = h.documents.get(h.intent()).command; await h.repository.commit(operation);
+  assert.equal(await v.controller.cancelPending(), false); assert.equal(v.controller.getState().pendingOperationId, OP);
+  await v.controller.save(); assert.equal(v.controller.getState().pendingOperationId, null);
+  assert.equal(h.documents.get(h.counter).lastFileNo, 1);
+});
+
+test('patient workspace actual lease loss clears memory but a server-accepted operation remains recoverable', async () => {
+  const h = durableHarness(), first = h.view(); first.create(); h.flags.afterAccepted = () => { first.setActive(false); first.controller.getState(); };
+  await first.controller.save(); assert.equal(first.controller.getState().closed, true); assert.equal(first.controller.recovery.getState().closed, true);
+  assert.equal(first.controller.getState().draft, null); assert.equal(h.documents.get(h.intent()).status, 'committed');
+  h.flags.afterAccepted = null; const next = h.view([]); assert.equal(await next.controller.resume(OP), true);
+  assert.equal(h.documents.get(h.counter).lastFileNo, 1); assert.equal(next.controller.getState().selected?.fileNo, 1);
+});
+
+test('patient workspace refuses missing journal or invalid operation clock without a hidden domain commit', async () => {
+  const h = harness(); const legacy = { ...h.repository }; delete legacy.journal;
+  const ids = [ID, OP], controller = createCloudPatientWorkspaceController({ getRepository: async () => legacy,
+    isActive: () => true, newId: () => ids.shift()!, today: () => DAY, now: () => NOW });
+  controller.beginCreate(); controller.updateProfile({ name: 'synthetic' }); await controller.save();
+  assert.equal(controller.getState().saveStatus, 'retry-required'); assert.equal(controller.getState().pendingOperationId, OP); assert.equal(h.commands.length, 0);
+  assert.equal(await controller.cancelPending(), false);
+  for (const time of ['', '2026-02-30T00:00:00.000Z', `${NOW}\n`, '1899-12-31T00:00:00.000Z']) {
+    const durable = durableHarness(), v = durable.view([ID, OP], time); v.create(); await v.controller.save();
+    assert.equal(v.controller.getState().saveStatus, 'idle'); assert.equal(v.controller.getState().pendingOperationId, null); assert.deepEqual(durable.calls, []);
+  }
+});
+
+test('patient workspace cancelled malformed mismatched actor or time intents cannot resume or trigger cancellation writes', async () => {
+  const h = harness(); h.createDraft(); h.handlers.commitError = Error('lost'); await h.controller.save();
+  const source = h.repository.journal!, originalGet = source.get, originalCancel = source.cancel;
+  let cancelCalls = 0;
+  source.cancel = async id => { cancelCalls++; return originalCancel(id); };
+  const original = (await originalGet(OP))!;
+  for (const patch of [{ createdAt: '2026-10-12T10:00:00.000Z' }, { actorUid: 'another-owner' }, { kind: 'contact' },
+    { command: { ...original.command, unexpected: true } }, { operationId: OTHER, recordId: OTHER }]) {
+    source.get = async () => ({ ...original, ...patch } as CloudOperationIntent);
+    assert.equal(await h.controller.cancelPending(), false); assert.equal(cancelCalls, 0); assert.equal(h.controller.getState().pendingOperationId, OP);
+  }
+  const durable = durableHarness(), first = durable.view(); first.create(); durable.flags.losePrepare = true; await first.controller.save();
+  await durable.journal.cancel(OP); first.controller.dispose(); const next = durable.view([]);
+  assert.equal(await next.controller.resume(OP), false); assert.equal(next.controller.getState().draft, null);
+  assert.equal(durable.documents.get(durable.counter).lastFileNo, 0);
+});
+
+test('patient workspace recovery cached actions refuse pending drafts and reads without closing history or clearing ordinary loading', async () => {
+  const h = durableHarness(), v = h.view(); await v.controller.recovery.loadFirst(); const count = h.calls.length;
+  v.create(); await v.controller.recovery.loadFirst(); await v.controller.recovery.loadMore();
+  assert.equal(h.calls.length, count); assert.equal(v.controller.recovery.getState().closed, false); assert.equal(v.controller.cancelDraft(), true);
+  const fake = harness(), gate = deferred<CloudPatientPage>();
+  await fake.controller.recovery.loadFirst(); fake.handlers.listDelay = gate.promise;
+  const pending = fake.controller.refresh(); await tick(); const before = fake.calls.length;
+  await fake.controller.recovery.loadFirst(); assert.equal(fake.calls.length, before); assert.equal(fake.controller.getState().loading, true);
+  gate.resolve({ records: [], nextAfterId: null }); await pending;
+  assert.equal(fake.controller.getState().loading, false); assert.equal(fake.controller.getState().recoveryLoading, false);
+});
+
+test('patient workspace subscriber transitions stay captured when an earlier listener synchronously opens another draft', () => {
+  const h = harness(); h.setIds([ID, OTHER]); h.createDraft(); let nested = true; const drafts: Array<string | null> = [];
+  h.controller.subscribe(value => { if (value.draft === null && nested) { nested = false; h.controller.beginCreate(); } });
+  h.controller.subscribe(value => drafts.push(value.draft?.recordId ?? null));
+  h.controller.cancelDraft(); assert.deepEqual(drafts, [OTHER, null]); assert.equal(h.controller.getState().draft?.recordId, OTHER);
+});
+
+test('patient workspace recovery read locks creation and navigation state until completion, and disposing clears both controllers', async () => {
+  const h = harness(), gate = deferred<{ records: CloudOperationIntent[]; nextAfterId: null }>();
+  h.repository.journal!.listHistoryPage = async () => gate.promise;
+  const pending = h.controller.recovery.loadFirst(); await tick(); assert.equal(h.controller.getState().recoveryLoading, true);
+  assert.equal(h.controller.beginCreate(), false); await h.controller.refresh(); assert.equal(h.calls.includes('list:first:25'), false);
+  h.controller.dispose(); gate.resolve({ records: [], nextAfterId: null }); await pending;
+  assert.equal(h.controller.getState().closed, true); assert.equal(h.controller.recovery.getState().closed, true); assert.equal(h.controller.getState().recoveryLoading, false);
 });

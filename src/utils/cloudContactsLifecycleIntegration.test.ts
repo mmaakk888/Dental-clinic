@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createCloudOperatingAuthSession, type CloudOperatingAuthAdapter } from './cloudOperatingAuth';
 import { createCloudOperatingPageController } from './cloudOperatingPageController';
-import { createCloudContactRepository, type CloudContactAdapter, type CloudContactRecord } from './cloudContactRepository';
+import { createJournaledCloudContactRepository, type CloudContactAdapter, type CloudContactRecord } from './cloudContactRepository';
+import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
 
 // Composition tests only: real pure Auth/page/workspace/repository modules,
 // fabricated membership and an in-memory server. No SDK, emulator, live login,
@@ -40,6 +41,9 @@ function fixture() {
     commitAccepted?: ReturnType<typeof deferred>;
     loseReply?: boolean;
     failRecordRead?: boolean;
+    historyGate?: ReturnType<typeof deferred>;
+    historyStarted?: ReturnType<typeof deferred>;
+    losePrepareReply?: boolean;
   } = {};
   let writes = 0;
   const auth = createCloudOperatingAuthSession({
@@ -75,15 +79,26 @@ function fixture() {
       });
       rows.clear(); for (const [path, value] of staged) rows.set(path, value);
       writes += changed.length;
-      if (changed.length) {
+      if (changed.some(path => path.startsWith('clinics/main/contactRecords/'))) {
         hooks.commitAccepted?.resolve(undefined); await hooks.commitReplyGate?.promise;
         if (hooks.loseReply) { hooks.loseReply = false; throw new Error('SYNTHETIC_LOST_ACKNOWLEDGEMENT'); }
+      }
+      if (changed.length === 1 && changed[0].includes('/operationIntents/') && hooks.losePrepareReply) {
+        hooks.losePrepareReply = false; throw new Error('SYNTHETIC_LOST_PREPARE_ACK');
       }
       return result;
     },
   };
   const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
-  const repository = createCloudContactRepository(adapter, { digest });
+  const journalAdapter: CloudIntentAdapter = { authorizeOwner: adapter.authorizeOwner, runTransaction: adapter.runTransaction,
+    readRecord: adapter.readRecord, listHistoryPage: async (kind, actorUid, afterId, limit) => {
+      calls.push('data:history'); hooks.historyStarted?.resolve(undefined); await hooks.historyGate?.promise;
+      return [...rows].filter(([path, value]) => path.startsWith('clinics/main/operationIntents/')
+        && value.kind === kind && value.actorUid === actorUid && (afterId === null || value.operationId > afterId))
+        .sort((a, b) => a[0] < b[0] ? -1 : 1).slice(0, limit).map(([, data]) => ({ id: data.operationId, data: structuredClone(data) }));
+    } };
+  const journal = createCloudOperationIntentRepository(journalAdapter, { digest });
+  const repository = { ...createJournaledCloudContactRepository(adapter, { digest }), journal };
   // This seam deliberately has no SDK and can return late after logout. The
   // page lease, not this fabricated capability factory, must reject that view.
   const session = { ...auth, getContacts: async () => {
@@ -92,7 +107,11 @@ function fixture() {
     return repository;
   } };
   const page = createCloudOperatingPageController(async () => session, () => true);
-  const independent = createCloudContactRepository({ ...adapter, authorizeOwner: async () => UID }, { digest });
+  const independentCore = createJournaledCloudContactRepository({ ...adapter, authorizeOwner: async () => UID }, { digest });
+  const independentJournal = createCloudOperationIntentRepository({ ...journalAdapter, authorizeOwner: async () => UID }, { digest });
+  const independent = { commit: async (command: Parameters<typeof independentCore.commit>[0]) => {
+    await independentJournal.prepare('contact', command, TIME); return independentCore.commit(command);
+  } };
   const loginAndOpen = async () => {
     await page.signIn(EMAIL, PASSWORD);
     const workspace = await page.openContacts();
@@ -106,22 +125,15 @@ function fixture() {
   return { rows, calls, hooks, auth, page, repository, independent, loginAndOpen, createDraft, writes: () => writes };
 }
 
-test('Auth/page/workspace composition keeps explicit opening inert and preserves a draft across per-read checking', async () => {
+test('Auth/page/workspace composition keeps opening inert, blocks reads while editing and preserves the draft across checking', async () => {
   const h = fixture();
   assert.deepEqual(h.calls, []);
   const workspace = await h.loginAndOpen();
   assert.equal(h.calls.some(call => call.startsWith('data:')), false, 'opening does not list or save');
   h.createDraft(workspace);
   const draft = workspace.getState().draft;
-  h.hooks.ownerGate = deferred(); h.hooks.ownerStarted = deferred();
-  const loading = workspace.loadFirst();
-  await h.hooks.ownerStarted.promise;
-  assert.equal(h.auth.getState().phase, 'checking');
-  assert.equal(h.page.getContactsWorkspace(), workspace);
-  assert.equal(workspace.getState().draft, draft);
-  assert.equal(workspace.getState().closed, false);
-  h.hooks.ownerGate.resolve(undefined); await loading;
-  assert.equal(workspace.getState().loaded, true);
+  await workspace.loadFirst();
+  assert.equal(workspace.getState().loaded, false);
   assert.equal(workspace.getState().draft, draft);
   h.hooks.ownerGate = deferred(); h.hooks.ownerStarted = deferred();
   const refresh = h.page.refresh();
@@ -130,6 +142,8 @@ test('Auth/page/workspace composition keeps explicit opening inert and preserves
   assert.equal(workspace.getState().draft, draft);
   h.hooks.ownerGate.resolve(undefined); await refresh;
   assert.equal(h.page.getContactsWorkspace(), workspace);
+  assert.equal(workspace.cancelDraft(), true);
+  await workspace.loadFirst(); assert.equal(workspace.getState().loaded, true);
   await h.page.dispose();
   assert.equal(workspace.getState().closed, true);
 });
@@ -225,4 +239,29 @@ test('all-tombstone first page remains owned and its live successor is reachable
   assert.equal(workspace.getState().records.at(-1)?.recordId, ids[25]);
   assert.equal(workspace.getState().nextAfterId, null);
   await h.page.dispose();
+});
+
+test('contact recovery history read holds the page lease, blocks switching/creation and revokes late output on logout', async () => {
+  const h = fixture(), workspace = await h.loginAndOpen();
+  assert.equal(h.calls.includes('data:history'), false);
+  h.hooks.historyGate = deferred(); h.hooks.historyStarted = deferred();
+  const reading = workspace.recovery.loadFirst(); await h.hooks.historyStarted.promise;
+  assert.equal(h.page.closeContacts(), false); assert.equal(workspace.beginCreate(), false);
+  assert.equal(h.page.getContactsWorkspace(), workspace);
+  const logout = h.page.signOut(); h.hooks.historyGate.resolve(undefined); await reading; await logout;
+  assert.equal(workspace.recovery.getState().closed, true); assert.deepEqual(workspace.recovery.getState().records, []);
+  assert.equal(h.writes(), 0); await h.page.dispose();
+});
+
+test('cached contact recovery cannot start another history read while an ordinary draft or pending original operation exists', async () => {
+  const h = fixture(), workspace = await h.loginAndOpen(); await workspace.recovery.loadFirst();
+  const historyCalls = () => h.calls.filter(call => call === 'data:history').length;
+  h.createDraft(workspace); await workspace.recovery.loadFirst(); assert.equal(historyCalls(), 1);
+  h.hooks.losePrepareReply = true; await workspace.save();
+  assert.equal(workspace.getState().saveStatus, 'retry-required'); assert.ok(workspace.getState().pendingOperationId);
+  assert.equal([...h.rows.keys()].some(path => path.includes('/contactRecords/')), false);
+  await workspace.recovery.loadFirst(); assert.equal(historyCalls(), 1);
+  assert.equal(await workspace.cancelPending(), true); await workspace.recovery.loadFirst();
+  assert.equal(historyCalls(), 2); assert.equal(workspace.recovery.getState().records[0].status, 'cancelled');
+  assert.equal(h.page.closeContacts(), true); await h.page.dispose();
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { createHash } from 'node:crypto';
 import { createCloudOperatingAuthSession, type CloudOperatingAuthAdapter,
   type CloudOperatingAuthSession } from './cloudOperatingAuth';
 import { createCloudOperatingPageController, type CloudOperatingPageState,
@@ -9,6 +10,7 @@ import { CloudContactError, type CloudContactRepository } from './cloudContactRe
 import { CloudPatientError, type CloudPatientRepository } from './cloudPatientRepository';
 import { CloudClinicalError, type CloudClinicalSessionData } from './cloudClinicalRepository';
 import type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
+import { prepareCloudIntentCommand, type CloudOperationIntent, type CloudOperationIntentRepository } from './cloudOperationIntent';
 
 const EMAIL = 'owner@example.invalid';
 const PASSWORD = 'synthetic-password-only';
@@ -60,9 +62,26 @@ function fixture(options: {
   return { controller, session, calls, credentials, setRuntime: (value: boolean) => { runtime = value; } };
 }
 
+function syntheticJournal(kind: 'contact' | 'patient-profile'): CloudOperationIntentRepository {
+  const rows = new Map<string, CloudOperationIntent>();
+  return {
+    prepare: async (requestedKind, input, createdAt) => {
+      assert.equal(requestedKind, kind); const command = prepareCloudIntentCommand(input), operationId = command.operationId as string;
+      const result: CloudOperationIntent = { schemaVersion: 1, clinicId: 'main', recordId: operationId, operationId,
+        actorUid: 'synthetic-owner', kind, status: 'prepared', revision: 1, createdAt, command,
+        requestHash: createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', 'synthetic-owner', kind, command])).digest('hex') };
+      rows.set(operationId, result); return structuredClone(result);
+    },
+    get: async operationId => structuredClone(rows.get(operationId) ?? null),
+    cancel: async operationId => { const row = rows.get(operationId); assert.ok(row); const result: CloudOperationIntent = { ...row, status: 'cancelled', revision: 2 }; rows.set(operationId, result); return structuredClone(result); },
+    listPreparedPage: async () => ({ records: [], nextAfterId: null }),
+    listHistoryPage: async () => ({ records: [], nextAfterId: null }),
+  };
+}
 function contactRepository(overrides: Partial<CloudContactRepository> = {}) {
   const calls: string[] = [];
-  const repository: CloudContactRepository = {
+  const repository: CloudContactRepository & { journal: CloudOperationIntentRepository } = {
+    journal: syntheticJournal('contact'),
     commit: async input => {
       calls.push('commit');
       return overrides.commit ? overrides.commit(input)
@@ -79,7 +98,8 @@ function contactRepository(overrides: Partial<CloudContactRepository> = {}) {
 
 function patientRepository(overrides: Partial<CloudPatientRepository> = {}) {
   const calls: string[] = [];
-  const repository: CloudPatientRepository = {
+  const repository: CloudPatientRepository & { journal: CloudOperationIntentRepository } = {
+    journal: syntheticJournal('patient-profile'),
     commit: async input => {
       calls.push('commit');
       return overrides.commit ? overrides.commit(input)
