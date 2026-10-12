@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import type { CloudClinicalCapability, CloudOperatingFirebaseSession, CloudServiceCatalogCapability } from './cloudOperatingAuth';
 import type { CloudClinicalCommand } from './cloudClinicalRepository';
+import type { FirebaseCloudAppointmentsCapability } from './firebaseCloudAppointments';
 import { prepareCloudIntentCommand, type CloudOperationKind } from './cloudOperationIntent';
 
 const PROJECT = 'dental-clinic-mmaakk888';
@@ -25,6 +26,12 @@ function rawClinicalCommand(): CloudClinicalCommand {
 function rawCatalogCommand() {
   return { operationId: INSTANCE, expectedRevision: 0, createdAt: CREATED_AT,
     data: { examinationCents: 10000, services: [{ serviceId: RECORD, name: 'خدمة مصطنعة', kind: 'clinical', priceCents: 20000, active: true }] } };
+}
+function rawAppointmentCommand() {
+  return { operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, createdAt: CREATED_AT,
+    data: { patientRecordId: null, patientName: 'موعد مصطنع', phone: '', date: '2026-10-10', time: '16:00',
+      durationMinutes: 30, status: 'scheduled', reason: '', notes: '', doctorName: '', appointmentType: '',
+      isFollowUp: false, isWalkIn: false } };
 }
 function rawProfileContactCommand(kind: 'contact' | 'patient-profile') {
   return kind === 'contact' ? { operationId: INSTANCE, recordId: RECORD, expectedRevision: 0, action: 'create',
@@ -50,7 +57,7 @@ async function until(check: () => boolean) {
 }
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -85,6 +92,19 @@ async function fixture(options: {
   catalogIntentKind?: 'catalog' | 'clinical';
   catalogIntentActor?: string;
   catalogRecord?: unknown;
+  appointmentsImportHook?: () => void;
+  appointmentsFactoryGate?: Promise<void>;
+  appointmentsMethodGate?: Promise<void>;
+  appointmentsFailure?: unknown;
+  appointmentsIntentKind?: CloudOperationKind;
+  appointmentsIntentActor?: string;
+  appointmentsIntentCommand?: unknown;
+  appointmentsRecord?: unknown;
+  appointmentsDay?: unknown;
+  appointmentsCommitResult?: unknown;
+  appointmentsHistoryMissing?: boolean;
+  appointmentsHistoryRows?: unknown[];
+  appointmentsHistoryCursor?: string | null;
   onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
@@ -100,6 +120,8 @@ async function fixture(options: {
   let clinicalActive: (() => boolean) | null = null;
   const catalogCalls: string[] = [], catalogInputs: unknown[] = [];
   let catalogActive: (() => boolean) | null = null;
+  const appointmentsCalls: string[] = [], appointmentsInputs: unknown[] = [];
+  let appointmentsActive: (() => boolean) | null = null;
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -303,6 +325,44 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           };
         } };
       }
+      if (name === './firebaseCloudAppointments') {
+        options.appointmentsImportHook?.();
+        return { createFirebaseCloudAppointments: async (target: unknown, settings: { isActive: () => boolean }) => {
+          assert.equal(target, auth); assert.equal(settings.isActive(), true);
+          appointmentsCalls.push('factory'); appointmentsActive = settings.isActive;
+          await options.appointmentsFactoryGate;
+          const work = async <T>(name: string, input: unknown, result: T) => {
+            appointmentsCalls.push(name); appointmentsInputs.push(input); await options.appointmentsMethodGate;
+            if (options.appointmentsFailure !== undefined) throw options.appointmentsFailure;
+            return result;
+          };
+          const intent = (command: unknown, createdAt = CREATED_AT, status = 'prepared') => module.exports.__input({
+            schemaVersion: 1, clinicId: 'main', recordId: INSTANCE, operationId: INSTANCE,
+            actorUid: options.appointmentsIntentActor ?? UID, kind: options.appointmentsIntentKind ?? 'appointment',
+            requestHash: '0'.repeat(64), status, revision: status === 'prepared' ? 1 : 2, createdAt,
+            command: options.appointmentsIntentCommand ?? prepareCloudIntentCommand(JSON.parse(JSON.stringify(command))),
+          });
+          const history = () => ({ records: options.appointmentsHistoryRows === undefined
+            ? [intent(rawAppointmentCommand(), undefined, 'committed')] : module.exports.__input(options.appointmentsHistoryRows),
+            nextAfterId: options.appointmentsHistoryCursor ?? null });
+          return {
+            repository: {
+              get: (input: unknown) => work('get', input, options.appointmentsRecord === undefined ? null : module.exports.__input(options.appointmentsRecord)),
+              getDay: (input: unknown) => work('getDay', input, options.appointmentsDay === undefined ? null : module.exports.__input(options.appointmentsDay)),
+              listDayPage: (input: unknown) => work('listDayPage', input, { records: [], nextAfterId: null }),
+              commit: (input: unknown) => work('commit', input, module.exports.__input(options.appointmentsCommitResult === undefined
+                ? { status: 'committed', recordId: RECORD, revision: 1 } : options.appointmentsCommitResult)),
+            },
+            journal: {
+              prepare: (kind: unknown, command: unknown, createdAt: string) => work('prepare', { kind, command, createdAt }, intent(command, createdAt)),
+              get: (id: string) => work('intentGet', id, intent(rawAppointmentCommand())),
+              listPreparedPage: (kind: unknown, input: unknown) => work('listPreparedPage', { kind, input }, { records: [intent(rawAppointmentCommand())], nextAfterId: null }),
+              ...(!options.appointmentsHistoryMissing ? { listHistoryPage: (kind: unknown, input: unknown) => work('listHistoryPage', { kind, input }, history()) } : {}),
+              cancel: (id: string) => work('cancel', id, intent(rawAppointmentCommand(), undefined, 'cancelled')),
+            },
+          };
+        } };
+      }
       if (name === 'firebase/firestore/lite') return {
         getFirestore: (target: unknown, databaseId: string) => {
           assert.equal(target, app); assert.equal(databaseId, '(default)'); step('getFirestore'); return database;
@@ -331,6 +391,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     patientCalls, patientInputs, patientsActive: () => patientsActive?.() ?? false,
     clinicalCalls, clinicalInputs, clinicalActive: () => clinicalActive?.() ?? false,
     catalogCalls, catalogInputs, catalogActive: () => catalogActive?.() ?? false,
+    appointmentsCalls, appointmentsInputs, appointmentsActive: () => appointmentsActive?.() ?? false,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
     replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
@@ -345,7 +406,7 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments'].sort());
 });
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
@@ -489,7 +550,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(again, repository);
   assert.equal(Object.isFrozen(repository), true);
   assert.equal(h.contactsActive(), true);
-  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getClinical', 'getContacts', 'getPatients', 'getServiceCatalog', 'getState',
+  assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getAppointments', 'getClinical', 'getContacts', 'getPatients', 'getServiceCatalog', 'getState',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
   assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'journal', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);
@@ -1228,4 +1289,205 @@ test('catalog adapter failures, foreign returned intents and malformed singleton
   }
   const h = await fixture({ catalogRecord: { examinationCents: 0 } }), session = await h.api.createFirebaseOperatingAuth();
   await session.signIn(EMAIL, PASSWORD); await assert.rejects((await session.getServiceCatalog()).repository.get()); await session.dispose();
+});
+
+type AppointmentTestMethod = 'get' | 'getDay' | 'listDayPage' | 'commit' | 'prepare' | 'intentGet' | 'listPreparedPage' | 'listHistoryPage' | 'cancel';
+const APPOINTMENT_METHODS: readonly AppointmentTestMethod[] = ['get', 'getDay', 'listDayPage', 'commit', 'prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'];
+function invokeAppointments(cap: FirebaseCloudAppointmentsCapability, method: AppointmentTestMethod, copy: <T>(value: T) => T): Promise<unknown> {
+  switch (method) {
+    case 'get': return cap.repository.get(RECORD);
+    case 'getDay': return cap.repository.getDay('2026-10-10');
+    case 'listDayPage': return cap.repository.listDayPage(copy({ date: '2026-10-10', afterId: null, limit: 2 }));
+    case 'commit': return cap.repository.commit(copy(rawAppointmentCommand()) as never);
+    case 'prepare': return cap.journal.prepare('appointment', copy(rawAppointmentCommand()), CREATED_AT);
+    case 'intentGet': return cap.journal.get(INSTANCE);
+    case 'listPreparedPage': return cap.journal.listPreparedPage('appointment', copy({ limit: 2 }));
+    case 'listHistoryPage': return cap.journal.listHistoryPage!('appointment', copy({ limit: 2 }));
+    case 'cancel': return cap.journal.cancel(INSTANCE);
+  }
+}
+
+test('appointments capability stays inert through construction/sign-in and is explicit lazy frozen and owner-authorized per action', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+  await assert.rejects(session.getAppointments()); assert.equal(h.imports.includes('./firebaseCloudAppointments'), false);
+  await session.signIn(EMAIL, PASSWORD);
+  assert.deepEqual(h.appointmentsCalls, []); assert.equal(h.imports.includes('./firebaseCloudAppointments'), false);
+  const cap = await session.getAppointments(); assert.equal(cap, await session.getAppointments());
+  assert.deepEqual(h.appointmentsCalls, ['factory']); assert.equal(h.appointmentsActive(), true);
+  assert.deepEqual(Object.keys(cap).sort(), ['journal', 'repository']);
+  assert.deepEqual(Object.keys(cap.repository).sort(), ['commit', 'get', 'getDay', 'listDayPage']);
+  assert.deepEqual(Object.keys(cap.journal).sort(), ['cancel', 'get', 'listHistoryPage', 'listPreparedPage', 'prepare']);
+  assert.equal(Object.isFrozen(cap), true); assert.equal(Object.isFrozen(cap.repository), true); assert.equal(Object.isFrozen(cap.journal), true);
+  for (const method of APPOINTMENT_METHODS) {
+    const before = h.paths.length, result = await invokeAppointments(cap, method, h.api.__input);
+    if (method === 'get' || method === 'getDay') assert.equal(result, null, 'missing data stays unknown, never invented empty/zero');
+    assert.equal(h.paths.length - before, 2, method);
+  }
+  assert.deepEqual(h.appointmentsCalls, ['factory', ...APPOINTMENT_METHODS]);
+  assert.deepEqual(h.contactCalls, []); assert.deepEqual(h.patientCalls, []); assert.deepEqual(h.clinicalCalls, []); assert.deepEqual(h.catalogCalls, []);
+  await session.dispose(); assert.equal(h.appointmentsActive(), false);
+});
+
+test('all retained appointment and journal methods are permanently revoked after exact identity or runtime lease loss', async () => {
+  for (const event of ['logout', 'invalidate', 'dispose', 'replace', 'lost', 'observer', 'host', 'emulator'] as const) {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments();
+    if (event === 'logout') { await session.signOut(); await session.signIn(EMAIL, PASSWORD); }
+    else if (event === 'invalidate') session.invalidate();
+    else if (event === 'dispose') await session.dispose();
+    else if (event === 'replace') h.replaceIdentity();
+    else if (event === 'lost') h.loseIdentity();
+    else if (event === 'observer') h.observerFailure();
+    else if (event === 'host') h.location.hostname = 'outside.example.invalid';
+    else h.auth.emulatorConfig = {};
+    for (const method of APPOINTMENT_METHODS) await assert.rejects(invokeAppointments(cap, method, h.api.__input), undefined, `${event}/${method}`);
+    assert.equal(h.appointmentsActive(), false); assert.deepEqual(h.appointmentsCalls, ['factory']);
+    h.location.hostname = '127.0.0.1'; h.auth.emulatorConfig = null;
+    await assert.rejects(cap.repository.get(RECORD), undefined, 'restored runtime cannot revive a lost generation');
+    if (event === 'logout') { const fresh = await session.getAppointments(); assert.notEqual(fresh, cap); await fresh.repository.get(RECORD); }
+    await session.dispose();
+  }
+});
+
+test('appointment lazy import or delayed factory closed during loading cannot create or return a usable late capability', async () => {
+  for (const at of ['import', 'factory', 'replacement'] as const) {
+    const gate = deferred(); let session!: CloudOperatingFirebaseSession;
+    const h = await fixture(at === 'import' ? { appointmentsImportHook: () => { void session.signOut(); } } : { appointmentsFactoryGate: gate.promise });
+    session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const loading = session.getAppointments(), rejected = assert.rejects(loading);
+    if (at !== 'import') { await until(() => h.appointmentsCalls.includes('factory')); if (at === 'replacement') h.replaceIdentity(); else await session.signOut(); gate.resolve(); }
+    await rejected; assert.equal(h.appointmentsActive(), false);
+    assert.deepEqual(h.appointmentsCalls, at === 'import' ? [] : ['factory']); await session.dispose();
+  }
+});
+
+test('owner loss during initial appointment or method authorization prevents the underlying domain action', async () => {
+  for (const method of ['getAppointments', ...APPOINTMENT_METHODS] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = method === 'getAppointments' ? null : await session.getAppointments(); enabled = true;
+    const loading = method === 'getAppointments' ? session.getAppointments() : invokeAppointments(cap!, method, h.api.__input);
+    const rejected = assert.rejects(loading); await until(() => reached);
+    const stopping = session.signOut(); gate.resolve(); await rejected; await stopping;
+    assert.deepEqual(h.appointmentsCalls, method === 'getAppointments' ? [] : ['factory'], method); await session.dispose();
+  }
+});
+
+test('server-accepted appointment or recovery work may finish after logout but cannot publish its late acknowledgement', async () => {
+  for (const method of APPOINTMENT_METHODS) {
+    const gate = deferred(), h = await fixture({ appointmentsMethodGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments(), pending = invokeAppointments(cap, method, h.api.__input), rejected = assert.rejects(pending);
+    await until(() => h.appointmentsCalls.includes(method)); await session.signOut(); gate.resolve(); await rejected;
+    assert.deepEqual(h.appointmentsCalls, ['factory', method]); assert.equal(h.appointmentsActive(), false); await session.dispose();
+  }
+});
+
+test('appointment output requires fresh canonical membership after the domain method returns', async () => {
+  const membership: Record<string, unknown> = { schemaVersion: 1, clinicId: 'main', uid: UID, role: 'owner', status: 'active',
+    identityVersion: 1, verifiedAfter: AUTH_TIME };
+  const gate = deferred(), h = await fixture({ membership, appointmentsMethodGate: gate.promise });
+  const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const cap = await session.getAppointments(), loading = cap.repository.getDay('2026-10-10'), rejected = assert.rejects(loading);
+  await until(() => h.appointmentsCalls.includes('getDay')); membership.status = 'disabled'; gate.resolve(); await rejected;
+  assert.equal(session.getState().owner, null); assert.equal(h.appointmentsActive(), false); await session.dispose();
+});
+
+test('appointment commands and journal page arguments are captured before delayed owner authorization', async () => {
+  for (const method of ['commit', 'prepare', 'listDayPage', 'listPreparedPage', 'listHistoryPage'] as const) {
+    const gate = deferred(); let enabled = false, reached = false;
+    const h = await fixture({ onGetDoc: async () => { if (enabled) { reached = true; await gate.promise; } } });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments(), command = h.api.__input(rawAppointmentCommand()), page = h.api.__input({ afterId: null as string | null, limit: 2 });
+    const dayPage = h.api.__input({ date: '2026-10-10', afterId: null as string | null, limit: 2 }); enabled = true;
+    const loading = method === 'commit' ? cap.repository.commit(command as never) : method === 'prepare' ? cap.journal.prepare('appointment', command, CREATED_AT)
+      : method === 'listDayPage' ? cap.repository.listDayPage(dayPage) : cap.journal[method]!('appointment', page);
+    await until(() => reached); command.recordId = INSTANCE; command.data.notes = 'changed'; command.data.time = '20:00'; page.limit = 50; page.afterId = RECORD;
+    dayPage.date = '2026-10-11'; dayPage.limit = 50; dayPage.afterId = RECORD;
+    gate.resolve(); await assert.doesNotReject(loading, `appointment snapshot: ${method}`);
+    const received = h.appointmentsInputs[0] as any;
+    if (method === 'commit' || method === 'prepare') { const input = method === 'prepare' ? received.command : received;
+      assert.equal(input.recordId, RECORD); assert.equal(input.data.notes, ''); assert.equal(input.data.time, '16:00');
+      if (method === 'prepare') { assert.equal(received.kind, 'appointment'); assert.equal(received.createdAt, CREATED_AT); }
+    } else if (method === 'listDayPage') { assert.equal(received.date, '2026-10-10'); assert.equal(received.limit, 2); assert.equal(received.afterId, null); }
+    else { assert.equal(received.input.limit, 2); assert.equal(received.input.afterId, null); }
+    await session.dispose();
+  }
+});
+
+test('malformed appointment commands IDs dates journal kinds and queries fail safely before owner reads or domain calls', async () => {
+  const h = await fixture(), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const cap = await session.getAppointments(), before = h.paths.length, malicious = new Proxy({}, { ownKeys() { throw new Error(PASSWORD); } });
+  for (const value of [{}, malicious]) {
+    await assert.rejects(cap.repository.commit(value as never), error => !String(error).includes(PASSWORD));
+    await assert.rejects(cap.journal.prepare('appointment', value, CREATED_AT), error => !String(error).includes(PASSWORD));
+  }
+  for (const value of ['', `${RECORD}\n`, '../members/owner']) {
+    await assert.rejects(cap.repository.get(value)); await assert.rejects(cap.journal.get(value)); await assert.rejects(cap.journal.cancel(value));
+  }
+  for (const value of ['', '2026-02-30', '2026-10-10\n']) await assert.rejects(cap.repository.getDay(value));
+  for (const value of [{}, malicious, h.api.__input({ date: '2026-02-30' }), h.api.__input({ date: '2026-10-10', limit: 0 }),
+    h.api.__input({ date: '2026-10-10', limit: 51 }), h.api.__input({ date: '2026-10-10', afterId: '../outside' })]) {
+    await assert.rejects(cap.repository.listDayPage(value as never), error => !String(error).includes(PASSWORD));
+  }
+  for (const kind of ['clinical', 'contact', 'patient-profile', 'catalog'] as const) {
+    await assert.rejects(cap.journal.prepare(kind, h.api.__input(rawAppointmentCommand()), CREATED_AT));
+    await assert.rejects(cap.journal.listPreparedPage(kind)); await assert.rejects(cap.journal.listHistoryPage!(kind));
+  }
+  for (const method of ['listPreparedPage', 'listHistoryPage'] as const) {
+    for (const value of [h.api.__input({ limit: 0 }), h.api.__input({ limit: 51 }), malicious]) {
+      await assert.rejects(cap.journal[method]!('appointment', value), error => !String(error).includes(PASSWORD));
+    }
+  }
+  await assert.rejects(cap.journal.prepare('appointment', h.api.__input(rawAppointmentCommand()), CREATED_AT.replace('10:00:', '11:00:')));
+  assert.equal(h.paths.length, before); assert.deepEqual(h.appointmentsCalls, ['factory']); await session.dispose();
+});
+
+test('appointment provider and hostile Proxy failures return fixed errors without fallback or private payloads', async () => {
+  const nestedFailure = new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } });
+  for (const appointmentsFailure of [new Error(PASSWORD), new Proxy({}, { getPrototypeOf() { throw new Error(PASSWORD); } }),
+    new Proxy({}, { getPrototypeOf() { throw nestedFailure; } })]) {
+    const h = await fixture({ appointmentsFailure }), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments();
+    for (const method of APPOINTMENT_METHODS) await assert.rejects(invokeAppointments(cap, method, h.api.__input), error => !String(error).includes(PASSWORD));
+    assert.deepEqual(h.contactCalls, []); assert.deepEqual(h.patientCalls, []); assert.deepEqual(h.clinicalCalls, []); await session.dispose();
+  }
+});
+
+test('appointment journal rejects foreign actor domain malformed full commands and unavailable all-status history', async () => {
+  for (const options of [{ appointmentsIntentKind: 'clinical' as const }, { appointmentsIntentActor: 'other-synthetic-owner' },
+    { appointmentsIntentCommand: { operationId: INSTANCE } }]) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments();
+    for (const method of ['prepare', 'intentGet', 'listPreparedPage', 'listHistoryPage', 'cancel'] as const) {
+      await assert.rejects(invokeAppointments(cap, method, h.api.__input));
+    }
+    await session.dispose();
+  }
+  const h = await fixture({ appointmentsHistoryMissing: true }), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+  const cap = await session.getAppointments(); await assert.rejects(cap.journal.listHistoryPage!('appointment'));
+  assert.equal(h.appointmentsCalls.includes('listPreparedPage'), false, 'cannot substitute the prepared-only queue'); await session.dispose();
+});
+
+test('appointment facade rejects malformed domain outputs and unbound write acknowledgements', async () => {
+  for (const [options, method] of [[{ appointmentsRecord: {} }, 'get'], [{ appointmentsDay: {} }, 'getDay'],
+    [{ appointmentsCommitResult: { status: 'committed', recordId: INSTANCE, revision: 1 } }, 'commit'],
+    [{ appointmentsCommitResult: { status: 'committed', recordId: RECORD, revision: 9 } }, 'commit'],
+    [{ appointmentsCommitResult: { status: 'committed', recordId: RECORD, revision: 1, secret: PASSWORD } }, 'commit']] as const) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments(); await assert.rejects(invokeAppointments(cap, method, h.api.__input), error => !String(error).includes(PASSWORD)); await session.dispose();
+  }
+});
+
+test('appointment recovery pages enforce strict original-operation order bounds and cursor coherence', async () => {
+  const intent = (operationId: string) => ({ schemaVersion: 1, clinicId: 'main', recordId: operationId, operationId,
+    actorUid: UID, kind: 'appointment', requestHash: '0'.repeat(64), status: 'committed', revision: 2, createdAt: CREATED_AT,
+    command: prepareCloudIntentCommand({ ...rawAppointmentCommand(), operationId }) });
+  for (const options of [{ appointmentsHistoryRows: [intent(INSTANCE), intent(INSTANCE)] },
+    { appointmentsHistoryRows: [intent(RECORD), intent(INSTANCE)] }, { appointmentsHistoryRows: [], appointmentsHistoryCursor: INSTANCE },
+    { appointmentsHistoryRows: [intent(INSTANCE)], appointmentsHistoryCursor: RECORD }]) {
+    const h = await fixture(options), session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const cap = await session.getAppointments(); await assert.rejects(cap.journal.listHistoryPage!('appointment', h.api.__input({ limit: 2 }))); await session.dispose();
+  }
 });
