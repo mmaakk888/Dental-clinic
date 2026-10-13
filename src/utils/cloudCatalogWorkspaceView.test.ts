@@ -18,7 +18,7 @@ const compiled = await build({ entryPoints: ['src/components/settings/CloudServi
 const module = { exports: {} };
 new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports);
 const { default: CloudServiceCatalogWorkspace, CloudServiceCatalogWorkspaceView, parseCloudCatalogMoneyText,
-  buildCloudCatalogEditorData } = module.exports as typeof import('../components/settings/CloudServiceCatalogWorkspace');
+  buildCloudCatalogEditorData, cloudCatalogEditorSaveTarget } = module.exports as typeof import('../components/settings/CloudServiceCatalogWorkspace');
 const id = (value: number) => `90000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const FIRST = id(1), SECOND = id(2), OP = id(90), WHEN = '2026-10-11T00:00:00.000Z';
 function record(): CloudServiceCatalogRecord {
@@ -139,7 +139,8 @@ test('Arabic money input is exact integer piastres; blank is null and malformed/
 test('missing exam stays blank; explicit 100 button changes only the open draft and does not save', () => {
   const source = { examinationCents: null, services: [] }, raw = editor(source);
   const h = viewProps({ state: state({ loaded: true, draft: source }), editor: raw }), view = rendered(h.props);
-  assert.equal(view.input('-exam-input').props.value, ''); assert.equal(view.button('حفظ الفهرس').props.disabled, true);
+  assert.equal(view.input('-exam-input').props.value, ''); assert.equal(view.button('حفظ قيمة الكشف').props.disabled, true);
+  assert.equal(view.button('حفظ الخدمة المحددة').props.disabled, true); assert.equal(view.button('إضافة خدمة').props.disabled, true);
   view.button('استخدام ١٠٠ ج.م للكشف').props.onClick(); assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0][0], 'exam100'); assert.equal(h.calls[0][1], raw);
   assert.equal(source.examinationCents, null);
@@ -150,7 +151,7 @@ test('editor validates names, explicit kinds and nullable prices; missing exam o
   raw.rows[0].price = '0'; assert.equal(buildCloudCatalogEditorData(raw)?.services[0].priceCents, 0);
   raw.examination = ''; assert.equal(buildCloudCatalogEditorData(raw), null);
   raw.examination = '100'; raw.rows[1].name = raw.rows[0].name; assert.equal(buildCloudCatalogEditorData(raw), null);
-  assert.equal(rendered(h.props).button('حفظ الفهرس').props.disabled, true);
+  assert.equal(rendered(h.props).button('حفظ الخدمة المحددة').props.disabled, true);
 });
 test('editor ordinary draft blocks close/load/history and requires explicit cancellation', () => {
   const source = record().data, raw = editor(source), h = viewProps({ state: state({ loaded: true, snapshot: record(), draft: source }), editor: raw });
@@ -259,6 +260,8 @@ test('wrapper complete save updates one validated draft, awaits result and suppr
   const props = { controller: h.controller, onClose() {} };
   invoke(CloudServiceCatalogWorkspace, props, memory).props.onBeginEdit();
   let view = invoke(CloudServiceCatalogWorkspace, props, memory).props, raw = view.editor;
+  view.onChangeEditor({ ...raw, examination: '200' }, raw);
+  view = invoke(CloudServiceCatalogWorkspace, props, memory).props; raw = view.editor;
   view.onSave(raw); view.onSave(raw); view.onCancelEditor(raw); view.onLoad();
   assert.equal(h.calls.filter(call => call[0] === 'update').length, 1); assert.equal(h.calls.filter(call => call[0] === 'save').length, 1);
   view = invoke(CloudServiceCatalogWorkspace, props, memory).props; assert.ok(view.editor); assert.equal(view.state.saveStatus, 'saving');
@@ -267,7 +270,9 @@ test('wrapper complete save updates one validated draft, awaits result and suppr
 test('wrapper failed save retains raw draft with the same source revision and delegates retries only', async () => {
   const h = harness(), memory = slots(); h.behavior.success = false; const props = { controller: h.controller, onClose() {} };
   invoke(CloudServiceCatalogWorkspace, props, memory).props.onBeginEdit();
-  let view = invoke(CloudServiceCatalogWorkspace, props, memory).props; view.onSave(view.editor); await tick();
+  let view = invoke(CloudServiceCatalogWorkspace, props, memory).props;
+  view.onChangeEditor({ ...view.editor, examination: '200' }, view.editor);
+  view = invoke(CloudServiceCatalogWorkspace, props, memory).props; view.onSave(view.editor); await tick();
   view = invoke(CloudServiceCatalogWorkspace, props, memory).props; assert.ok(view.editor); assert.equal(view.state.saveStatus, 'retry-required');
   view.onSave(view.editor); view.onLoad(); view.onBeginEdit(); assert.equal(h.calls.filter(call => call[0] === 'save').length, 1);
   view.onRetry(); await tick(); assert.equal(h.calls.filter(call => call[0] === 'retry').length, 1);
@@ -277,7 +282,9 @@ test('late accepted save on replaced controller cannot clear the new controller 
   h.behavior.wait = new Promise<void>(resolve => { release = resolve; });
   const props = { controller: h.controller, onClose() {} };
   invoke(CloudServiceCatalogWorkspace, props, memory).props.onBeginEdit();
-  let view = invoke(CloudServiceCatalogWorkspace, props, memory).props; view.onSave(view.editor);
+  let view = invoke(CloudServiceCatalogWorkspace, props, memory).props;
+  view.onChangeEditor({ ...view.editor, examination: '200' }, view.editor);
+  view = invoke(CloudServiceCatalogWorkspace, props, memory).props; view.onSave(view.editor);
   // A replacement must not become actionable while an old local action is
   // running; after that promise settles it still must not erase another draft.
   const replacement = { ...props, controller: next.controller };
@@ -327,4 +334,17 @@ test('view dependency graph excludes SDK, local settings/catalog, persistence an
   for (const fragment of ['firebase/', 'firebaseCloud', 'serviceCatalog.ts', 'initialData', 'storage.ts', 'WhatsAppComposer']) {
     assert.equal(inputs.some(input => input.includes(fragment)), false, fragment);
   }
+});
+
+test('view has explicit examination and selected-service saves, and refuses mixed changes instead of dropping edits', () => {
+  const saved = record(), source = structuredClone(saved.data), initial = editor(source);
+  assert.equal(cloudCatalogEditorSaveTarget(initial, saved), null);
+  const fee = { ...initial, examination: '200' }; assert.equal(cloudCatalogEditorSaveTarget(fee, saved), 'examination');
+  const changed = { ...initial, rows: initial.rows.map((row, index) => index === 0 ? { ...row, price: '125' } : row) };
+  assert.equal(cloudCatalogEditorSaveTarget(changed, saved), FIRST);
+  assert.equal(cloudCatalogEditorSaveTarget({ ...changed, examination: '200' }, saved), null);
+  const h = viewProps({ state: state({ loaded: true, snapshot: saved, draft: source }), editor: changed });
+  const view = rendered(h.props); assert.ok(view.button('حفظ قيمة الكشف')); assert.ok(view.button('حفظ الخدمة المحددة'));
+  assert.equal(view.button('حفظ الخدمة المحددة').props.disabled, false);
+  assert.equal(view.button('حفظ قيمة الكشف').props.disabled, true);
 });

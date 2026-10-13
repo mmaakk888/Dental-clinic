@@ -1,7 +1,8 @@
 /** Prepared owner-bound server recovery journal. No SDK, browser persistence,
  * activation or domain authorization. Future combined Rules must enforce these
  * transitions and couple committed intent + domain receipt atomically. */
-export type CloudOperationKind = 'patient-profile' | 'contact' | 'clinical' | 'catalog' | 'appointment';
+export type CloudOperationKind = 'patient-profile' | 'contact' | 'clinical' | 'catalog' | 'appointment'
+  | 'prosthetic' | 'expense' | 'settings';
 export type CloudIntentJson = null | boolean | number | string | CloudIntentJson[] | { [key: string]: CloudIntentJson };
 export interface CloudOperationIntent {
   schemaVersion: 1; clinicId: 'main'; recordId: string; operationId: string;
@@ -32,7 +33,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const validId = (value: unknown): value is string => typeof value === 'string' && value.length === 36 && UUID.test(value);
 const validActor = (value: unknown): value is string => typeof value === 'string' && value.length > 0
   && value.length <= 128 && value === value.trim() && !/[\u0000-\u001f\u007f]/u.test(value);
-const validKind = (value: unknown): value is CloudOperationKind => ['patient-profile', 'contact', 'clinical', 'catalog', 'appointment'].includes(value as string);
+const validKind = (value: unknown): value is CloudOperationKind => ['patient-profile', 'contact', 'clinical', 'catalog', 'appointment',
+  'prosthetic', 'expense', 'settings'].includes(value as string);
 function invalid(): never { throw new CloudOperationIntentError('invalid'); }
 function conflict(): never { throw new CloudOperationIntentError('conflict'); }
 function unavailable(): never { throw new CloudOperationIntentError('unavailable'); }
@@ -120,7 +122,8 @@ async function fingerprint(actorUid: string, kind: CloudOperationKind, command: 
 }
 const path = (id: string) => `clinics/main/operationIntents/${id}`;
 const receiptPath = (kind: CloudOperationKind, id: string) => `clinics/main/${
-  ({ 'patient-profile': 'patientOperations', contact: 'contactOperations', clinical: 'clinicalOperations', catalog: 'catalogOperations', appointment: 'appointmentOperations' })[kind]}/${id}`;
+  ({ 'patient-profile': 'patientOperations', contact: 'contactOperations', clinical: 'clinicalOperations', catalog: 'catalogOperations',
+    appointment: 'appointmentOperations', prosthetic: 'prostheticOperations', expense: 'expenseOperations', settings: 'settingsOperations' })[kind]}/${id}`;
 async function checked(value: unknown, uid: string, id: string, options: CloudIntentOptions) {
   const intent = parseCloudOperationIntent(value);
   if (intent.actorUid !== uid || intent.operationId !== id) conflict();

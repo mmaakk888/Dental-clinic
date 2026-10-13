@@ -7,7 +7,14 @@ import type { CloudClinicalWorkspaceBundle } from './cloudClinicalUiStage';
 import type { CloudCatalogWorkspaceController } from './cloudCatalogWorkspaceController';
 
 export type CloudOperatingContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
-export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, 'getContacts' | 'getPatients' | 'getClinical' | 'getServiceCatalog'>>;
+type AdditionalCapabilityKey = 'getContacts' | 'getPatients' | 'getClinical' | 'getServiceCatalog'
+  | 'getAppointments' | 'getClinicSettings' | 'getProsthetics' | 'getExpenses' | 'getClinicSnapshot';
+export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey>>;
+export type CloudOperatingAdditionalKind = 'appointments' | 'prosthetics' | 'expenses' | 'settings' | 'directory' | 'finance' | 'home' | 'whatsapp' | 'transfer' | 'prescription';
+export interface CloudOperatingAdditionalWorkspace { canClose(): boolean; dispose(): void }
+export type CloudOperatingAdditionalContext = Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey> & {
+  readonly ownerUid: string; readonly isActive: () => boolean;
+};
 export type CloudOperatingPatientsWorkspace = CloudPatientWorkspaceController;
 export type CloudOperatingClinicalWorkspace = CloudClinicalWorkspaceBundle;
 export type CloudOperatingContactsState = Readonly<{
@@ -90,6 +97,114 @@ export function createCloudOperatingPageController(
   let catalogIdentity: { session: CloudOperatingPageSession; uid: string } | null = null;
   let catalogInvalidating = false;
   let workspaceSwitching = false;
+  let additionalLease = 0, additionalInvalidating = false;
+  let additionalWorkspace: CloudOperatingAdditionalWorkspace | null = null;
+  let additionalOpening: Promise<CloudOperatingAdditionalWorkspace | null> | null = null;
+  let additionalIdentity: { session: CloudOperatingPageSession; uid: string; kind: CloudOperatingAdditionalKind } | null = null;
+
+  function revokeAdditional() {
+    ++additionalLease;
+    const previous = additionalWorkspace;
+    additionalWorkspace = null; additionalOpening = null; additionalIdentity = null;
+    const old = additionalInvalidating; additionalInvalidating = true;
+    try { previous?.dispose(); } catch { /* Lease revoked before untrusted cleanup. */ }
+    finally { additionalInvalidating = old; }
+  }
+  function additionalActive(ticket: number, candidate: CloudOperatingPageSession, uid: string): boolean {
+    const owned = () => !closed && !closing && !cleanupFailed && !additionalInvalidating
+      && additionalLease === ticket && session === candidate;
+    if (!owned()) return false;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    if (!owned()) return false;
+    const auth = candidate.getState();
+    if (!owned()) return false;
+    if (auth.phase === 'signed-out' || auth.phase === 'signing-out' || auth.phase === 'closed'
+      || auth.phase === 'owner-checked' && auth.owner?.uid !== uid) {
+      revokeAdditional();
+      if (!closed && !closing && !cleanupFailed && session === candidate) publish({ ...state, auth });
+      return false;
+    }
+    return true;
+  }
+  function getAdditionalWorkspace(kind?: CloudOperatingAdditionalKind): CloudOperatingAdditionalWorkspace | null {
+    const identity = additionalIdentity;
+    if (!identity || kind !== undefined && identity.kind !== kind || !additionalActive(additionalLease, identity.session, identity.uid)) return null;
+    return additionalWorkspace;
+  }
+  function closeAdditional(expected?: CloudOperatingAdditionalWorkspace): boolean {
+    if (closed || closing || cleanupFailed || additionalInvalidating) return false;
+    const ticket = additionalLease, identity = additionalIdentity;
+    if (!runtimeValid()) { void rejectRuntime(); return false; }
+    const workspace = getAdditionalWorkspace();
+    const owned = () => !closed && !closing && !cleanupFailed && additionalLease === ticket
+      && additionalIdentity === identity && additionalWorkspace === workspace;
+    if (!owned() || expected && workspace !== expected) return false;
+    if (workspace) {
+      let allowed = false;
+      try { allowed = workspace.canClose() === true; } catch { /* Fail closed. */ }
+      if (!owned()) return false;
+      if (!allowed) { publish({ ...state, error: CLINICAL_CLOSE_ERROR }); return false; }
+    }
+    if (!owned()) return false;
+    revokeAdditional(); publish(state); return true;
+  }
+  function closeAdditionalForSwitch(): boolean {
+    if (additionalOpening || additionalInvalidating) return false;
+    if (!additionalWorkspace) return true;
+    workspaceSwitching = true;
+    try { return closeAdditional(); } finally { workspaceSwitching = false; }
+  }
+  function openAdditional<T extends CloudOperatingAdditionalWorkspace>(kind: CloudOperatingAdditionalKind,
+    create: (context: CloudOperatingAdditionalContext) => T | Promise<T>): Promise<T | null> {
+    if (!['appointments', 'prosthetics', 'expenses', 'settings', 'directory', 'finance', 'home', 'whatsapp', 'transfer', 'prescription'].includes(kind)
+      || typeof create !== 'function' || closed || closing || cleanupFailed || state.pending || workspaceSwitching
+      || additionalInvalidating || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating) return Promise.resolve(null);
+    if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (additionalOpening) return additionalIdentity?.kind === kind ? additionalOpening as Promise<T | null> : Promise.resolve(null);
+    if (additionalIdentity?.kind === kind && getAdditionalWorkspace()) return Promise.resolve(additionalWorkspace as T);
+    const candidate = session, owner = candidate?.getState().owner;
+    if (!candidate || !owner || state.auth.phase !== 'owner-checked' || candidate.getState().phase !== 'owner-checked') return Promise.resolve(null);
+    workspaceSwitching = true;
+    try {
+      if (additionalWorkspace && !closeAdditional()) return Promise.resolve(null);
+      if ((contactsWorkspace || contactsOpening) && !closeContacts()) return Promise.resolve(null);
+      if ((patientsWorkspace || patientsOpening) && !closePatients()) return Promise.resolve(null);
+      if ((clinicalWorkspace || clinicalOpening) && !closeClinical()) return Promise.resolve(null);
+      if ((catalogWorkspace || catalogOpening) && !closeCatalog()) return Promise.resolve(null);
+    } finally { workspaceSwitching = false; }
+    if (closed || closing || cleanupFailed || session !== candidate || !runtimeValid()
+      || candidate.getState().phase !== 'owner-checked' || candidate.getState().owner?.uid !== owner.uid) return Promise.resolve(null);
+    const ticket = ++additionalLease;
+    additionalIdentity = { session: candidate, uid: owner.uid, kind };
+    const isActive = () => additionalActive(ticket, candidate, owner.uid);
+    const requireActive = () => { if (!isActive()) throw new CloudOperatingAuthError('unavailable'); };
+    const keys: AdditionalCapabilityKey[] = ['getContacts', 'getPatients', 'getClinical', 'getServiceCatalog',
+      'getAppointments', 'getClinicSettings', 'getProsthetics', 'getExpenses', 'getClinicSnapshot'];
+    const getters = Object.fromEntries(keys.map(key => [key, async () => {
+      requireActive(); const method = candidate[key]; requireActive();
+      if (typeof method !== 'function') throw new CloudOperatingAuthError('unavailable');
+      const result = await Promise.resolve().then(() => { requireActive(); return method.call(candidate); });
+      requireActive(); return result;
+    }])) as Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey>;
+    const context = Object.freeze({ ...getters, ownerUid: owner.uid, isActive });
+    const opening = Promise.resolve().then(async () => {
+      let created: T | null = null;
+      try {
+        requireActive(); created = await create(context); requireActive();
+        if (!created || typeof created.dispose !== 'function' || typeof created.canClose !== 'function') throw new CloudOperatingAuthError('unavailable');
+        requireActive(); additionalWorkspace = created; additionalOpening = null;
+        publish({ ...state, error: '' });
+        return isActive() && additionalWorkspace === created ? created : null;
+      } catch {
+        try { created?.dispose(); } catch { /* Lease remains closed. */ }
+        if (isActive()) { revokeAdditional(); publish({ ...state, error: 'تعذر فتح القسم؛ لم نستخدم بيانات محلية بديلة.' }); }
+        return null;
+      }
+    });
+    additionalOpening = opening;
+    publish({ ...state, error: '' });
+    return opening;
+  }
 
   function publish(next: CloudOperatingPageState, notify = true) {
     const published = Object.freeze(next);
@@ -263,12 +378,14 @@ export function createCloudOperatingPageController(
         || auth.phase === 'owner-checked' && (contactsIdentity && auth.owner?.uid !== contactsIdentity.uid
           || patientsIdentity && auth.owner?.uid !== patientsIdentity.uid
           || clinicalIdentity && auth.owner?.uid !== clinicalIdentity.uid
-          || catalogIdentity && auth.owner?.uid !== catalogIdentity.uid)) {
+          || catalogIdentity && auth.owner?.uid !== catalogIdentity.uid
+          || additionalIdentity && auth.owner?.uid !== additionalIdentity.uid)) {
         publish({ ...state, auth }, false);
         revokeContacts();
         revokePatients();
         revokeClinical();
         revokeCatalog();
+        revokeAdditional();
         if (closed || closing || cleanupFailed || session !== candidate) return;
       }
       publish({ ...state, auth });
@@ -324,6 +441,7 @@ export function createCloudOperatingPageController(
     revokePatients();
     revokeClinical();
     revokeCatalog();
+    revokeAdditional();
     try { stop?.(); } catch { /* Session disposal remains mandatory. */ }
     if (oldSession) {
       try { immediateDisposal = Promise.resolve(oldSession.dispose()).then(() => true, () => false); }
@@ -345,6 +463,7 @@ export function createCloudOperatingPageController(
   async function run(kind: 'sign-in' | 'refresh', email?: string, password?: string): Promise<void> {
     if (closed || closing || cleanupFailed || state.pending || contactsInvalidating || contactsOpening
       || patientsInvalidating || patientsOpening || clinicalInvalidating || clinicalOpening || catalogInvalidating || catalogOpening || workspaceSwitching
+      || additionalInvalidating || additionalOpening
       || session?.getState().phase === 'checking') return;
     if (!runtimeValid()) { await rejectRuntime(); return; }
     if (kind === 'refresh' && !session) {
@@ -353,7 +472,7 @@ export function createCloudOperatingPageController(
     }
     const ticket = ++epoch;
     publish({ ...state, auth: authState('checking'), pending: true, error: '' }, false);
-    if (kind === 'sign-in') { revokeContacts(); revokePatients(); revokeClinical(); revokeCatalog(); }
+    if (kind === 'sign-in') { revokeContacts(); revokePatients(); revokeClinical(); revokeCatalog(); revokeAdditional(); }
     publish(state);
     try {
       const current = await getSession(ticket);
@@ -393,6 +512,7 @@ export function createCloudOperatingPageController(
   function openContacts(): Promise<CloudOperatingContactsWorkspace | null> {
     if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (!closeAdditionalForSwitch()) return Promise.resolve(null);
     if (contactsOpening) return contactsOpening;
     const existing = getContactsWorkspace();
     if (existing) return Promise.resolve(existing);
@@ -498,6 +618,7 @@ export function createCloudOperatingPageController(
   function openPatients(): Promise<CloudOperatingPatientsWorkspace | null> {
     if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (!closeAdditionalForSwitch()) return Promise.resolve(null);
     if (patientsOpening) return patientsOpening;
     const existing = getPatientsWorkspace();
     if (existing) return Promise.resolve(existing);
@@ -597,6 +718,7 @@ export function createCloudOperatingPageController(
   function openClinical(): Promise<CloudOperatingClinicalWorkspace | null> {
     if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (!closeAdditionalForSwitch()) return Promise.resolve(null);
     if (clinicalOpening) return clinicalOpening;
     const existing = getClinicalWorkspace();
     if (existing) return Promise.resolve(existing);
@@ -709,6 +831,7 @@ export function createCloudOperatingPageController(
   function openCatalog(): Promise<CloudCatalogWorkspaceController | null> {
     if (closed || closing || cleanupFailed || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating || workspaceSwitching) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }
+    if (!closeAdditionalForSwitch()) return Promise.resolve(null);
     if (catalogOpening) return catalogOpening;
     const existing = getCatalogWorkspace();
     if (existing) return Promise.resolve(existing);
@@ -781,7 +904,7 @@ export function createCloudOperatingPageController(
 
   return {
     getState: () => {
-      if ((contactsIdentity || patientsIdentity || clinicalIdentity || catalogIdentity) && !runtimeValid()) void rejectRuntime();
+      if ((contactsIdentity || patientsIdentity || clinicalIdentity || catalogIdentity || additionalIdentity) && !runtimeValid()) void rejectRuntime();
       return state;
     },
     subscribe: (listener: (value: CloudOperatingPageState) => void) => {
@@ -803,6 +926,9 @@ export function createCloudOperatingPageController(
     openCatalog,
     getCatalogWorkspace,
     closeCatalog,
+    openAdditional,
+    getAdditionalWorkspace,
+    closeAdditional,
     signOut: (): Promise<boolean> => closed ? Promise.resolve(false) : beginClose(false),
     dispose: (): Promise<void> => {
       if (disposal) return disposal;

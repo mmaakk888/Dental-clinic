@@ -18,6 +18,10 @@ export interface CloudClinicalProgress {
 }
 export interface CloudClinicalSessionData extends CloudClinicalProgress {
   type: string; date: string; teethIds: string[]; services: CloudClinicalService[]; examinationCents: number;
+  /** Created only by the dedicated atomic prosthetic order workflow. */
+  prostheticCaseId?: string;
+  /** Patient-facing immutable snapshot; never a lab identity or supplier cost. */
+  prosthetic?: { kind: 'fixed' | 'removable'; material: string; units: number; unitPriceCents: number };
 }
 export interface CloudClinicalAccount {
   schemaVersion: 1; clinicId: 'main'; patientId: string; fileNo: number; revision: number;
@@ -117,22 +121,39 @@ function progress(value: unknown): CloudClinicalProgress {
     rootCanalStatus: item.rootCanalStatus as CloudClinicalProgress['rootCanalStatus'], visitStatus: item.visitStatus as CloudClinicalProgress['visitStatus'] };
 }
 function sessionData(value: unknown): CloudClinicalSessionData {
-  const item = fields(value, ['type', 'date', 'teethIds', 'services', 'examinationCents', 'notes', 'treatmentStage', 'rootCanalStatus', 'visitStatus']);
-  if (!text(item.type, 200) || !item.type || item.type.normalize('NFKC').trim().startsWith('تركيب') || !day(item.date) || !money(item.examinationCents)) invalid();
+  const item = fields(value, ['type', 'date', 'teethIds', 'services', 'examinationCents', 'notes', 'treatmentStage', 'rootCanalStatus', 'visitStatus'], ['prostheticCaseId', 'prosthetic']);
+  const linkedProsthetic = Object.hasOwn(item, 'prostheticCaseId');
+  if (linkedProsthetic !== Object.hasOwn(item, 'prosthetic') || linkedProsthetic && !uuid(item.prostheticCaseId)
+    || !text(item.type, 200) || !item.type || !linkedProsthetic && item.type.normalize('NFKC').trim().startsWith('تركيب')
+    || !day(item.date) || !money(item.examinationCents)) invalid();
   const teethIds = array(item.teethIds, 32);
   if (teethIds.some(id => typeof id !== 'string' || id.length > 3 || !parseCompositeToothId(id)) || new Set(teethIds).size !== teethIds.length) invalid();
   const ids = new Set<string>();
   const services = array(item.services, 64).map(value => {
     const row = fields(value, ['id', 'name', 'priceCents', 'tooth'], ['catalogServiceId']);
-    if (!uuid(row.id) || ids.has(row.id) || !text(row.name, 200) || !row.name || row.name.normalize('NFKC').trim().startsWith('تركيب') || !money(row.priceCents)
+    if (!uuid(row.id) || ids.has(row.id) || !text(row.name, 200) || !row.name
+      || !linkedProsthetic && row.name.normalize('NFKC').trim().startsWith('تركيب') || !money(row.priceCents)
       || 'catalogServiceId' in row && row.catalogServiceId !== null && !uuid(row.catalogServiceId)
       || row.tooth !== null && (typeof row.tooth !== 'string' || row.tooth.length > 3 || !parseCompositeToothId(row.tooth) || !teethIds.includes(row.tooth))) invalid();
     ids.add(row.id);
     return { id: row.id, name: row.name, priceCents: row.priceCents, tooth: row.tooth as string | null,
       ...('catalogServiceId' in row ? { catalogServiceId: row.catalogServiceId as string | null } : {}) };
   });
+  let prosthetic: CloudClinicalSessionData['prosthetic'];
+  if (linkedProsthetic) {
+    const snapshot = fields(item.prosthetic, ['kind', 'material', 'units', 'unitPriceCents']);
+    if (!['fixed', 'removable'].includes(snapshot.kind as string) || !text(snapshot.material, 200) || !snapshot.material
+      || !integer(snapshot.units, 1, 100) || !money(snapshot.unitPriceCents)) invalid();
+    prosthetic = { kind: snapshot.kind as 'fixed' | 'removable', material: snapshot.material,
+      units: snapshot.units, unitPriceCents: snapshot.unitPriceCents };
+    if (!money(prosthetic.units * prosthetic.unitPriceCents) || services.length !== 1
+      || services[0].id !== item.prostheticCaseId || !services[0].catalogServiceId
+      || services[0].name !== prosthetic.material || item.type !== prosthetic.material
+      || services[0].priceCents !== prosthetic.units * prosthetic.unitPriceCents) invalid();
+  }
   if (!services.length && item.examinationCents === 0) invalid();
   const result = { type: item.type, date: item.date, teethIds: teethIds as string[], services, examinationCents: item.examinationCents,
+    ...(linkedProsthetic ? { prostheticCaseId: item.prostheticCaseId as string, prosthetic } : {}),
     ...progress({ notes: item.notes, treatmentStage: item.treatmentStage, rootCanalStatus: item.rootCanalStatus, visitStatus: item.visitStatus }) };
   total(result);
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 64 * 1024) invalid();
@@ -156,7 +177,7 @@ export function prepareCloudClinicalCommand(value: unknown): CloudClinicalComman
     if (item.action === 'visit') {
       fields(value, [...Object.keys(base), 'action', 'data', 'paidCents']);
       const data = sessionData(item.data);
-      if (item.sessionId !== item.operationId || !money(item.paidCents) || item.paidCents > total(data)) invalid();
+      if (data.prostheticCaseId !== undefined || item.sessionId !== item.operationId || !money(item.paidCents) || item.paidCents > total(data)) invalid();
       return { ...base, action: 'visit', data, paidCents: item.paidCents };
     }
     if (item.action === 'payment') {
@@ -188,7 +209,7 @@ export function parseCloudClinicalSession(value: unknown): CloudClinicalSession 
     if (item.schemaVersion !== 1 || item.clinicId !== 'main' || !uuid(item.sessionId) || !uuid(item.patientId) || !integer(item.fileNo, 1)
       || !integer(item.revision, 1) || !uuid(item.lastOperationId) || !money(item.totalCents) || !money(item.paidCents) || item.paidCents > item.totalCents) invalid();
     const data = sessionData(item.data);
-    if (item.totalCents !== total(data)) invalid();
+    if (item.totalCents !== total(data) || data.prostheticCaseId !== undefined && data.prostheticCaseId !== item.sessionId) invalid();
     return { schemaVersion: 1, clinicId: 'main', sessionId: item.sessionId, patientId: item.patientId, fileNo: item.fileNo,
       revision: item.revision, lastOperationId: item.lastOperationId, totalCents: item.totalCents, paidCents: item.paidCents, data };
   } catch { return invalid(); }

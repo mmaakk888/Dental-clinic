@@ -96,13 +96,14 @@ test('first explicit reservation atomically writes appointment/day/immutable rec
   assert.equal(h.docs.get(intentPath(1)).status, 'committed'); assert.equal(h.docs.get(operation(1)).actorUid, OWNER);
   assert.doesNotMatch(JSON.stringify(h.docs.get(operation(1))), /patientName|phone|duration|notes|fileNo|price|payment/);
 });
-test('all occupied states reserve time and all inactive states preserve record without inventing a day', async () => {
+test('all states advance the day fence; only occupied states reserve time', async () => {
   for (const status of ['scheduled', 'confirmed', 'waiting', 'attended'] as const) {
     const h = harness(); await h.commit(command(1, 0, { status })); assert.equal(h.docs.get(dayPath()).slots.length, 1);
   }
   for (const status of ['cancelled', 'apologized', 'no_show'] as const) {
-    const h = harness(); await h.commit(command(1, 0, { status })); assert.equal(h.docs.has(dayPath()), false);
-    assert.equal(h.docs.get(recordPath()).data.status, status); assert.equal(h.docs.size, 3);
+    const h = harness(); await h.commit(command(1, 0, { status })); assert.deepEqual(h.docs.get(dayPath()).slots, []);
+    assert.equal(h.docs.get(dayPath()).revision, 1);
+    assert.equal(h.docs.get(recordPath()).data.status, status); assert.equal(h.docs.size, 4);
   }
 });
 test('lost acknowledgement retries the identical receipt without changing day revision or duplicating a reservation', async () => {
@@ -200,10 +201,13 @@ test('cancellation/no-show/apology releases existing reservation and reactivatio
     assert.equal(h.docs.get(dayPath()).slots.length, 1);
   }
 });
-test('editing inactive appointment changes no day, while changing occupied metadata advances one day revision', async () => {
+test('moving inactive appointments fences both days and editing metadata advances the day revision', async () => {
   const h = harness(); await h.commit(command(1, 0, { status: 'cancelled' }));
   await h.commit(command(2, 1, { status: 'cancelled', date: OTHER_DAY, notes: 'ملاحظة' }));
-  assert.equal([...h.docs.keys()].some(path => path.includes('/appointmentDays/')), false);
+  assert.equal(h.docs.get(dayPath()).revision, 2); assert.deepEqual(h.docs.get(dayPath()).slots, []);
+  assert.equal(h.docs.get(dayPath(OTHER_DAY)).revision, 1); assert.deepEqual(h.docs.get(dayPath(OTHER_DAY)).slots, []);
+  await h.commit(command(3, 2, { status: 'cancelled', date: OTHER_DAY, notes: 'تعديل آخر' }));
+  assert.equal(h.docs.get(dayPath(OTHER_DAY)).revision, 2);
   const x = harness(); await x.commit(command()); await x.commit(command(2, 1, { notes: 'ملاحظة' }));
   assert.equal(x.docs.get(dayPath()).revision, 2);
 });

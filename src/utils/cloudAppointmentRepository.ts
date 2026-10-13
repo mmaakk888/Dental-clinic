@@ -195,8 +195,9 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
         if (result && result.recordId !== recordId) invalid(); await reauthorize(uid); return result;
       } catch (error) { throw safeError(error); }
     },
-    /** A null index is unknown/no stored reservations, not a verified schedule
-     * or an implicit empty appointment collection. Read individual records. */
+    /** The revision fences every mutation of this day's records, including
+     * inactive bookings. Slots remain occupied reservations only. A null index
+     * alone never proves an empty day; the full-day loader checks its history. */
     async getDay(date: string): Promise<CloudAppointmentDay | null> {
       try {
         if (!calendarDay(date)) invalid(); const uid = await authorize(); if (!adapter.readRecord) unavailable();
@@ -276,7 +277,9 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
           }
           const nextDays: CloudAppointmentDay[] = [];
           for (const date of dates) {
-            if (!(oldOccupied && current!.data.date === date || newOccupied && command.data.date === date)) continue;
+            // Fence ALL records, not only occupied reservations. An inactive
+            // booking can be edited/moved while the full-day reader paginates.
+            // Always advance both affected days so it detects that race.
             const previous = days.get(date)!;
             if (previous && previous.revision >= MAX_REVISION) unavailable();
             const slots = (previous?.slots ?? []).filter(slot => slot.recordId !== command.recordId);

@@ -16,6 +16,7 @@ const path = (kind: string, id = '') => `clinics/main/${kind}/${id}`;
 const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
 const data = (fee = 10_000, price = 30_000): CloudServiceCatalogData => ({ examinationCents: fee,
   services: [{ serviceId: SERVICE, name: 'خدمة علاجية مصطنعة', kind: 'clinical', priceCents: price, active: true }] });
+const feeData = (fee = 10_000): CloudServiceCatalogData => ({ examinationCents: fee, services: [] });
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(accept => { resolve = accept; }); return { promise, resolve }; }
 function member(): Awaited<ReturnType<CloudOperatingAuthAdapter['readOwner']>> {
   return { identity: { uid: UID, email: EMAIL, status: 'owner-confirmed' },
@@ -80,15 +81,20 @@ function syntheticServer() {
   return { rows, calls, hooks, client, count, writes: () => writes };
 }
 
-test('pure owner page explicitly opens/loads/edits/saves catalog with one atomic revision and no clinical/cash records', async () => {
+test('pure owner page saves examination then one service as two explicit atomic mutations and no clinical/cash records', async () => {
   const server = syntheticServer(), client = server.client(); assert.deepEqual(server.calls, []);
   const workspace = await client.open(); assert.equal(server.calls.some(call => call.startsWith('data:')), false);
   assert.equal(server.writes(), 0); assert.equal(await workspace.load(), true); assert.equal(workspace.getState().snapshot, null);
   assert.equal(workspace.beginEdit(), true); assert.equal(workspace.getState().draft?.examinationCents, null);
-  assert.equal(workspace.updateDraft(data()), true); assert.equal(await workspace.save(), true);
-  const current = workspace.getState().snapshot!; assert.equal(current.revision, 1); assert.deepEqual(current.data, data());
+  assert.equal(workspace.updateDraft(feeData()), true); assert.equal(await workspace.save(), true);
+  assert.equal(workspace.getState().snapshot?.revision, 1); assert.deepEqual(workspace.getState().snapshot?.data, feeData());
+  assert.equal(workspace.beginEdit(), true); assert.equal(workspace.updateDraft(data()), true); assert.equal(await workspace.save(), true);
+  const current = workspace.getState().snapshot!; assert.equal(current.revision, 2); assert.deepEqual(current.data, data());
   assert.equal(workspace.getState().saveStatus, 'idle'); assert.equal(workspace.getState().draft, null);
-  assert.equal(server.writes(), 4); assert.equal(server.count('catalogOperations'), 1); assert.equal(server.count('operationIntents'), 1);
+  assert.equal(server.writes(), 10); assert.equal(server.count('catalogOperations'), 2); assert.equal(server.count('operationIntents'), 2);
+  const commands = [...server.rows.values()].filter(row => row.kind === 'catalog').map(row => row.command);
+  assert.deepEqual(commands.map(row => [row.mutationVersion, row.action]), [[2, 'examination'], [2, 'service']]);
+  assert.equal(commands.some(row => 'data' in row), false);
   assert.equal(server.rows.get(path('operationIntents', current.lastOperationId)).status, 'committed');
   assert.equal([...server.rows.keys()].some(key => /patient|receipt|lab|contact|counter/i.test(key)), false);
   assert.equal(client.page.closeCatalog(workspace), true); await client.page.dispose();
@@ -96,7 +102,7 @@ test('pure owner page explicitly opens/loads/edits/saves catalog with one atomic
 
 test('lost catalog commit ACK survives actual logout and new-page all-status history resumes the same ID without another revision', async () => {
   const server = syntheticServer(), old = server.client(), workspace = await old.open(); await workspace.load();
-  workspace.beginEdit(); workspace.updateDraft(data()); server.hooks.loseCommitAck = true;
+  workspace.beginEdit(); workspace.updateDraft(feeData()); server.hooks.loseCommitAck = true;
   assert.equal(await workspace.save(), false); const operationId = workspace.getState().pendingOperationId!;
   assert.equal(workspace.getState().saveStatus, 'retry-required'); assert.equal(server.rows.get(CATALOG).revision, 1);
   const original = structuredClone(server.rows.get(path('operationIntents', operationId)));
@@ -107,25 +113,26 @@ test('lost catalog commit ACK survives actual logout and new-page all-status his
   assert.deepEqual(recovered.getState().history.map(row => [row.operationId, row.status]), [[operationId, 'committed']]);
   assert.deepEqual(recovered.getState().history[0].command, original.command);
   const before = server.writes(); assert.equal(await recovered.resume(operationId), true); assert.equal(server.writes(), before);
-  assert.equal(recovered.getState().snapshot?.revision, 1); assert.deepEqual(recovered.getState().snapshot?.data, data());
+  assert.equal(recovered.getState().snapshot?.revision, 1); assert.deepEqual(recovered.getState().snapshot?.data, feeData());
   assert.equal(server.count('catalogOperations'), 1); assert.deepEqual(server.rows.get(path('operationIntents', operationId)).command, original.command);
   await old.page.dispose(); await fresh.page.dispose();
 });
 
 test('historical catalog resume refreshes newer accepted prices rather than overwriting them with the old operation', async () => {
   const server = syntheticServer(), first = server.client(), oldWorkspace = await first.open(); await oldWorkspace.load();
+  oldWorkspace.beginEdit(); oldWorkspace.updateDraft(feeData()); assert.equal(await oldWorkspace.save(), true);
   oldWorkspace.beginEdit(); oldWorkspace.updateDraft(data()); assert.equal(await oldWorkspace.save(), true);
   const originalId = oldWorkspace.getState().snapshot!.lastOperationId; await first.page.signOut();
-  const newer = server.client(), workspace = await newer.open(); await workspace.load(); workspace.beginEdit(); workspace.updateDraft(data(15_000, 45_000));
+  const newer = server.client(), workspace = await newer.open(); await workspace.load(); workspace.beginEdit(); workspace.updateDraft(data(10_000, 45_000));
   assert.equal(await workspace.save(), true); const newerId = workspace.getState().snapshot!.lastOperationId; assert.notEqual(originalId, newerId);
   const before = server.writes(); assert.equal(await workspace.resume(originalId), true); assert.equal(server.writes(), before);
-  assert.equal(workspace.getState().snapshot?.revision, 2); assert.equal(workspace.getState().snapshot?.lastOperationId, newerId);
-  assert.deepEqual(workspace.getState().snapshot?.data, data(15_000, 45_000)); assert.deepEqual(server.rows.get(CATALOG).data, data(15_000, 45_000));
-  assert.equal(server.count('catalogOperations'), 2); await first.page.dispose(); await newer.page.dispose();
+  assert.equal(workspace.getState().snapshot?.revision, 3); assert.equal(workspace.getState().snapshot?.lastOperationId, newerId);
+  assert.deepEqual(workspace.getState().snapshot?.data, data(10_000, 45_000)); assert.deepEqual(server.rows.get(CATALOG).data, data(10_000, 45_000));
+  assert.equal(server.count('catalogOperations'), 3); await first.page.dispose(); await newer.page.dispose();
 });
 
 test('accepted catalog write survives checking/logout while old memory and late success are masked and a fresh page recovers it', async () => {
-  const server = syntheticServer(), old = server.client(), workspace = await old.open(); await workspace.load(); workspace.beginEdit(); workspace.updateDraft(data());
+  const server = syntheticServer(), old = server.client(), workspace = await old.open(); await workspace.load(); workspace.beginEdit(); workspace.updateDraft(feeData());
   server.hooks.pauseCommit = true; server.hooks.accepted = deferred(); server.hooks.replyGate = deferred();
   const saving = workspace.save(); await server.hooks.accepted.promise; const operationId = workspace.getState().pendingOperationId!;
   assert.equal(server.rows.get(CATALOG).revision, 1); assert.equal(server.rows.get(path('operationIntents', operationId)).status, 'committed');

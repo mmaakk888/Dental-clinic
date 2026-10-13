@@ -1,7 +1,8 @@
 import React, { useCallback, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, Check, ChevronLeft, CircleDollarSign, ClipboardList, History, Pencil, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { MAX_CLOUD_CLINICAL_CENTS } from '../../utils/cloudClinicalRepository';
-import { parseCloudServiceCatalogData, type CloudServiceCatalogData, type CloudServiceDefinition } from '../../utils/cloudServiceCatalogRepository';
+import { parseCloudServiceCatalogData, prepareCloudServiceCatalogMutationCommand,
+  type CloudServiceCatalogData, type CloudServiceCatalogRecord } from '../../utils/cloudServiceCatalogRepository';
 import type { CloudCatalogWorkspaceController, CloudCatalogWorkspaceDraft, CloudCatalogWorkspaceState } from '../../utils/cloudCatalogWorkspaceController';
 import type { CloudOperationIntent } from '../../utils/cloudOperationIntent';
 import { normalizeDirectoryDigits, normalizeDirectoryName } from '../../utils/patientDirectory';
@@ -43,6 +44,29 @@ export function buildCloudCatalogEditorData(editor: CloudCatalogEditor): CloudSe
     }) });
   } catch { return null; }
 }
+/** One explicit save equals one bounded mutation, never N hidden writes. */
+export function cloudCatalogEditorSaveTarget(editor: CloudCatalogEditor, snapshot: CloudServiceCatalogRecord | null): 'examination' | string | null {
+  try {
+    const data = buildCloudCatalogEditorData(editor); if (!data) return null;
+    const previous = snapshot?.data ?? null, oldRows = previous?.services ?? [];
+    if (data.services.length < oldRows.length || data.services.length > oldRows.length + 1) return null;
+    const changed: number[] = [];
+    for (let index = 0; index < data.services.length; index++) {
+      if (index < oldRows.length && data.services[index].serviceId !== oldRows[index].serviceId) return null;
+      if (JSON.stringify(data.services[index]) !== JSON.stringify(oldRows[index])) changed.push(index);
+    }
+    const examinationChanged = previous === null || data.examinationCents !== previous.examinationCents;
+    if (examinationChanged) return changed.length === 0 ? 'examination' : null;
+    if (changed.length !== 1 || previous === null) return null;
+    const index = changed[0];
+    // Validate the same safe name/shape as the new server-bound mutation before
+    // enabling Save. Fixed fixture metadata is validation-only, never an ID or
+    // clock used for a real operation, and causes no reads or writes.
+    prepareCloudServiceCatalogMutationCommand({ mutationVersion: 2, operationId: '00000000-0000-4000-8000-000000000000',
+      expectedRevision: snapshot!.revision, createdAt: '2026-01-01T00:00:00.000Z', action: 'service', index, service: data.services[index] });
+    return data.services[index].serviceId;
+  } catch { return null; }
+}
 export interface CloudServiceCatalogWorkspaceViewProps {
   state: CloudCatalogWorkspaceState; previewOnly?: boolean; editor: CloudCatalogEditor | null;
   query: string; filter: CloudCatalogFilter;
@@ -67,7 +91,7 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
   const filtered = useMemo(() => rows.filter(row => (props.filter === 'all' || row.kind === props.filter)
     && normalizeDirectoryName(row.name).includes(query)), [rows, props.filter, query]);
   const selected = editor?.rows.find(row => row.serviceId === editor.selectedServiceId) ?? null;
-  const parsed = editor ? buildCloudCatalogEditorData(editor) : null;
+  const saveTarget = editor ? cloudCatalogEditorSaveTarget(editor, state.snapshot) : null;
   const blockedClose = !props.previewOnly && !state.closed && (locked(state) || Boolean(state.draft) || Boolean(state.pendingOperationId));
   const ready = () => !latest.current.previewOnly && !latest.current.state.closed && !locked(latest.current.state);
   const browse = (action: (current: CloudServiceCatalogWorkspaceViewProps) => void) => { if (ready()) action(latest.current); };
@@ -117,16 +141,21 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
           {editor && <button className="ccat-button ccat-icon-button ccat-secondary" type="button" aria-label={`تعديل ${row.name || 'الخدمة الجديدة'}`} disabled={disabled} onClick={() => edit(editor, current => current.onChangeEditor({ ...editor, selectedServiceId: row.serviceId }, editor))}><Pencil size={18} aria-hidden="true" /></button>}
         </article>)}</div>
         {!filtered.length && <div className="ccat-empty"><ClipboardList size={30} aria-hidden="true" /><strong>{unavailable ? 'لا توجد بيانات في المعاينة' : !state.loaded ? 'حمّل الفهرس أولًا' : query || props.filter !== 'all' ? 'لا توجد خدمات مطابقة' : 'لا توجد خدمات في الفهرس المحمّل'}</strong><p className="ccat-help">لا تُنشأ خدمات أو أسعار تلقائيًا. يمكنك إعدادها صراحة بعد تحميل الفهرس.</p></div>}
-        {editor && <button className="ccat-button ccat-secondary ccat-add" type="button" disabled={disabled || editor.rows.length >= 300} onClick={() => edit(editor, current => current.onAddService(editor))}><Plus size={18} aria-hidden="true" />إضافة خدمة</button>}
+        {editor && <button className="ccat-button ccat-secondary ccat-add" type="button" disabled={disabled || !state.snapshot || editor.rows.length >= 300} onClick={() => edit(editor, current => { if (current.state.snapshot) current.onAddService(editor); })}><Plus size={18} aria-hidden="true" />إضافة خدمة</button>}
       </section>
       <aside className="ccat-detail">
         <section className="ccat-surface ccat-exam" aria-labelledby={`${prefix}-exam`}><h3 id={`${prefix}-exam`}>قيمة الكشف</h3>
           {editor ? <><label htmlFor={`${prefix}-exam-input`}>القيمة الافتراضية بالجنيه</label><input id={`${prefix}-exam-input`} className="ccat-input" type="text" inputMode="decimal" maxLength={32} dir="ltr" value={editor.examination} disabled={disabled} aria-invalid={parseCloudCatalogMoneyText(editor.examination).cents === null || !parseCloudCatalogMoneyText(editor.examination).valid || undefined}
             onChange={event => edit(editor, current => current.onChangeEditor({ ...editor, examination: event.target.value }, editor))} />
-            <button className="ccat-button ccat-secondary" type="button" disabled={disabled} onClick={() => edit(editor, current => current.onUseExamination100(editor))}>استخدام ١٠٠ ج.م للكشف</button></>
+            <button className="ccat-button ccat-secondary" type="button" disabled={disabled} onClick={() => edit(editor, current => current.onUseExamination100(editor))}>استخدام ١٠٠ ج.م للكشف</button>
+            <button className="ccat-button ccat-primary" type="button" disabled={disabled || saveTarget !== 'examination'} onClick={() => edit(editor, current => {
+              if (cloudCatalogEditorSaveTarget(editor, current.state.snapshot) === 'examination') current.onSave(editor);
+            })}><Check size={18} aria-hidden="true" />حفظ قيمة الكشف</button></>
             : <p className="ccat-exam-value">{!unavailable && state.snapshot ? moneyLabel(state.snapshot.data.examinationCents) : 'غير محددة — يلزم تحميل الفهرس'}</p>}
           <p className="ccat-help">إضافة الكشف في الزيارة اختيارية. تحديد قيمته هنا لا يسجّل تحصيلًا أو دفعة.</p></section>
-        {editor && <form className="ccat-surface ccat-editor" onSubmit={event => { event.preventDefault(); edit(editor, current => { if (buildCloudCatalogEditorData(editor)) current.onSave(editor); }); }}>
+        {editor && <form className="ccat-surface ccat-editor" onSubmit={event => { event.preventDefault(); edit(editor, current => {
+          if (editor.selectedServiceId && cloudCatalogEditorSaveTarget(editor, current.state.snapshot) === editor.selectedServiceId) current.onSave(editor);
+        }); }}>
           <h3>{selected ? 'تفاصيل الخدمة' : 'أضف خدمة لبدء تنظيم الفهرس'}</h3>
           {selected && <><label htmlFor={`${prefix}-name`}>اسم الخدمة</label><input id={`${prefix}-name`} className="ccat-input" type="text" maxLength={200} value={selected.name} disabled={disabled} onChange={event => change(editor, { name: event.target.value })} />
             <label htmlFor={`${prefix}-kind`}>نوع الخدمة</label><select id={`${prefix}-kind`} className="ccat-input" value={selected.kind} disabled={disabled} onChange={event => { if (event.target.value === 'clinical' || event.target.value === 'prosthetic') change(editor, { kind: event.target.value }); }}><option value="clinical">خدمة علاجية</option><option value="prosthetic">تركيبات</option></select>
@@ -134,9 +163,10 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
             <p className="ccat-help">اتركه فارغًا إذا لم يُحدد السعر. اكتب 0 فقط لو الخدمة مجانية فعلًا.{selected.kind === 'prosthetic' ? ' هذا سعر المريض، وليس تكلفة المعمل.' : ''}</p>
             <label className="ccat-check"><input type="checkbox" checked={selected.active} disabled={disabled} onChange={event => change(editor, { active: event.target.checked })} />الخدمة نشطة ومتاحة للاختيار</label>
             <p className="ccat-help ccat-operation">معرّف ثابت <bdi dir="ltr">{selected.serviceId}</bdi></p></>}
-          {!parsed && <p className="ccat-field-error" role="status">حدد قيمة الكشف، وأكمل أسماء الخدمات دون تكرار، وراجع صحة الأسعار. السعر الفارغ يظل غير محدد.</p>}
+          {saveTarget === null && <p className="ccat-field-error" role="status">عدّل قيمة الكشف أو خدمة واحدة ثم احفظها. أكمل الاسم والسعر الصحيح دون تكرار، ولا تغيّر عدة خدمات في العملية نفسها.</p>}
+          {!state.snapshot && <p className="ccat-help">احفظ قيمة الكشف أولًا لإنشاء فهرس فارغ، ثم أضف كل خدمة واحفظها منفردة.</p>}
           <p className="ccat-help">التعديلات تخص الزيارات الجديدة فقط؛ أسعار الجلسات السابقة لا تتغير.</p>
-          <div className="ccat-actions"><button className="ccat-button ccat-primary" type="submit" disabled={disabled || !parsed}><Check size={18} aria-hidden="true" />حفظ الفهرس</button>
+          <div className="ccat-actions"><button className="ccat-button ccat-primary" type="submit" disabled={disabled || !selected || saveTarget !== selected.serviceId}><Check size={18} aria-hidden="true" />حفظ الخدمة المحددة</button>
             <button className="ccat-button ccat-secondary" type="button" disabled={disabled} onClick={() => edit(editor, current => current.onCancelEditor(editor))}><X size={18} aria-hidden="true" />إلغاء المسودة</button></div>
         </form>}
       </aside>
@@ -189,14 +219,15 @@ export default function CloudServiceCatalogWorkspace({ controller, previewOnly =
     onUseExamination100={expected => { const value = editorCurrent(expected); if (!value?.draft
       || !controller.updateDraft({ ...value.draft, examinationCents: 10_000 })) return;
       const fresh = current(); if (fresh?.draft && !fresh.closed) publishEditor({ ...expected, sourceDraft: fresh.draft, examination: '100' }); }}
-    onAddService={expected => { if (!editorCurrent(expected) || expected.rows.length >= 300) return;
+    onAddService={expected => { if (!editorCurrent(expected)?.snapshot || expected.rows.length >= 300) return;
       try { const serviceId = crypto.randomUUID();
         if (!editorCurrent(expected) || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(serviceId)
           || expected.rows.some(row => row.serviceId === serviceId)) return;
         publishEditor({ ...expected, selectedServiceId: serviceId, rows: [...expected.rows, { serviceId, name: '', price: '', kind: 'clinical', active: true }] });
       } catch { /* No generated ID means no new row or write. */ } }}
     onCancelEditor={expected => { if (editorCurrent(expected) && controller.cancelDraft()) publishEditor(null); }}
-    onSave={expected => { if (!editorCurrent(expected)) return; const data = buildCloudCatalogEditorData(expected); if (!data) return;
+    onSave={expected => { const value = editorCurrent(expected); if (!value || cloudCatalogEditorSaveTarget(expected, value.snapshot) === null) return;
+      const data = buildCloudCatalogEditorData(expected); if (!data) return;
       if (!controller.updateDraft(data)) return; const fresh = current(); if (!fresh?.draft) return;
       publishEditor({ ...expected, sourceDraft: fresh.draft });
       void run(async () => { await controller.save(); const result = current(); if (result && !result.closed && !result.draft) publishEditor(null); }); }}

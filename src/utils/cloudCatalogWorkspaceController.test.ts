@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { createCloudOperationIntentRepository, prepareCloudIntentCommand, type CloudIntentAdapter,
   type CloudOperationIntent, type CloudOperationIntentRepository } from './cloudOperationIntent';
 import { CloudServiceCatalogError, createCloudServiceCatalogRepository,
-  type CloudServiceCatalogAdapter, type CloudServiceCatalogCommand, type CloudServiceCatalogRecord } from './cloudServiceCatalogRepository';
+  applyCloudServiceCatalogMutation, type CloudServiceCatalogAdapter, type CloudServiceCatalogWriteCommand,
+  type CloudServiceCatalogMutationCommand, type CloudServiceCatalogRecord } from './cloudServiceCatalogRepository';
 import { createCloudCatalogWorkspaceController, MAX_CLOUD_CATALOG_HISTORY_RECORDS,
   type CloudCatalogWorkspaceCapability, type CloudCatalogWorkspaceController } from './cloudCatalogWorkspaceController';
 
@@ -20,10 +21,11 @@ const digest = async (value: string) => createHash('sha256').update(value).diges
 const data = () => ({ examinationCents: 10_000, services: [
   { serviceId: SERVICE, name: 'خدمة مصطنعة', kind: 'clinical' as const, priceCents: 30_000, active: true },
 ] });
-const command = (number = 1, revision = 0): CloudServiceCatalogCommand => ({ operationId: id(number), expectedRevision: revision, createdAt: WHEN, data: data() });
+const command = (number = 1, revision = 0): Extract<CloudServiceCatalogMutationCommand, { action: 'examination' }> => ({ mutationVersion: 2,
+  operationId: id(number), expectedRevision: revision, createdAt: WHEN, action: 'examination', examinationCents: 10_000 });
 const record = (revision = 1, operationId = id(1)): CloudServiceCatalogRecord => ({ schemaVersion: 1, clinicId: 'main',
-  recordId: 'serviceCatalog', revision, lastOperationId: operationId, data: data() });
-function intent(input = command(), status: CloudOperationIntent['status'] = 'prepared', actorUid = OWNER): CloudOperationIntent {
+  recordId: 'serviceCatalog', revision, lastOperationId: operationId, data: { examinationCents: 10_000, services: [] } });
+function intent(input: CloudServiceCatalogWriteCommand = command(), status: CloudOperationIntent['status'] = 'prepared', actorUid = OWNER): CloudOperationIntent {
   const canonical = prepareCloudIntentCommand(input);
   return { schemaVersion: 1, clinicId: 'main', recordId: input.operationId, operationId: input.operationId, actorUid, kind: 'catalog',
     requestHash: createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', actorUid, 'catalog', canonical])).digest('hex'),
@@ -32,23 +34,24 @@ function intent(input = command(), status: CloudOperationIntent['status'] = 'pre
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void;
   const promise = new Promise<T>((accept, deny) => { resolve = accept; reject = deny; }); return { resolve, reject, promise }; }
 function fake() {
-  const calls: string[] = [], inputs: CloudServiceCatalogCommand[] = [], storedIntents = new Map<string, CloudOperationIntent>();
+  const calls: string[] = [], inputs: CloudServiceCatalogWriteCommand[] = [], storedIntents = new Map<string, CloudOperationIntent>();
   let snapshot: CloudServiceCatalogRecord | null = null, active = true, number = 0, controller!: CloudCatalogWorkspaceController;
-  const hooks: { get?: () => Promise<unknown>; prepare?: (input: CloudServiceCatalogCommand) => Promise<unknown>;
-    commit?: (input: CloudServiceCatalogCommand) => Promise<unknown>; intentGet?: (id: string) => Promise<unknown>;
+  const hooks: { get?: () => Promise<unknown>; prepare?: (input: CloudServiceCatalogWriteCommand) => Promise<unknown>;
+    commit?: (input: CloudServiceCatalogWriteCommand) => Promise<unknown>; intentGet?: (id: string) => Promise<unknown>;
     cancel?: (id: string) => Promise<unknown>; history?: (afterId: string | null) => Promise<unknown>;
     capability?: () => Promise<CloudCatalogWorkspaceCapability>; active?: () => boolean; newId?: () => string; now?: () => string } = {};
   const capability: CloudCatalogWorkspaceCapability = {
     repository: {
       get: async () => { calls.push('get'); return hooks.get ? await hooks.get() as any : structuredClone(snapshot); },
-      commit: async input => { const value = input as CloudServiceCatalogCommand; calls.push(`commit:${value.operationId}`); inputs.push(structuredClone(value));
+      commit: async input => { const value = input as CloudServiceCatalogWriteCommand; calls.push(`commit:${value.operationId}`); inputs.push(structuredClone(value));
         if (hooks.commit) return await hooks.commit(value) as any;
-        snapshot = { ...record(value.expectedRevision + 1, value.operationId), data: structuredClone(value.data) };
+        snapshot = { ...record(value.expectedRevision + 1, value.operationId), data: 'mutationVersion' in value
+          ? applyCloudServiceCatalogMutation(snapshot?.data ?? null, value) : structuredClone(value.data) };
         storedIntents.set(value.operationId, intent(value, 'committed'));
         return { status: 'committed', recordId: 'serviceCatalog', revision: value.expectedRevision + 1 }; },
     },
     journal: {
-      prepare: async (_kind, input) => { const value = input as unknown as CloudServiceCatalogCommand; calls.push(`prepare:${value.operationId}`);
+      prepare: async (_kind, input) => { const value = input as unknown as CloudServiceCatalogWriteCommand; calls.push(`prepare:${value.operationId}`);
         if (hooks.prepare) return await hooks.prepare(value) as any;
         if (!storedIntents.has(value.operationId)) storedIntents.set(value.operationId, intent(value));
         return structuredClone(storedIntents.get(value.operationId)!); },
@@ -70,7 +73,8 @@ function fake() {
     active: (value: boolean) => { active = value; }, snapshot: (value: CloudServiceCatalogRecord | null) => { snapshot = value; } };
 }
 async function edit(h: ReturnType<typeof fake>) {
-  assert.equal(await h.controller.load(), true); assert.equal(h.controller.beginEdit(), true); assert.equal(h.controller.updateDraft(data()), true);
+  assert.equal(await h.controller.load(), true); assert.equal(h.controller.beginEdit(), true);
+  assert.equal(h.controller.updateDraft({ examinationCents: 10_000, services: [] }), true);
 }
 
 test('catalog editor construction is inert; all initial state is frozen and no defaults are read or generated', () => {
@@ -87,14 +91,14 @@ test('explicit null load permits a draft only with unknown examination, never gu
   assert.equal(h.calls.some(call => /prepare|commit/.test(call)), false);
 });
 test('loaded catalog produces an isolated deeply frozen draft; every ordinary draft blocks refresh/history/resume', async () => {
-  const h = fake(), snapshot = record(); h.snapshot(snapshot); await h.controller.load(); h.controller.beginEdit();
+  const h = fake(), snapshot = { ...record(), data: data() }; h.snapshot(snapshot); await h.controller.load(); h.controller.beginEdit();
   snapshot.data.services[0].name = 'تعديل خارجي'; assert.equal(h.controller.getState().draft?.services[0].name, 'خدمة مصطنعة');
   assert.equal(Object.isFrozen(h.controller.getState().draft?.services[0]), true);
   const calls = h.calls.length; assert.equal(await h.controller.load(), false); await h.controller.loadHistory(); await h.controller.loadMoreHistory();
   assert.equal(await h.controller.resume(id(1)), false); assert.equal(h.calls.length, calls); assert.equal(h.controller.cancelDraft(), true);
 });
 test('full draft replacement validates nullable exam/unknown and free prices without altering the saved snapshot', async () => {
-  const h = fake(); h.snapshot(record()); await h.controller.load(); h.controller.beginEdit();
+  const h = fake(); h.snapshot({ ...record(), data: data() }); await h.controller.load(); h.controller.beginEdit();
   const input = { examinationCents: null, services: [{ ...data().services[0], priceCents: null }] };
   assert.equal(h.controller.updateDraft(input), true); input.services[0].name = 'متأخر';
   assert.equal(h.controller.getState().draft?.services[0].name, 'خدمة مصطنعة'); assert.equal(h.controller.getState().draft?.services[0].priceCents, null);
@@ -143,7 +147,8 @@ test('uncertain preparation preserves the original complete command and retry ne
 test('uncertain commit retries sameID/body while confirmed commit with failed refresh retries reads only', async () => {
   const h = fake(); await edit(h); let first = true;
   h.hooks.commit = async input => { if (first) { first = false; throw new Error('PRIVATE_COMMIT'); }
-    h.snapshot({ ...record(), data: input.data }); return { status: 'already-committed', recordId: 'serviceCatalog', revision: 1 }; };
+    h.snapshot({ ...record(), data: 'mutationVersion' in input ? applyCloudServiceCatalogMutation(null, input) : input.data });
+    return { status: 'already-committed', recordId: 'serviceCatalog', revision: 1 }; };
   assert.equal(await h.controller.save(), false); assert.equal(await h.controller.retry(), true);
   assert.deepEqual(h.inputs[0], h.inputs[1]);
   const x = fake(); await edit(x); let fail = true; x.hooks.get = async () => { if (fail) throw new Error('PRIVATE_REFRESH'); return record(); };
@@ -176,7 +181,7 @@ test('missing/older/inconsistent post-ACK snapshots stay refresh-required and ne
 });
 test('malformed or foreign preparation intent rejects before any domain commit', async () => {
   for (const change of [(value: any) => { value.kind = 'clinical'; }, (value: any) => { value.operationId = id(9); },
-    (value: any) => { value.createdAt = '2026-10-11T00:00:00.001Z'; }, (value: any) => { value.command.data.examinationCents = 0; },
+    (value: any) => { value.createdAt = '2026-10-11T00:00:00.001Z'; }, (value: any) => { value.command.examinationCents = 0; },
     (value: any) => { value.status = 'cancelled'; value.revision = 2; }, (value: any) => { value.command.extra = true; }]) {
     const h = fake(); await edit(h); h.hooks.prepare = async input => { const result = intent(input); change(result); return result; };
     assert.equal(await h.controller.save(), false); assert.equal(h.inputs.length, 0); assert.equal(h.controller.getState().saveStatus, 'retry-required');
@@ -196,7 +201,7 @@ test('cancelPending validates complete matching command before mutation and unlo
   assert.equal(h.controller.getState().draft, null); assert.equal(h.controller.getState().loaded, false);
   assert.equal(h.controller.getState().pendingOperationId, null); assert.equal(h.controller.getState().snapshot, null);
   const x = fake(); await edit(x); x.hooks.commit = async () => { throw new Error('PRIVATE'); }; await x.controller.save();
-  x.hooks.intentGet = async () => intent({ ...command(), data: { examinationCents: 0, services: [] } });
+  x.hooks.intentGet = async () => intent({ ...command(), examinationCents: 0 });
   assert.equal(await x.controller.cancelPending(), false); assert.equal(x.calls.some(call => call.startsWith('cancel:')), false);
   assert.equal(x.controller.getState().pendingOperationId, id(1));
 });
@@ -221,7 +226,7 @@ test('resume prepared and committed durable commands replays their original IDs 
 });
 test('resume rejects cancelled/malformed/wrong-kind/wrong-ID/time commands without a new write', async () => {
   for (const change of [(value: any) => { value.status = 'cancelled'; value.revision = 2; }, (value: any) => { value.kind = 'contact'; },
-    (value: any) => { value.createdAt = '2026-10-11T00:00:00.001Z'; }, (value: any) => { value.command.data.extra = true; }]) {
+    (value: any) => { value.createdAt = '2026-10-11T00:00:00.001Z'; }, (value: any) => { value.command.extra = true; }]) {
     const h = fake(), value = intent(); change(value); h.hooks.intentGet = async () => value;
     assert.equal(await h.controller.resume(id(1)), false); assert.equal(h.inputs.length, 0); assert.equal(h.controller.getState().pendingOperationId, null);
   }
@@ -243,7 +248,7 @@ test('unsupported history fails closed instead of replacing all-status recovery 
 });
 test('history rejects malformed/foreign/unordered/duplicate/oversized records and wrong cursor without publishing them', async () => {
   const foreign = intent(); (foreign as any).kind = 'clinical';
-  const malformed = intent(); (malformed.command.data as any).extra = true;
+  const malformed = intent(); (malformed.command as any).extra = true;
   for (const page of [
     { records: [foreign], nextAfterId: null }, { records: [malformed], nextAfterId: null },
     { records: [intent(command(2)), intent(command(1))], nextAfterId: null },
@@ -296,7 +301,7 @@ test('actual lease loss synchronously clears every field and suppresses late cap
 });
 test('logout during accepted save clears the view, never claims server undo and cannot revive a retained controller', async () => {
   const h = fake(); await edit(h); const gate = deferred<unknown>(), started = deferred<void>();
-  h.hooks.commit = async input => { h.snapshot({ ...record(), data: input.data }); started.resolve(); return gate.promise; };
+  h.hooks.commit = async input => { h.snapshot({ ...record(), data: 'mutationVersion' in input ? applyCloudServiceCatalogMutation(null, input) : input.data }); started.resolve(); return gate.promise; };
   const pending = h.controller.save(); await started.promise; h.controller.dispose();
   gate.resolve({ status: 'committed', recordId: 'serviceCatalog', revision: 1 }); assert.equal(await pending, false);
   h.active(true); assert.equal(await h.controller.load(), false); assert.equal(await h.controller.retry(), false);
@@ -318,7 +323,7 @@ test('reentrant UUID/clock/input callbacks cannot start a second action or repla
   h.hooks.newId = () => { nested = h.controller.save(); assert.equal(h.controller.cancelDraft(), false); return id(9); };
   h.hooks.now = () => { assert.equal(h.controller.updateDraft({ examinationCents: 0, services: [] }), false); return WHEN; };
   assert.equal(await h.controller.save(), true); assert.equal(await nested, false); assert.equal(h.inputs.length, 1);
-  assert.equal(h.inputs[0].operationId, id(9)); assert.equal(h.inputs[0].data.examinationCents, 10_000);
+  assert.equal(h.inputs[0].operationId, id(9)); assert.equal((h.inputs[0] as CloudServiceCatalogMutationCommand & { examinationCents: number }).examinationCents, 10_000);
 });
 test('reentrant activity callbacks cannot mutate state, and a listener disposing before work prevents data calls', async () => {
   const h = fake(); h.hooks.active = () => { assert.equal(h.controller.beginEdit(), false); return true; };
@@ -361,7 +366,8 @@ function atomic() {
   return { docs, calls, faults, client, capability, writes: () => writes };
 }
 async function atomicEdit(controller: CloudCatalogWorkspaceController) {
-  assert.equal(await controller.load(), true); assert.equal(controller.beginEdit(), true); assert.equal(controller.updateDraft(data()), true);
+  assert.equal(await controller.load(), true); assert.equal(controller.beginEdit(), true);
+  assert.equal(controller.updateDraft({ examinationCents: 10_000, services: [] }), true);
 }
 test('actual repository+journal composition recovers lost preparation after disposal/reload with one original operation', async () => {
   const h = atomic(), first = h.client(); await atomicEdit(first); h.faults.lostPrepare = true;
@@ -391,4 +397,46 @@ test('actual acknowledged save plus refresh failure retries only reads and does 
   assert.equal(await controller.save(), false); assert.equal(controller.getState().saveStatus, 'refresh-required'); const writes = h.writes();
   assert.equal(await controller.cancelPending(), false); h.faults.failRefresh = false; assert.equal(await controller.retry(), true);
   assert.equal(h.writes(), writes); assert.equal(h.docs.get(CATALOG).revision, 1);
+});
+
+test('one service edit or append emits one small v2 mutation and preserves every unrelated saved row and fee', async () => {
+  for (const append of [false, true]) {
+    const h = fake(), saved = { ...record(), data: data() }; h.snapshot(saved);
+    await h.controller.load(); h.controller.beginEdit();
+    const rows = structuredClone(saved.data.services);
+    if (append) rows.push({ ...rows[0], serviceId: id(80), name: 'خدمة ثانية' }); else rows[0].priceCents = 12345;
+    h.controller.updateDraft({ ...saved.data, services: rows }); assert.equal(await h.controller.save(), true);
+    assert.equal(h.inputs.length, 1); const input = h.inputs[0]; assert.ok('mutationVersion' in input);
+    assert.equal(input.action, 'service'); if (input.action === 'service') assert.equal(input.index, append ? 1 : 0);
+    assert.equal('data' in input, false); assert.equal(h.controller.getState().snapshot?.data.examinationCents, 10000);
+    assert.deepEqual(h.controller.getState().snapshot?.data.services, rows);
+  }
+});
+
+test('no-op, global multi-change, removal and reorder never allocate an operation or silently split saves', async () => {
+  for (const mode of ['noop', 'exam-and-service', 'two-services', 'remove', 'reorder']) {
+    const h = fake(), saved = { ...record(), data: { ...data(), services: [...data().services,
+      { ...data().services[0], serviceId: id(80), name: 'خدمة ثانية' }] } }; h.snapshot(saved);
+    await h.controller.load(); h.controller.beginEdit(); const next = structuredClone(saved.data);
+    if (mode === 'exam-and-service') { next.examinationCents++; next.services[0].priceCents++; }
+    if (mode === 'two-services') { next.services[0].priceCents++; next.services[1].priceCents++; }
+    if (mode === 'remove') next.services.pop(); if (mode === 'reorder') next.services.reverse();
+    h.controller.updateDraft(next); const before = h.calls.length;
+    assert.equal(await h.controller.save(), false, mode); assert.equal(h.inputs.length, 0, mode);
+    assert.equal(h.calls.slice(before).some(call => /new-id|now|prepare|commit/.test(call)), false, mode);
+    assert.deepEqual(h.controller.getState().snapshot, saved); assert.ok(h.controller.getState().draft);
+  }
+});
+
+test('prepared legacy history cannot replay but trusted committed legacy recovery only acknowledges without preparation', async () => {
+  for (const status of ['prepared', 'committed'] as const) {
+    const h = fake(), legacy = { operationId: id(9), expectedRevision: 0, createdAt: WHEN, data: data() };
+    h.storedIntents.set(id(9), intent(legacy, status));
+    if (status === 'committed') h.hooks.commit = async () => { h.snapshot({ ...record(1, id(9)), data: data() });
+      return { status: 'already-committed', recordId: 'serviceCatalog', revision: 1 }; };
+    assert.equal(await h.controller.resume(id(9)), status === 'committed');
+    assert.equal(h.calls.some(call => call.startsWith('prepare:')), false);
+    assert.equal(h.inputs.length, status === 'committed' ? 1 : 0);
+    assert.equal(h.calls.includes('new-id'), false);
+  }
 });

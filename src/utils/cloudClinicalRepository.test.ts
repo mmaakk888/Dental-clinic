@@ -197,6 +197,41 @@ test('plain clinical path does not accept unsupported prosthetic labels or an em
   for (const input of [{ ...data(), type: 'تركيبات - ثابتة' }, { ...data(), services: [{ ...data().services[0], name: 'تركيبة زيركون' }] },
     { ...data(), examinationCents: 0, services: [] }]) assert.throws(() => prepareCloudClinicalCommand(visit({ data: input })), code('invalid'));
 });
+function prostheticData(): CloudClinicalSessionData {
+  return { ...data(), type: 'تركيب زيركون', prostheticCaseId: OP,
+    prosthetic: { kind: 'fixed', material: 'تركيب زيركون', units: 3, unitPriceCents: 10_000 },
+    services: [{ id: OP, name: 'تركيب زيركون', priceCents: 30_000, tooth: 'ur5', catalogServiceId: ITEM }] };
+}
+test('linked prosthetic session reads preserve the immutable patient-only snapshot; ordinary visits cannot create one', () => {
+  const linked = prostheticData(); assert.deepEqual(prepareCloudClinicalSessionData(linked), linked);
+  assert.throws(() => prepareCloudClinicalCommand(visit({ data: linked })), code('invalid'));
+  assert.throws(() => prepareCloudClinicalCommand(visit({ data: { ...linked, type: 'زيركون' } })), code('invalid'));
+  for (const patch of [{ prostheticCaseId: undefined }, { prosthetic: undefined }, { prostheticCaseId: OP + '\n' },
+    { prosthetic: { ...linked.prosthetic, units: 0 } }, { prosthetic: { ...linked.prosthetic, units: 1.5 } },
+    { prosthetic: { ...linked.prosthetic, unitPriceCents: -1 } }, { prosthetic: { ...linked.prosthetic, labCostCents: 1 } },
+    { services: [{ ...linked.services[0], priceCents: 1 }] }, { services: [{ ...linked.services[0], catalogServiceId: null }] },
+    { services: [{ ...linked.services[0], id: OP2 }] }]) {
+    assert.throws(() => prepareCloudClinicalSessionData({ ...linked, ...patch }), code('invalid'));
+  }
+});
+test('shared clinical payments and progress keep a prosthetic session linked and do not recharge it', async () => {
+  const h = harness(); await h.repo.commit(visit());
+  h.docs.get(path('patientSessions', OP)).data = prostheticData();
+  const linked = await h.repo.getSession(OP); assert.equal(linked?.data.prostheticCaseId, OP);
+  assert.equal((await h.repo.listSessions({ patientId: PATIENT })).records[0].data.prosthetic?.units, 3);
+  await h.repo.commit(payment());
+  let current = await h.repo.getSession(OP);
+  assert.equal(current?.totalCents, 40_000); assert.equal(current?.paidCents, 15_000);
+  assert.deepEqual(current?.data.prosthetic, prostheticData().prosthetic); assert.equal(current?.data.prostheticCaseId, OP);
+  await h.repo.commit(progress({ operationId: OP3, expectedRevision: 2 }));
+  current = await h.repo.getSession(OP);
+  assert.equal(current?.totalCents, 40_000); assert.equal(current?.paidCents, 15_000);
+  assert.equal(current?.data.prostheticCaseId, OP); assert.equal(current?.data.treatmentStage, 'second');
+  assert.equal((await h.repo.getAccount(PATIENT))?.sessionCount, 1);
+  assert.equal((await h.repo.listReceipts({ patientId: PATIENT })).records.length, 2);
+  const wrong = structuredClone(current!); wrong.data.prostheticCaseId = OP2;
+  assert.throws(() => parseCloudClinicalSession(wrong), code('invalid'));
+});
 test('missing/mismatched profile or immutable file index cannot create clinical orphans', async () => {
   for (const change of ['missing-profile', 'wrong-profile', 'wrong-phone', 'missing-index', 'wrong-index']) {
     const h = harness();

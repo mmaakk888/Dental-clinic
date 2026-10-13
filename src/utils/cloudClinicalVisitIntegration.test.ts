@@ -5,7 +5,7 @@ import { createCloudOperatingAuthSession, type CloudOperatingAuthAdapter } from 
 import { createCloudOperatingPageController } from './cloudOperatingPageController';
 import { createCloudClinicalRepository, type CloudClinicalAdapter } from './cloudClinicalRepository';
 import { createCloudServiceCatalogRepository, type CloudServiceCatalogAdapter,
-  type CloudServiceCatalogData } from './cloudServiceCatalogRepository';
+  type CloudServiceCatalogData, type CloudServiceDefinition } from './cloudServiceCatalogRepository';
 import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
 import type { CloudCatalogVisitMetadata } from './cloudCatalogVisitDraft';
 
@@ -133,10 +133,21 @@ function syntheticServer() {
       getServiceCatalog: async () => { calls.push('capability:catalog'); await auth.authorizeOwner(); return { repository: catalog, journal }; },
     }), () => true);
     const signIn = () => page.signIn(EMAIL, PASSWORD);
-    async function configureCatalog(value = catalogData()) {
+    async function mutateCatalog(change: { action: 'examination'; examinationCents: number }
+      | { action: 'service'; index: number; service: CloudServiceDefinition }) {
       const current = await catalog.get();
-      const command = { operationId: newId(), expectedRevision: current?.revision ?? 0, createdAt: TIME, data: value };
+      const command = { mutationVersion: 2 as const, operationId: newId(), expectedRevision: current?.revision ?? 0, createdAt: TIME, ...change };
       await journal.prepare('catalog', command, TIME); await catalog.commit(command);
+      return (await catalog.get())!;
+    }
+    // Fixture initialization only: fee and every appended service are separate
+    // explicitly prepared commands, not a replacement or a split UI save.
+    async function configureCatalog(value = catalogData()) {
+      assert.equal(await catalog.get(), null, 'fixture initialization never replaces an existing catalog');
+      await mutateCatalog({ action: 'examination', examinationCents: value.examinationCents });
+      for (let index = 0; index < value.services.length; index++) {
+        await mutateCatalog({ action: 'service', index, service: value.services[index] });
+      }
       return (await catalog.get())!;
     }
     async function open() {
@@ -144,7 +155,7 @@ function syntheticServer() {
       assert.ok(bundle.visit, 'the actual owner page creates the visit controller in its clinical lease');
       return { ...bundle, visit: bundle.visit, lease: bundle };
     }
-    return { auth, authHooks, page, catalog, journal, repository, signIn, configureCatalog, open };
+    return { auth, authHooks, page, catalog, journal, repository, signIn, configureCatalog, mutateCatalog, open };
   }
   const count = (kind: string) => [...rows.keys()].filter(key => key.startsWith(path(kind, ''))).length;
   return { rows, calls, hooks, client, count, writes: () => writes, commitCalls: () => commitCalls };
@@ -169,8 +180,11 @@ test('priced visit captures configured examination, chosen service and tooth; on
   assert.equal(bundle.visit.setExaminationEnabled(true), true);
   assert.equal(server.writes(), before, 'selection, tooth, price and examination edits never save');
   assert.equal(server.count('patientAccounts'), 0); assert.equal(server.count('patientReceipts'), 0);
-  const newerCatalog = await client.configureCatalog(catalogData(15_000, 45_000, 'خدمة علاجية محدثة'));
-  assert.equal(newerCatalog.revision, originalCatalog.revision + 1);
+  const changedExamination = await client.mutateCatalog({ action: 'examination', examinationCents: 15_000 });
+  assert.equal(changedExamination.revision, originalCatalog.revision + 1);
+  const newerCatalog = await client.mutateCatalog({ action: 'service', index: 0,
+    service: catalogData(15_000, 45_000, 'خدمة علاجية محدثة').services[0] });
+  assert.equal(newerCatalog.revision, originalCatalog.revision + 2);
   assert.equal(bundle.visit.getState().catalog?.revision, originalCatalog.revision);
   assert.equal(bundle.visit.getState().draft?.examinationCents, 10_000);
   assert.equal(await bundle.visit.save(metadata(), 10_000), true);

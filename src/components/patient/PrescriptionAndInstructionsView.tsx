@@ -18,6 +18,10 @@ interface PrescriptionAndInstructionsViewProps {
   canPrint?: boolean;
   onAuthorizePrint?: () => void;
   onAuthorizeWhatsappSend?: (request: { isCampaign: boolean; requiresFinance: boolean }) => void;
+  /** Cloud callers freshly authorize asynchronously before an output gesture;
+   * the existing synchronous authorizers still recheck the exact view lease. */
+  onPrepareOutput?: () => Promise<void>;
+  prescriptionHeader?: { doctorName: string; phone: string; address: string };
 }
 
 export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructionsViewProps> = ({
@@ -29,6 +33,8 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   canPrint = false,
   onAuthorizePrint,
   onAuthorizeWhatsappSend,
+  onPrepareOutput,
+  prescriptionHeader,
 }) => {
   const { showToast } = useToastAndConfirm();
 
@@ -49,13 +55,16 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
 
   // Prescription Header/Footer Customizable Template Data (Defaults match Dr. Mohamed Osama A5 design)
   const [rxDocTitle, setRxDocTitle] = useState('دكتور');
-  const [rxDocName, setRxDocName] = useState('محمد أسامة عبدالكريم');
-  const [rxDocEnglish, setRxDocEnglish] = useState('DR. MOHAMED OSAMA');
+  const [rxDocName, setRxDocName] = useState(prescriptionHeader === undefined ? 'محمد أسامة عبدالكريم' : prescriptionHeader.doctorName);
+  const [rxDocEnglish, setRxDocEnglish] = useState(prescriptionHeader === undefined ? 'DR. MOHAMED OSAMA' : '');
   const [rxSpecialty1, setRxSpecialty1] = useState('طب وجراحة الفم والأسنان');
   const [rxSpecialty2, setRxSpecialty2] = useState('تقويم وتجميل الأسنان');
-  const [rxPhone, setRxPhone] = useState('011 4338 4338');
-  const [rxAddress, setRxAddress] = useState('طريق اجا السنبلاوين - برج النور الحمص - بجوار الجمعية الزراعية');
+  const [rxPhone, setRxPhone] = useState(prescriptionHeader === undefined ? '011 4338 4338' : prescriptionHeader.phone);
+  const [rxAddress, setRxAddress] = useState(prescriptionHeader === undefined ? 'طريق اجا السنبلاوين - برج النور الحمص - بجوار الجمعية الزراعية' : prescriptionHeader.address);
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
+  // Native share/window.open require the current user gesture on iPhone.
+  // Never await a network authorization immediately before invoking them.
+  const nativeOutputApproval = useRef<{ key: string; until: number } | null>(null);
 
   // Post-Op Instruction Templates
   const postOpTemplates = [
@@ -142,13 +151,24 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     }
   };
 
-  const openWhatsApp = (text: string) => {
+  const openWhatsApp = async (text: string) => {
     if (!canSendWhatsApp || !onAuthorizeWhatsappSend) return;
     if (!/^[1-9]\d{7,14}$/.test(cleanEgyptianPhone(patient.mobile))) {
       showToast('راجع رقم هاتف المريض قبل فتح واتساب', 'warning');
       return;
     }
     try {
+      if (onPrepareOutput) {
+        const key = JSON.stringify(['whatsapp', patient.id, patient.mobile, text]);
+        const approval = nativeOutputApproval.current;
+        if (!approval || approval.key !== key || approval.until < Date.now()) {
+          await onPrepareOutput();
+          nativeOutputApproval.current = { key, until: Date.now() + 30_000 };
+          showToast('تم التحقق. اضغط زر واتساب مرة أخرى لفتح المحادثة.', 'info');
+          return;
+        }
+        nativeOutputApproval.current = null;
+      }
       onAuthorizeWhatsappSend({ isCampaign: false, requiresFinance: false });
       window.open(getWhatsAppUrl(patient.mobile, text), '_blank', 'noopener,noreferrer');
     } catch { showToast('تعذّر فتح واتساب؛ راجع صلاحية الحساب والجلسة.', 'error'); }
@@ -167,9 +187,13 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   };
 
   // Print Prescription Window
-  const handlePrintPrescription = () => {
+  const handlePrintPrescription = async () => {
     if (!validateRxNames()) return;
-    try { printAuthorizedDocument(canPrint, onAuthorizePrint); }
+    try {
+      if (onPrepareOutput) await onPrepareOutput();
+      if (!mounted.current || latestImage.current.imageSignature !== imageSignature) return;
+      printAuthorizedDocument(canPrint, onAuthorizePrint);
+    }
     catch { showToast('تعذّرت الطباعة؛ راجع صلاحية الحساب والجلسة.', 'error'); }
   };
 
@@ -215,25 +239,45 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     imagePending.current = true; setImageBusy(true);
     const signature = imageSignature;
     try {
+      if (onPrepareOutput) await onPrepareOutput();
+      if (!mounted.current || latestImage.current.imageSignature !== signature) return;
       const blob = await renderPrescriptionImage(imageData, canPrint, onAuthorizePrint, paperRef.current);
+      if (onPrepareOutput) await onPrepareOutput();
       const latest = latestImage.current;
       requireAuthorizedDataOutput(latest.canPrint, latest.onAuthorizePrint);
       if (!mounted.current || latest.imageSignature !== signature) return;
       const file = new File([blob], `prescription-${patient.id.replace(/[^\w-]/g, '').slice(0, 40) || 'patient'}.png`, { type: 'image/png' });
+      if (onPrepareOutput) nativeOutputApproval.current = { key: `image:${signature}`, until: Date.now() + 30_000 };
       setPreparedImage({ file, url: URL.createObjectURL(blob), signature });
       showToast('الصورة جاهزة للمراجعة والتنزيل أو المشاركة.', 'info');
     } catch (error) { if (mounted.current) showToast(error instanceof Error ? error.message : 'تعذّر تجهيز صورة الروشتة.', 'error'); }
     finally { imagePending.current = false; if (mounted.current) setImageBusy(false); }
   };
-  const downloadImage = () => {
+  const downloadImage = async () => {
     if (!currentImage) return;
-    try { downloadAuthorizedImage(currentImage.url, currentImage.file.name, canPrint, onAuthorizePrint); }
+    try {
+      if (onPrepareOutput) await onPrepareOutput();
+      if (!mounted.current || latestImage.current.imageSignature !== currentImage.signature) return;
+      downloadAuthorizedImage(currentImage.url, currentImage.file.name, canPrint, onAuthorizePrint);
+    }
     catch { showToast('تعذّر التنزيل؛ راجع صلاحية الحساب والجلسة.', 'error'); }
   };
   const shareImage = async () => {
     if (!currentImage || imagePending.current || !canSendWhatsApp || !onAuthorizeWhatsappSend) return;
     imagePending.current = true; setImageBusy(true);
     try {
+      if (onPrepareOutput) {
+        const key = `image:${currentImage.signature}`, approval = nativeOutputApproval.current;
+        if (!approval || approval.key !== key || approval.until < Date.now()) {
+          await onPrepareOutput();
+          if (!mounted.current || latestImage.current.imageSignature !== currentImage.signature) return;
+          nativeOutputApproval.current = { key, until: Date.now() + 30_000 };
+          showToast('تم التحقق. اضغط مشاركة الصورة مرة أخرى لفتح نافذة المشاركة.', 'info');
+          return;
+        }
+        nativeOutputApproval.current = null;
+      }
+      if (!mounted.current || latestImage.current.imageSignature !== currentImage.signature) return;
       onAuthorizeWhatsappSend({ isCampaign: false, requiresFinance: false });
       const result = await sharePrescriptionImage(currentImage.file, canPrint, onAuthorizePrint);
       if (result === 'unsupported') showToast('مشاركة الملفات غير مدعومة هنا. اضغط «تنزيل الصورة»، ثم أرفقها في محادثة المريض على واتساب.', 'info', { duration: 9000 });

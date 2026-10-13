@@ -57,7 +57,8 @@ async function until(check: () => boolean) {
 }
 
 const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
-  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments'],
+  metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments',
+    './firebaseCloudClinicSettings', './firebaseCloudProsthetics', './firebaseCloudExpenses', './firebaseCloudClinicSnapshot'],
   supported: { 'dynamic-import': false } });
 
 async function fixture(options: {
@@ -105,6 +106,8 @@ async function fixture(options: {
   appointmentsHistoryMissing?: boolean;
   appointmentsHistoryRows?: unknown[];
   appointmentsHistoryCursor?: string | null;
+  additionalImportHook?: () => void;
+  additionalFactoryGate?: Promise<void>;
   onGetDoc?: () => Promise<void> | void;
 } = {}) {
   const imports: string[] = [];
@@ -122,6 +125,8 @@ async function fixture(options: {
   let catalogActive: (() => boolean) | null = null;
   const appointmentsCalls: string[] = [], appointmentsInputs: unknown[] = [];
   let appointmentsActive: (() => boolean) | null = null;
+  const additionalFactories: string[] = [];
+  const additionalActive = new Map<string, () => boolean>();
   const app = { name: '' };
   const user = { uid: UID, email: EMAIL, emailVerified: options.verified ?? true };
   const auth = { currentUser: null as typeof user | null, emulatorConfig: options.emulator ? {} : null, languageCode: '' };
@@ -363,6 +368,24 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
           };
         } };
       }
+      if (['./firebaseCloudClinicSettings', './firebaseCloudProsthetics', './firebaseCloudExpenses', './firebaseCloudClinicSnapshot'].includes(name)) {
+        options.additionalImportHook?.();
+        const factoryName = ({ './firebaseCloudClinicSettings': 'createFirebaseCloudClinicSettings',
+          './firebaseCloudProsthetics': 'createFirebaseCloudProsthetics', './firebaseCloudExpenses': 'createFirebaseCloudExpenses',
+          './firebaseCloudClinicSnapshot': 'createFirebaseCloudClinicSnapshot' })[name];
+        return { [factoryName]: async (target: unknown, settings: { isActive(): boolean }) => {
+          assert.equal(target, auth); assert.equal(settings.isActive(), true); additionalFactories.push(name);
+          let revoked = false;
+          const active = () => { if (!settings.isActive()) revoked = true; return !revoked; };
+          additionalActive.set(name, active); await options.additionalFactoryGate;
+          const read = async () => {
+            if (!active()) throw new Error('synthetic capability revoked'); return null;
+          };
+          if (name === './firebaseCloudClinicSnapshot') return Object.freeze({ readFull: read });
+          return Object.freeze({ repository: Object.freeze(name === './firebaseCloudProsthetics'
+            ? { getCase: read } : { get: read }), journal: Object.freeze({}) });
+        } };
+      }
       if (name === 'firebase/firestore/lite') return {
         getFirestore: (target: unknown, databaseId: string) => {
           assert.equal(target, app); assert.equal(databaseId, '(default)'); step('getFirestore'); return database;
@@ -392,6 +415,7 @@ module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     clinicalCalls, clinicalInputs, clinicalActive: () => clinicalActive?.() ?? false,
     catalogCalls, catalogInputs, catalogActive: () => catalogActive?.() ?? false,
     appointmentsCalls, appointmentsInputs, appointmentsActive: () => appointmentsActive?.() ?? false,
+    additionalFactories, additionalActive,
     loseIdentity: () => { auth.currentUser = null; observer?.(null); },
     replaceIdentity: () => { auth.currentUser = { ...user }; observer?.(auth.currentUser); },
     observerFailure: () => observerError?.(),
@@ -406,8 +430,60 @@ test('operating SDK graph excludes clinic storage, App, old backup config, local
     assert.equal(inputs.some(path => path.endsWith(forbidden)), false, forbidden);
   }
   const dependencies = compiled.metafile!.outputs[Object.keys(compiled.metafile!.outputs)[0]].imports.map(value => value.path);
-  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments'].sort());
+  assert.deepEqual(dependencies.sort(), ['firebase/app', 'firebase/auth', 'firebase/firestore/lite', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments',
+    './firebaseCloudClinicSettings', './firebaseCloudProsthetics', './firebaseCloudExpenses', './firebaseCloudClinicSnapshot'].sort());
 });
+
+for (const [method, dependency] of [['getClinicSettings', './firebaseCloudClinicSettings'], ['getProsthetics', './firebaseCloudProsthetics'],
+  ['getExpenses', './firebaseCloudExpenses'], ['getClinicSnapshot', './firebaseCloudClinicSnapshot']] as const) {
+  const read = (capability: Awaited<ReturnType<import('./cloudOperatingAuth').CloudOperatingFirebaseSession[typeof method]>>) =>
+    'readFull' in capability ? capability.readFull() : 'getCase' in capability.repository ? capability.repository.getCase(RECORD)
+      : 'getMaterial' in capability.repository ? capability.repository.get(RECORD) : capability.repository.get();
+  test(`${method} remains explicit and unavailable before owner authorization; sign-in alone never loads it`, async () => {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+    await assert.rejects(session[method]()); assert.equal(h.imports.includes(dependency), false);
+    await session.signIn(EMAIL, PASSWORD); assert.equal(h.imports.includes(dependency), false);
+    assert.deepEqual(h.additionalFactories, []); await session.dispose();
+  });
+  test(`${method} binds exact Auth/lifetime and caches only construction, never authorization or data`, async () => {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD);
+    const before = h.paths.length, capability = await session[method]();
+    assert.equal(await session[method](), capability); assert.equal(Object.isFrozen(capability), true);
+    if ('repository' in capability) assert.equal(Object.isFrozen(capability.repository), true);
+    assert.deepEqual(h.additionalFactories, [dependency]);
+    assert.ok(h.paths.length >= before + 4, 'both explicit gets freshly authorize before and after creation');
+    assert.equal(h.additionalActive.get(dependency)!(), true); assert.equal(await read(capability), null);
+    await session.dispose(); await assert.rejects(read(capability));
+  });
+  test(`${method} permanently revokes retained capabilities across same-owner sign-out/relogin`, async () => {
+    const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+    await session.signIn(EMAIL, PASSWORD); const original = await session[method]();
+    await session.signOut(); await assert.rejects(read(original));
+    await session.signIn(EMAIL, PASSWORD); const replacement = await session[method]();
+    assert.notEqual(replacement, original); assert.equal(await read(replacement), null);
+    await assert.rejects(read(original)); assert.deepEqual(h.additionalFactories, [dependency, dependency]); await session.dispose();
+  });
+  test(`${method} rejects a late factory after identity loss without reviving its cached lease`, async () => {
+    const gate = deferred(), h = await fixture({ additionalFactoryGate: gate.promise });
+    const session = await h.api.createFirebaseOperatingAuth(); await session.signIn(EMAIL, PASSWORD);
+    const pending = session[method](); void pending.catch(() => undefined);
+    await until(() => h.additionalFactories.includes(dependency)); h.loseIdentity(); gate.resolve();
+    await assert.rejects(pending); assert.equal(h.additionalActive.get(dependency)!(), false);
+    await session.signIn(EMAIL, PASSWORD); const fresh = await session[method]();
+    assert.equal(await read(fresh), null); assert.equal(h.additionalFactories.length, 2); await session.dispose();
+  });
+  test(`${method} rejects host changes and same-UID object replacement after initial authorization`, async () => {
+    for (const change of ['host', 'identity', 'observer'] as const) {
+      const h = await fixture(), session = await h.api.createFirebaseOperatingAuth();
+      await session.signIn(EMAIL, PASSWORD); const capability = await session[method]();
+      if (change === 'host') h.location.hostname = 'outside.example.invalid';
+      if (change === 'identity') h.replaceIdentity();
+      if (change === 'observer') h.observerFailure();
+      await assert.rejects(read(capability)); await assert.rejects(session[method]()); await session.dispose();
+    }
+  });
+}
 
 test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
   for (const hostname of ['example.com', `${PROJECT}.web.app`, '127.0.0.1.evil.invalid', '192.168.1.2']) {
@@ -551,6 +627,7 @@ test('contacts bind only exact isolated Auth, cache creation not data, and fresh
   assert.equal(Object.isFrozen(repository), true);
   assert.equal(h.contactsActive(), true);
   assert.deepEqual(Object.keys(session).sort(), ['authorizeOwner', 'dispose', 'getAppointments', 'getClinical', 'getContacts', 'getPatients', 'getServiceCatalog', 'getState',
+    'getClinicSettings', 'getProsthetics', 'getExpenses', 'getClinicSnapshot',
     'invalidate', 'signIn', 'signOut', 'subscribe'].sort());
   assert.deepEqual(Object.keys(repository).sort(), ['commit', 'get', 'journal', 'listPage']);
   assert.deepEqual(h.contactCalls, ['factory']);

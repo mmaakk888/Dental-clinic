@@ -151,10 +151,7 @@ async function harness(options: Options = {}) {
   };
   runInNewContext(output.outputFiles![0].text, scope);
   copy = runInNewContext('(value) => JSON.parse(JSON.stringify(value))', scope);
-  const payload = copy({ operationId: OP, expectedRevision: 0, createdAt: WHEN, data: {
-    examinationCents: 10_000,
-    services: [{ serviceId: ITEM, name: 'حشو عادي', kind: 'clinical', priceCents: 30_000, active: true }],
-  } });
+  const payload = copy({ mutationVersion: 2, action: 'examination', operationId: OP, expectedRevision: 0, createdAt: WHEN, examinationCents: 10_000 });
   return { service: module.exports, auth, user, calls, rows, payload, compiled: output, active, copy, location, options, rawAdapters };
 }
 const failed = (error: any) => ['invalid', 'unavailable', 'conflict'].includes(error?.code) && !String(error).includes('PRIVATE');
@@ -209,7 +206,7 @@ test('catalog commit requires a durable intent, atomically writes only settings/
   const writes = h.calls.filter(call => call.startsWith('set:')).length;
   assert.equal((await service.repository.commit(h.payload)).status, 'already-committed');
   assert.equal(h.calls.filter(call => call.startsWith('set:')).length, writes);
-  assert.equal((await service.repository.get()).data.services[0].serviceId, ITEM);
+  assert.deepEqual((await service.repository.get()).data.services, h.copy([]));
 });
 
 test('owner authorization rejects unverified/nonpassword/wrong claims or malformed canonical membership without data reads', async () => {
@@ -229,28 +226,28 @@ test('catalog input snapshots before an awaited owner check and never commits la
   const h = await harness(), service = await prepared(h);
   let release!: () => void; h.options.tokenGate = new Promise<void>(resolve => { release = resolve; });
   const pending = service.repository.commit(h.payload);
-  h.payload.data.examinationCents = 999; h.payload.data.services[0].name = 'تعديل متأخر'; release();
+  h.payload.examinationCents = 999; release();
   assert.equal((await pending).status, 'committed');
   assert.equal(h.rows.get(CATALOG).data.examinationCents, 10_000);
-  assert.equal(h.rows.get(CATALOG).data.services[0].name, 'حشو عادي');
+  assert.equal(h.rows.get(CATALOG).data.services.length, 0);
 });
 
 test('journal preparation snapshots the complete catalog command and rejects generic/wrong-domain/timestamp input before SDK access', async () => {
   const h = await harness(), service = await capability(h), before = [...h.calls];
   for (const value of [{ operationId: OP }, { ...h.payload, unknown: true }, { ...h.payload, expectedRevision: -1 },
-    { ...h.payload, data: { ...h.payload.data, examinationCents: -1 } }]) await assert.rejects(service.journal.prepare('catalog', h.copy(value), WHEN), failed);
+    { ...h.payload, examinationCents: -1 }]) await assert.rejects(service.journal.prepare('catalog', h.copy(value), WHEN), failed);
   for (const kind of ['clinical', 'contact', 'patient-profile', 'unknown']) await assert.rejects(service.journal.prepare(kind, h.payload, WHEN), failed);
   await assert.rejects(service.journal.prepare('catalog', h.payload, '2026-10-11T00:00:01.000Z'), failed);
   assert.deepEqual(h.calls, before);
   let release!: () => void; h.options.tokenGate = new Promise<void>(resolve => { release = resolve; });
   const pending = service.journal.prepare('catalog', h.payload, WHEN);
-  h.payload.data.examinationCents = 123; release();
-  assert.equal((await pending).command.data.examinationCents, 10_000);
+  h.payload.examinationCents = 123; release();
+  assert.equal((await pending).command.examinationCents, 10_000);
 });
 
 test('catalog compare-and-swap rejects stale new commands without changing current prices, receipts or prepared intent', async () => {
   const h = await harness(), service = await prepared(h); await service.repository.commit(h.payload);
-  const stale = h.copy({ ...h.payload, operationId: OP2, data: { ...h.payload.data, examinationCents: 50_000 } });
+  const stale = h.copy({ ...h.payload, operationId: OP2, examinationCents: 50_000 });
   await service.journal.prepare('catalog', stale, WHEN); const writes = h.calls.filter(call => call.startsWith('set:')).length;
   await assert.rejects(service.repository.commit(stale), (error: any) => error.code === 'conflict');
   assert.equal(h.calls.filter(call => call.startsWith('set:')).length, writes);
@@ -358,7 +355,7 @@ test('stored generic/foreign/malformed catalog intents are never exposed or canc
 
 test('malformed persisted catalog prices never become null, guessed defaults or a successful commit', async () => {
   const h = await harness(), service = await prepared(h); await service.repository.commit(h.payload);
-  h.rows.get(CATALOG).data.services[0].priceCents = -1;
+  h.rows.get(CATALOG).data.examinationCents = -1;
   await assert.rejects(service.repository.get(), failed);
   const newer = h.copy({ ...h.payload, operationId: OP2, expectedRevision: 1 }); await service.journal.prepare('catalog', newer, WHEN);
   const writes = h.calls.filter(call => call.startsWith('set:')).length; await assert.rejects(service.repository.commit(newer), failed);
@@ -494,6 +491,48 @@ test('raw intent transaction fence rejects foreign/malformed complete intent rea
   await assert.rejects(h.rawAdapters.catalog.runTransaction((tx: any) => tx.get(path('operationIntents'))), safe);
   for (const value of [{ kind: 'clinical' }, { kind: 'contact' }, { kind: 'patient-profile' }, {}]) {
     await assert.rejects(h.rawAdapters.catalog.runTransaction((tx: any) => tx.set(path('operationIntents'), h.copy(value))), safe);
+  }
+  assert.equal(h.calls.some(call => call.startsWith('set:')), false);
+});
+
+test('service mutation uses only exact ID/name reservation companions, preserves unrelated catalog data and retries historically', async () => {
+  const h = await harness(), service = await prepared(h); await service.repository.commit(h.payload);
+  const input = h.copy({ mutationVersion: 2, action: 'service', operationId: OP2, expectedRevision: 1, createdAt: WHEN, index: 0,
+    service: { serviceId: ITEM, name: 'حشو عادي', kind: 'clinical', priceCents: 30000, active: true } });
+  await service.journal.prepare('catalog', input, WHEN); await service.repository.commit(input);
+  const key = createHash('sha256').update('catalog-service-name-v2:حشو عادي').digest('hex');
+  assert.equal(h.rows.get(path('catalogServiceIds', ITEM)).index, 0);
+  assert.equal(h.rows.get(path('catalogServiceNames', key)).serviceId, ITEM);
+  assert.equal(h.rows.get(CATALOG).data.examinationCents, 10000);
+  assert.equal(h.rows.get(CATALOG).data.services.length, 1);
+  h.rows.delete(path('catalogServiceIds', ITEM)); h.rows.delete(path('catalogServiceNames', key));
+  const before = h.calls.filter(call => call.startsWith('set:')).length;
+  assert.equal((await service.repository.commit(input)).status, 'already-committed');
+  assert.equal(h.calls.filter(call => call.startsWith('set:')).length, before);
+});
+
+test('SDK denies fresh legacy replacement, but exact trusted committed legacy history stays read-only', async () => {
+  const h = await harness(), service = await capability(h);
+  const legacy = h.copy({ operationId: OP, expectedRevision: 0, createdAt: WHEN, data: { examinationCents: 0, services: [] } });
+  await assert.rejects(service.journal.prepare('catalog', legacy, WHEN), failed); assert.equal(h.rows.size, 0);
+  const command = h.copy({ createdAt: WHEN, data: { examinationCents: 0, services: [] }, expectedRevision: 0, operationId: OP });
+  h.rows.set(path('operationIntents'), h.copy({ schemaVersion: 1, clinicId: 'main', recordId: OP, operationId: OP, actorUid: UID,
+    kind: 'catalog', status: 'committed', revision: 2, createdAt: WHEN, command,
+    requestHash: createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', UID, 'catalog', command])).digest('hex') }));
+  h.rows.set(path('catalogOperations'), h.copy({ schemaVersion: 1, clinicId: 'main', operationId: OP, recordId: 'serviceCatalog', actorUid: UID,
+    expectedRevision: 0, resultRevision: 1, createdAt: WHEN,
+    requestHash: createHash('sha256').update(JSON.stringify(['clinic-service-catalog-v1', UID, legacy])).digest('hex') }));
+  const before = h.calls.filter(call => call.startsWith('set:')).length;
+  assert.equal((await service.journal.prepare('catalog', legacy, WHEN)).status, 'committed');
+  assert.equal((await service.repository.commit(legacy)).status, 'already-committed');
+  assert.equal(h.calls.filter(call => call.startsWith('set:')).length, before); assert.equal(h.rows.has(CATALOG), false);
+});
+
+test('routing remains read-only and reservation paths reject trailing text, noncanonical IDs and every arbitrary collection', async () => {
+  const h = await harness({ raw: true }); await capability(h); const adapter = h.rawAdapters.catalog;
+  for (const key of [path('settings', 'prostheticRouting'), path('catalogServiceIds', ITEM + '\n'),
+    path('catalogServiceNames', 'a'.repeat(64) + '\n'), path('catalogServiceNames', 'a'.repeat(63)), path('serviceDefinitions', ITEM)]) {
+    await assert.rejects(adapter.runTransaction((tx: any) => tx.set(key, {})), safe);
   }
   assert.equal(h.calls.some(call => call.startsWith('set:')), false);
 });

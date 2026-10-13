@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
 import { CloudServiceCatalogError, createCloudServiceCatalogRepository, parseCloudServiceCatalogData,
   parseCloudServiceCatalogRecord, prepareCloudServiceCatalogCommand, MAX_CLOUD_SERVICE_CATALOG_BYTES,
-  type CloudServiceCatalogAdapter, type CloudServiceCatalogCommand, type CloudServiceCatalogData } from './cloudServiceCatalogRepository';
+  prepareCloudServiceCatalogMutationCommand, applyCloudServiceCatalogMutation, normalizedCloudServiceName, cloudCatalogServiceIdPath, cloudCatalogServiceNamePath,
+  type CloudServiceCatalogAdapter, type CloudServiceCatalogCommand, type CloudServiceCatalogData,
+  type CloudServiceCatalogWriteCommand, type CloudServiceCatalogMutationCommand, type CloudServiceDefinition } from './cloudServiceCatalogRepository';
 
 // Fabricated atomic server only: no Firebase SDK, Rules, browser data, IAM,
 // clinical charges or owner credentials are used by these contract tests.
@@ -64,7 +66,7 @@ function harness() {
   const repo = createCloudServiceCatalogRepository(adapter, { digest });
   const journal = createCloudOperationIntentRepository(adapter, { digest });
   return { docs, calls, faults, hooks, adapter, repo, journal, owner: (value: string) => { uid = value; }, writes: () => writes,
-    prepare: (value: CloudServiceCatalogCommand) => journal.prepare('catalog', prepareCloudServiceCatalogCommand(value), value.createdAt),
+    prepare: (value: CloudServiceCatalogWriteCommand) => journal.prepare('catalog', prepareCloudServiceCatalogCommand(value), value.createdAt),
     client: () => createCloudServiceCatalogRepository(adapter, { digest }) };
 }
 
@@ -77,152 +79,161 @@ test('catalog get fails closed without a read capability and never substitutes a
   const h = harness(); delete h.adapter.readRecord; await assert.rejects(h.repo.get(), code('unavailable'));
   assert.equal(h.docs.size, 0); assert.equal(h.calls.some(call => call.startsWith('get:')), false);
 });
-test('first explicit owner save atomically writes catalog, immutable operation and committed intent', async () => {
-  const h = harness(), input = command(); await h.prepare(input); const before = h.writes();
-  assert.deepEqual(await h.repo.commit(input), { status: 'committed', recordId: 'serviceCatalog', revision: 1 });
-  assert.equal(h.writes() - before, 3); assert.equal(h.docs.size, 3);
-  assert.deepEqual(await h.repo.get(), { schemaVersion: 1, clinicId: 'main', recordId: 'serviceCatalog', revision: 1,
-    lastOperationId: id(1), data: data() });
-  assert.equal(h.docs.get(intent(1)).status, 'committed'); assert.equal(h.docs.get(intent(1)).revision, 2);
-  assert.equal(h.docs.get(operation(1)).resultRevision, 1); assert.equal(h.docs.get(operation(1)).actorUid, OWNER);
-  assert.doesNotMatch(JSON.stringify(h.docs.get(operation(1))), /حشو|زيركون|priceCents|services/);
-  assert.equal([...h.docs.keys()].some(path => /patient|lab|supplier/i.test(path)), false);
+
+const exam = (number = 1, revision = 0, examinationCents = 10000): CloudServiceCatalogMutationCommand => ({
+  mutationVersion: 2, action: 'examination', operationId: id(number), expectedRevision: revision, createdAt: WHEN, examinationCents });
+const service = (number = 2, revision = 1, index = 0, changes: Partial<CloudServiceDefinition> = {}): CloudServiceCatalogMutationCommand => ({
+  mutationVersion: 2, action: 'service', operationId: id(number), expectedRevision: revision, createdAt: WHEN, index,
+  service: { ...data().services[0], ...changes } });
+async function commit(h: ReturnType<typeof harness>, value: CloudServiceCatalogWriteCommand) { await h.prepare(value); return h.repo.commit(value); }
+async function initialized() { const h=harness(); await commit(h,exam()); return h; }
+async function populated() { const h=await initialized(); await commit(h,service()); return h; }
+const nameKey = (name: string) => createHash('sha256').update(`catalog-service-name-v2:${normalizedCloudServiceName(name)}`).digest('hex');
+
+test('explicit examination initializes the unknown catalog without creating services or patient charges', async () => {
+  const h=harness(); assert.deepEqual(await commit(h,exam()), {status:'committed',recordId:'serviceCatalog',revision:1});
+  assert.deepEqual((await h.repo.get())?.data,{examinationCents:10000,services:[]}); assert.equal(h.docs.size,3);
+  assert.equal(h.docs.get(intent(1)).status,'committed');
+  assert.equal([...h.docs.keys()].some(key=>/patient|lab|catalogService/.test(key)),false);
 });
-test('empty list and explicit free examination are valid owner configuration, not automatic seeding', async () => {
-  const h = harness(), input = command(1, 0, { data: { examinationCents: 0, services: [] } });
-  await h.prepare(input); await h.repo.commit(input);
-  assert.deepEqual((await h.repo.get())?.data, { examinationCents: 0, services: [] });
+test('service append and price edit preserve examination, all other services and permanent identity/name reservations', async () => {
+  const h=await populated(); await commit(h,service(3,2,1,{serviceId:serviceId(2),name:'زيركون',kind:'prosthetic',priceCents:null}));
+  const other=structuredClone((await h.repo.get())!.data.services[1]);
+  await commit(h,service(4,3,0,{priceCents:0}));
+  const current=(await h.repo.get())!; assert.equal(current.data.examinationCents,10000);
+  assert.equal(current.data.services[0].priceCents,0); assert.deepEqual(current.data.services[1],other);
+  assert.equal(h.docs.get(cloudCatalogServiceIdPath(serviceId(1))).revision,2);
+  assert.equal(h.docs.get(cloudCatalogServiceNamePath(nameKey('حشو عادي'))).serviceId,serviceId(1));
 });
-test('full replacement retains declared unknown versus explicit zero and permits deactivation/removal', async () => {
-  const h = harness(), first = command(); await h.prepare(first); await h.repo.commit(first);
-  const next = command(2, 1, { data: { examinationCents: 25_000, services: [
-    { serviceId: serviceId(1), name: 'خدمة مجانية', kind: 'clinical', priceCents: 0, active: false },
-  ] } });
-  await h.prepare(next); await h.repo.commit(next);
-  assert.deepEqual((await h.repo.get())?.data, next.data); assert.equal((await h.repo.get())?.revision, 2);
-  assert.equal(h.docs.get(operation(1)).resultRevision, 1);
+test('renames retain old reservation ownership; normalized names cannot move to another service UUID', async () => {
+  const h=await populated(); await commit(h,service(3,2,0,{name:'حشو تجميلي'}));
+  assert.equal(h.docs.has(cloudCatalogServiceNamePath(nameKey('حشو عادي'))),true);
+  const duplicate=service(4,3,1,{serviceId:serviceId(2),name:'حشو عَادي'});
+  await h.prepare(duplicate); const before=structuredClone(h.docs); await assert.rejects(h.repo.commit(duplicate),code('conflict')); assert.deepEqual(h.docs,before);
+  await commit(h,service(5,3,0,{name:'حشو عادي'})); assert.equal((await h.repo.get())?.data.services[0].name,'حشو عادي');
 });
-test('same-ID replay acknowledges historical revision without overwriting or publishing newer prices', async () => {
-  const h = harness(), first = command(); await h.prepare(first); await h.repo.commit(first);
-  const next = command(2, 1, { data: { examinationCents: 20_000, services: [] } });
-  await h.prepare(next); await h.repo.commit(next); const before = structuredClone(h.docs), writes = h.writes();
-  assert.deepEqual(await h.client().commit(first), { status: 'already-committed', recordId: 'serviceCatalog', revision: 1 });
-  assert.deepEqual(h.docs, before); assert.equal(h.writes(), writes);
-  assert.deepEqual((await h.repo.get())?.data, next.data);
+test('stable indexes cannot replace another UUID, jump, reorder or physically remove services', async () => {
+  const h=await populated();
+  for(const value of [service(3,2,0,{serviceId:serviceId(2)}),service(4,2,2,{serviceId:serviceId(2),name:'خدمة أخرى'})]) {
+    await h.prepare(value); const before=structuredClone(h.docs); await assert.rejects(h.repo.commit(value),code('conflict')); assert.deepEqual(h.docs,before);
+  }
+  assert.throws(()=>prepareCloudServiceCatalogMutationCommand({...service(),action:'remove'}),code('invalid'));
+  const empty=harness(), value=service(9,0); await empty.prepare(value); await assert.rejects(empty.repo.commit(value),code('conflict')); assert.equal(empty.docs.has(CATALOG),false);
 });
-test('lost commit acknowledgement is discovered in all-status history and replayed with original ID', async () => {
-  const h = harness(), input = command(); await h.prepare(input); h.faults.lostCommitReply = true;
-  await assert.rejects(h.repo.commit(input), code('unavailable')); assert.equal((await h.repo.get())?.revision, 1);
-  const before = structuredClone(h.docs), freshJournal = createCloudOperationIntentRepository(h.adapter, { digest });
-  const records = (await freshJournal.listHistoryPage('catalog')).records;
-  assert.equal(records.length, 1); assert.equal(records[0].status, 'committed');
-  assert.equal((await h.client().commit(prepareCloudServiceCatalogCommand(records[0].command))).status, 'already-committed');
-  assert.deepEqual(h.docs, before); assert.equal(h.docs.get(CATALOG).revision, 1);
+test('missing or corrupt service and name reservations cannot be silently recreated for existing rows', async () => {
+  for(const change of [
+    (h:ReturnType<typeof harness>)=>h.docs.delete(cloudCatalogServiceIdPath(serviceId(1))),
+    (h:ReturnType<typeof harness>)=>h.docs.get(cloudCatalogServiceIdPath(serviceId(1))).index=1,
+    (h:ReturnType<typeof harness>)=>h.docs.delete(cloudCatalogServiceNamePath(nameKey('حشو عادي'))),
+    (h:ReturnType<typeof harness>)=>h.docs.get(cloudCatalogServiceNamePath(nameKey('حشو عادي'))).serviceId=serviceId(2),
+  ]) { const h=await populated(); change(h); const value=service(3,2,0,{priceCents:1}); await h.prepare(value);
+    const before=structuredClone(h.docs); await assert.rejects(h.repo.commit(value)); assert.deepEqual(h.docs,before); }
 });
-test('commit requires a real prepared owner-bound durable intent; missing intent never writes settings', async () => {
-  const h = harness(); await assert.rejects(h.repo.commit(command()), code('invalid'));
-  assert.equal(h.docs.size, 0); assert.equal(h.writes(), 0);
+test('deactivation or kind change rejects routed services; explicit unlinked deactivation retains the historical row', async () => {
+  for(const change of [{active:false},{kind:'prosthetic' as const}]) {
+    const h=await populated(); h.docs.set('clinics/main/settings/prostheticRouting',{schemaVersion:1,clinicId:'main',recordId:'prostheticRouting',
+      revision:1,lastOperationId:id(99),data:{routes:[{serviceId:serviceId(1),labId:id(80),materialId:id(81)}]}});
+    const value=service(3,2,0,change); await h.prepare(value); const before=structuredClone(h.docs);
+    await assert.rejects(h.repo.commit(value),code('conflict')); assert.deepEqual(h.docs,before);
+  }
+  const h=await populated(); h.docs.set('clinics/main/settings/prostheticRouting',{schemaVersion:1,clinicId:'main',recordId:'prostheticRouting',
+    revision:1,lastOperationId:id(99),data:{routes:[]}}); await commit(h,service(3,2,0,{active:false}));
+  assert.equal((await h.repo.get())?.data.services.length,1); assert.equal((await h.repo.get())?.data.services[0].active,false);
 });
-test('cancelled durable intent cannot commit or be repurposed as a new price save', async () => {
-  const h = harness(), input = command(); await h.prepare(input); await h.journal.cancel(input.operationId);
-  const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(input), code('conflict'));
-  assert.deepEqual(h.docs, before); assert.equal(h.docs.has(CATALOG), false);
+test('legacy full replacements are read-only historical acknowledgements, never ordinary client first writes', async () => {
+  const h=harness(), old=command(90,0,{data:{examinationCents:0,services:[]}});
+  await h.prepare(old); const before=structuredClone(h.docs); await assert.rejects(h.repo.commit(old),code('invalid')); assert.deepEqual(h.docs,before);
+  const prepared=h.docs.get(intent(90)); h.docs.set(intent(90),{...prepared,status:'committed',revision:2});
+  h.docs.set(operation(90),{schemaVersion:1,clinicId:'main',operationId:id(90),recordId:'serviceCatalog',actorUid:OWNER,
+    expectedRevision:0,resultRevision:1,createdAt:WHEN,requestHash:await digest(JSON.stringify(['clinic-service-catalog-v1',OWNER,old]))});
+  h.docs.set(CATALOG,{schemaVersion:1,clinicId:'main',recordId:'serviceCatalog',revision:8,lastOperationId:id(88),data:data()});
+  const history=structuredClone(h.docs); assert.equal((await h.repo.commit(old)).status,'already-committed'); assert.deepEqual(h.docs,history);
 });
-test('committed receipt and intent must coexist; inconsistent historical states never replay or rewrite', async () => {
-  for (const corrupt of ['missingReceipt', 'missingIntent', 'preparedIntent', 'cancelledIntent'] as const) {
-    const h = harness(), input = command(); await h.prepare(input); await h.repo.commit(input);
-    if (corrupt === 'missingReceipt') h.docs.delete(operation(1));
-    if (corrupt === 'missingIntent') h.docs.delete(intent(1));
-    if (corrupt === 'preparedIntent') Object.assign(h.docs.get(intent(1)), { status: 'prepared', revision: 1 });
-    if (corrupt === 'cancelledIntent') Object.assign(h.docs.get(intent(1)), { status: 'cancelled', revision: 2 });
-    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(input)); assert.deepEqual(h.docs, before);
+test('same-ID retries acknowledge only history without reading or restoring newer catalogs, reservations or routing', async () => {
+  const h=await populated(), first=service(); await commit(h,exam(3,2,20000));
+  h.docs.delete(cloudCatalogServiceIdPath(serviceId(1))); h.calls.length=0;
+  const before=structuredClone(h.docs); assert.deepEqual(await h.client().commit(first),{status:'already-committed',recordId:'serviceCatalog',revision:2});
+  assert.deepEqual(h.docs,before); assert.deepEqual(h.calls.filter(key=>key.startsWith('get:')).sort(),[`get:${operation(2)}`,`get:${intent(2)}`].sort());
+});
+test('lost acknowledgement recovers original small mutation from history without new IDs or replacement payloads', async () => {
+  const h=await initialized(), value=service(); await h.prepare(value); h.faults.lostCommitReply=true;
+  await assert.rejects(h.repo.commit(value),code('unavailable')); const before=structuredClone(h.docs);
+  const recovered=(await h.journal.listHistoryPage('catalog')).records.find(row=>row.operationId===id(2))!;
+  assert.equal((await h.repo.commit(prepareCloudServiceCatalogCommand(recovered.command))).status,'already-committed');
+  assert.deepEqual(h.docs,before); assert.equal('data' in recovered.command,false);
+});
+test('missing, cancelled or mismatched exact durable intent never writes a catalog mutation', async () => {
+  const h=harness(), value=exam(); await assert.rejects(h.repo.commit(value),code('invalid')); assert.equal(h.docs.size,0);
+  await h.prepare(value); await h.journal.cancel(id(1)); const before=structuredClone(h.docs);
+  await assert.rejects(h.repo.commit(value),code('conflict')); assert.deepEqual(h.docs,before);
+  for(const modify of [(i:any)=>i.actorUid='other',(i:any)=>i.kind='clinical',(i:any)=>i.command.examinationCents++,
+    (i:any)=>i.requestHash='0'.repeat(64),(i:any)=>i.createdAt='2026-10-11T00:00:00.001Z']) {
+    const x=harness(); await x.prepare(value); modify(x.docs.get(intent(1))); const state=structuredClone(x.docs);
+    await assert.rejects(x.repo.commit(value)); assert.deepEqual(x.docs,state);
   }
 });
-test('intent kind, actor, request hash, createdAt and exact command must agree before a domain write', async () => {
-  for (const modify of [
-    (value: any) => { value.kind = 'clinical'; },
-    (value: any) => { value.actorUid = 'another-synthetic-owner'; },
-    (value: any) => { value.requestHash = '0'.repeat(64); },
-    (value: any) => { value.createdAt = '2026-10-11T00:00:00.001Z'; },
-    (value: any) => { value.command.data.examinationCents++; },
-  ]) {
-    const h = harness(), input = command(); await h.prepare(input); modify(h.docs.get(intent(1)));
-    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(input)); assert.deepEqual(h.docs, before);
-    assert.equal(h.docs.has(CATALOG), false);
+test('same-ID changed body, time, expected revision or actor cannot become a fresh successful save', async () => {
+  const h=await initialized(), before=structuredClone(h.docs);
+  for(const value of [exam(1,1),exam(1,0,0),{...exam(),createdAt:'2026-10-11T00:00:00.001Z'}]) await assert.rejects(h.repo.commit(value),code('conflict'));
+  h.owner('another-owner'); await assert.rejects(h.repo.commit(exam()),code('conflict')); assert.deepEqual(h.docs,before);
+});
+test('concurrent examinations use CAS, never overwrite or rebase the other owner operation', async () => {
+  const h=harness(), a=exam(), b=exam(2,0,0); await h.prepare(a); await h.prepare(b);
+  const results=await Promise.allSettled([h.repo.commit(a),h.client().commit(b)]);
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
+  assert.equal((await h.repo.get())?.revision,1); assert.equal([...h.docs.keys()].filter(key=>key.includes('/catalogOperations/')).length,1);
+});
+test('stale mutation, missing singleton at nonzero revision and corrupt existing singleton fail closed', async () => {
+  const h=await initialized(), stale=exam(2,0); await h.prepare(stale); const before=structuredClone(h.docs);
+  await assert.rejects(h.repo.commit(stale),code('conflict')); assert.deepEqual(h.docs,before);
+  for(const raw of [null,{revision:1},{schemaVersion:1,clinicId:'other',recordId:'serviceCatalog',revision:1,lastOperationId:id(9),data:data()}]) {
+    const x=harness(); if(raw!==null)x.docs.set(CATALOG,raw); const value=exam(4,1); await x.prepare(value); const state=structuredClone(x.docs);
+    await assert.rejects(x.repo.commit(value)); assert.deepEqual(x.docs,state);
   }
 });
-test('same operation cannot change owner, price, time, expected revision or full body', async () => {
-  const h = harness(), first = command(); await h.prepare(first); await h.repo.commit(first);
-  const before = structuredClone(h.docs);
-  for (const input of [command(1, 1), command(1, 0, { createdAt: '2026-10-11T00:00:00.001Z' }),
-    command(1, 0, { data: { examinationCents: 0, services: [] } })]) await assert.rejects(h.repo.commit(input), code('conflict'));
-  h.owner('another-synthetic-owner'); await assert.rejects(h.repo.commit(first), code('conflict')); assert.deepEqual(h.docs, before);
-});
-test('concurrent clients with the same expected revision cannot silently overwrite each other', async () => {
-  const h = harness(), a = command(), b = command(2, 0, { data: { examinationCents: 5000, services: [] } });
-  await h.prepare(a); await h.prepare(b);
-  const results = await Promise.allSettled([h.repo.commit(a), h.client().commit(b)]);
-  assert.equal(results.filter(value => value.status === 'fulfilled').length, 1);
-  const failed = results.find(value => value.status === 'rejected') as PromiseRejectedResult;
-  assert.equal(code('conflict')(failed.reason), true); assert.equal((await h.repo.get())?.revision, 1);
-  assert.equal([...h.docs.keys()].filter(path => path.startsWith('clinics/main/catalogOperations/')).length, 1);
-});
-test('stale expected revision is not rebased, and a missing singleton is never treated as an old revision', async () => {
-  const h = harness(), a = command(); await h.prepare(a); await h.repo.commit(a);
-  const stale = command(2, 0); await h.prepare(stale); const before = structuredClone(h.docs);
-  await assert.rejects(h.repo.commit(stale), code('conflict')); assert.deepEqual(h.docs, before);
-  const x = harness(), missing = command(3, 1); await x.prepare(missing);
-  await assert.rejects(x.repo.commit(missing), code('conflict')); assert.equal(x.docs.has(CATALOG), false);
-});
-test('corrupt existing singleton cannot be reset or replaced even with the expected numeric revision', async () => {
-  for (const raw of [undefined, { revision: 1 }, { schemaVersion: 1, clinicId: 'other', recordId: 'serviceCatalog',
-    revision: 1, lastOperationId: id(3), data: data() }]) {
-    const h = harness(); h.docs.set(CATALOG, raw); const input = command(1, 1); await h.prepare(input);
-    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(input)); assert.deepEqual(h.docs, before);
+test('corrupt historical receipt or journal cannot acknowledge, repair or overwrite a previous mutation', async () => {
+  for(const modify of [(h:ReturnType<typeof harness>)=>h.docs.delete(intent(1)),(h:ReturnType<typeof harness>)=>h.docs.delete(operation(1)),
+    (h:ReturnType<typeof harness>)=>h.docs.get(operation(1)).requestHash='0'.repeat(64),
+    (h:ReturnType<typeof harness>)=>h.docs.get(operation(1)).extra=true,
+    (h:ReturnType<typeof harness>)=>Object.assign(h.docs.get(intent(1)),{status:'prepared',revision:1})]) {
+    const h=await initialized(); modify(h); const before=structuredClone(h.docs); await assert.rejects(h.repo.commit(exam())); assert.deepEqual(h.docs,before);
   }
 });
-test('receipt collisions, unknown fields and changed historical fingerprints never overwrite an operation', async () => {
-  for (const change of [
-    (value: any) => { value.requestHash = '0'.repeat(64); }, (value: any) => { value.resultRevision++; },
-    (value: any) => { value.actorUid = 'other'; }, (value: any) => { value.extra = true; },
-    (value: any) => { delete value.createdAt; },
-  ]) {
-    const h = harness(), input = command(); await h.prepare(input); await h.repo.commit(input); change(h.docs.get(operation(1)));
-    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(input)); assert.deepEqual(h.docs, before);
-  }
+test('transaction callback retries publish one service index/name reservation, not duplicate rows or revisions', async () => {
+  const h=await initialized(), value=service(); await h.prepare(value); h.faults.retry=true; await h.repo.commit(value);
+  assert.equal((await h.repo.get())?.revision,2); assert.equal((await h.repo.get())?.data.services.length,1);
+  assert.equal([...h.docs.keys()].filter(key=>key.includes('/catalogServiceIds/')).length,1);
 });
-test('transaction callback retries publish one revision and one immutable operation only', async () => {
-  const h = harness(), input = command(); await h.prepare(input); h.faults.retry = true;
-  await h.repo.commit(input); assert.equal(h.docs.size, 3); assert.equal((await h.repo.get())?.revision, 1);
+test('failure at every five-write service transition is atomic and original retry succeeds', async () => {
+  for(const position of [1,2,3,4,5]) { const h=await initialized(), value=service(); await h.prepare(value);
+    const before=structuredClone(h.docs); h.faults.failWriteAt=h.writes()+position; await assert.rejects(h.repo.commit(value),code('unavailable'));
+    assert.deepEqual(h.docs,before); h.faults.failWriteAt=0; await h.repo.commit(value); assert.equal((await h.repo.get())?.revision,2); }
 });
-test('failure at any of the three catalog transaction writes publishes no partial state', async () => {
-  for (const position of [1, 2, 3]) {
-    const h = harness(), input = command(); await h.prepare(input); const before = structuredClone(h.docs);
-    h.faults.failWriteAt = h.writes() + position; await assert.rejects(h.repo.commit(input), code('unavailable'));
-    assert.deepEqual(h.docs, before); assert.equal(h.docs.get(intent(1)).status, 'prepared');
-    h.faults.failWriteAt = 0; await h.repo.commit(input); assert.equal(h.docs.size, 3);
-  }
+test('owner loss before a write denies it; late loss hides acknowledgement without reversing an accepted operation', async () => {
+  const h=await initialized(), value=service(); await h.prepare(value); const before=structuredClone(h.docs);
+  h.hooks.read=target=>{if(target===CATALOG)h.owner('changed-owner');}; await assert.rejects(h.repo.commit(value),code('unavailable')); assert.deepEqual(h.docs,before);
+  const x=harness(); await x.prepare(exam()); x.hooks.afterCommit=()=>x.owner('changed-owner');
+  await assert.rejects(x.repo.commit(exam()),code('unavailable')); assert.equal(x.docs.get(CATALOG).revision,1);
+  x.hooks.afterCommit=undefined;x.owner(OWNER);assert.equal((await x.repo.commit(exam())).status,'already-committed');
 });
-test('owner identity loss before writes denies the mutation; late loss hides acknowledgement but cannot undo acceptance', async () => {
-  const h = harness(), input = command(); await h.prepare(input); const before = structuredClone(h.docs);
-  h.hooks.read = path => { if (path === CATALOG) h.owner('changed-owner'); };
-  await assert.rejects(h.repo.commit(input), code('unavailable')); assert.deepEqual(h.docs, before);
-  const x = harness(); await x.prepare(input); x.hooks.afterCommit = () => x.owner('changed-owner');
-  await assert.rejects(x.repo.commit(input), code('unavailable')); assert.equal(x.docs.get(CATALOG).revision, 1);
-  x.hooks.afterCommit = undefined; x.owner(OWNER); assert.equal((await x.repo.commit(input)).status, 'already-committed');
+test('mutation body snapshots before authorization await and never invokes field accessors', async () => {
+  const h=await initialized(), input=service(), saved=structuredClone(input); await h.prepare(saved);
+  const started=deferred(),gate=deferred();let first=true;h.hooks.auth=async()=>{if(first){first=false;started.resolve();await gate.promise;}};
+  const pending=h.repo.commit(input);await started.promise;if(input.action==='service'){input.service.name='تعديل متأخر';input.service.priceCents=0;}
+  input.expectedRevision=9;input.operationId=id(99);gate.resolve();await pending;
+  assert.deepEqual((await h.repo.get())?.data.services[0],(saved as Extract<CloudServiceCatalogMutationCommand,{action:'service'}>).service);
+  let executions=0; const getter=Object.defineProperty({...service()},'service',{enumerable:true,get(){executions++;return data().services[0];}});
+  assert.throws(()=>prepareCloudServiceCatalogMutationCommand(getter),code('invalid'));assert.equal(executions,0);
 });
-test('get reauthorizes after server reads and never returns another owner or malformed catalog data', async () => {
-  const h = harness(); h.hooks.read = () => h.owner('changed-owner'); await assert.rejects(h.repo.get(), code('unavailable'));
-  const x = harness(); x.docs.set(CATALOG, { schemaVersion: 1 }); await assert.rejects(x.repo.get(), code('invalid'));
+test('canonical new names and exact mutation schemas reject compatibility, controls, arbitrary Unicode and full-list replacement fields', () => {
+  for(const name of ['Ｓｅｒｖｉｃｅ','😀','ٵ','حشو\u202e']) assert.throws(()=>prepareCloudServiceCatalogMutationCommand(service(2,1,0,{name})),code('invalid'));
+  for(const change of [{mutationVersion:1},{index:-1},{index:300},{index:0.5},{extra:true},{data:data()}])
+    assert.throws(()=>prepareCloudServiceCatalogMutationCommand({...service(),...change}),code('invalid'));
+  assert.deepEqual(applyCloudServiceCatalogMutation(null,exam(1,0,0)),{examinationCents:0,services:[]});
 });
-test('command data is deeply snapshotted before the first authorization await', async () => {
-  const h = harness(), input = command(), saved = structuredClone(input); await h.prepare(saved);
-  const started = deferred(), gate = deferred(); let first = true;
-  h.hooks.auth = async () => { if (first) { first = false; started.resolve(); await gate.promise; } };
-  const pending = h.repo.commit(input); await started.promise;
-  input.data.services[0].name = 'تعديل متأخر'; input.data.services[0].priceCents = 0; input.data.examinationCents = 0;
-  input.createdAt = '2026-10-11T00:00:00.001Z'; input.expectedRevision = 7; input.operationId = id(99); gate.resolve();
-  await pending; assert.deepEqual((await h.repo.get())?.data, saved.data); assert.equal(h.docs.has(operation(99)), false);
+test('get reauthorizes after server reads and malformed providers expose fixed errors only', async () => {
+  const h=harness();h.hooks.read=()=>h.owner('changed-owner');await assert.rejects(h.repo.get(),code('unavailable'));
+  const x=harness();x.docs.set(CATALOG,{schemaVersion:1});await assert.rejects(x.repo.get(),code('invalid'));
 });
 test('parser snapshots output rather than retaining nested input objects or arrays', () => {
   const input = command(), parsed = prepareCloudServiceCatalogCommand(input); assert.deepEqual(parsed, input);
@@ -328,7 +339,7 @@ test('invalid input fails before authorization, while provider/digest failures e
 test('max revision advances once then rejects further changes rather than resetting the catalog', async () => {
   const h = harness(); h.docs.set(CATALOG, { schemaVersion: 1, clinicId: 'main', recordId: 'serviceCatalog',
     revision: 1_999_999_999, lastOperationId: id(2), data: data() });
-  const input = command(1, 1_999_999_999); await h.prepare(input); await h.repo.commit(input);
+  const input = exam(1, 1_999_999_999); await h.prepare(input); await h.repo.commit(input);
   assert.equal((await h.repo.get())?.revision, 2_000_000_000);
   const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(command(3, 2_000_000_000)), code('invalid'));
   assert.deepEqual(h.docs, before);

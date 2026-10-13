@@ -1,5 +1,5 @@
 import React, { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowDown, Check, ClipboardList, CreditCard, History, MessageCircle, Pencil, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { ArrowDown, Check, ClipboardList, CreditCard, FileText, History, Layers, MessageCircle, Pencil, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import type { Session } from '../../types';
 import type { CloudClinicalProgress } from '../../utils/cloudClinicalRepository';
 import type { CloudClinicalPatientSnapshot } from '../../utils/cloudClinicalPatientProjection';
@@ -42,6 +42,8 @@ export interface CloudClinicalWorkspaceViewProps {
   onRecoveryLoad: () => void; onRecoveryMore: () => void; onResume: (intent: CloudOperationIntent) => void;
   visitController?: CloudClinicalVisitWorkspaceController;
   onStartVisit?: (snapshot: CloudClinicalPatientSnapshot) => void;
+  onStartProsthetic?: (snapshot: CloudClinicalPatientSnapshot) => void;
+  onOpenPrescription?: (snapshot: CloudClinicalPatientSnapshot) => void;
 }
 
 /** Presentation only: never opens a file, initializes Auth or fetches on mount. */
@@ -102,7 +104,9 @@ export function CloudClinicalWorkspaceView(props: CloudClinicalWorkspaceViewProp
               <button className={button} type="button" disabled={locked} onClick={() => guard(() => props.onCancelEditor(editor))}>إلغاء المسودة</button></div>
           </form></section>}
         <section className="ccw-surface" aria-label="جلسات الملف"><div className="ccw-section-title"><h3>الجلسات والخدمات</h3><span>{snapshot.patient.sessions.length.toLocaleString('ar-EG')} جلسة</span>
-          {props.visitController && props.onStartVisit && <button className={primary} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onStartVisit?.(snapshot); })}><Plus size={18} aria-hidden="true" />تسجيل زيارة أو خدمة</button>}</div>
+          {props.visitController && props.onStartVisit && <button className={primary} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onStartVisit?.(snapshot); })}><Plus size={18} aria-hidden="true" />تسجيل زيارة أو خدمة</button>}
+          {props.onStartProsthetic && <button className={button} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onStartProsthetic?.(snapshot); })}><Layers size={18} aria-hidden="true" />تسجيل تركيبة</button>}
+          {props.onOpenPrescription && <button className={button} type="button" disabled={locked || dirty || Boolean(editor)} onClick={() => guard(() => { if (!dirty && !editor) props.onOpenPrescription?.(snapshot); })}><FileText size={18} aria-hidden="true" />روشتة المريض</button>}</div>
           {!snapshot.patient.sessions.length && <p className="ccw-empty">لا جلسات مسجلة لهذا الملف بعد.</p>}
           <div className="ccw-list">{snapshot.patient.sessions.map(session => <article className="ccw-session" key={session.id}><header><div><h4>{session.type}</h4><p>تاريخ الجلسة · <bdi>{session.date}</bdi></p></div><span className="ccw-pill">{session.visitStatus === 'follow_up' ? 'تحتاج متابعة' : 'مكتملة'}</span></header>
             <dl className="ccw-session-totals"><div><dt>القيمة</dt><dd>{money(Math.round(session.amount * 100))}</dd></div><div><dt>المحصّل</dt><dd>{money(Math.round(session.paid * 100))}</dd></div><div><dt>المتبقي</dt><dd>{money(Math.round(session.remain * 100))}</dd></div></dl>
@@ -126,8 +130,9 @@ export function CloudClinicalWorkspaceView(props: CloudClinicalWorkspaceViewProp
 }
 
 /** The parent owns/disposes the bundle. Rendering subscribes only, never reads. */
-export default function CloudClinicalWorkspace({ controller, onClose, previewOnly = false, closing = false }: {
+export default function CloudClinicalWorkspace({ controller, onClose, previewOnly = false, closing = false, onStartProsthetic, onOpenPrescription }: {
   controller: CloudClinicalWorkspaceBundle; onClose: () => void; previewOnly?: boolean; closing?: boolean;
+  onStartProsthetic?: (patientRecordId: string) => void; onOpenPrescription?: (patientRecordId: string) => void;
 }) {
   const fileSubscribe = useCallback((notify: () => void) => controller.file.subscribe(() => notify()), [controller]);
   const recoverySubscribe = useCallback((notify: () => void) => controller.recovery.subscribe(() => notify()), [controller]);
@@ -135,7 +140,8 @@ export default function CloudClinicalWorkspace({ controller, onClose, previewOnl
   const state = useSyncExternalStore(fileSubscribe, fileSnapshot, fileSnapshot), recovery = useSyncExternalStore(recoverySubscribe, recoverySnapshot, recoverySnapshot);
   const [editor, setEditor] = useState<CloudClinicalEditor | null>(null), editorRef = useRef(editor), running = useRef(false);
   editorRef.current = editor;
-  const live = useRef({ controller, onClose, previewOnly, closing }); live.current = { controller, onClose, previewOnly, closing };
+  const live = useRef({ controller, onClose, previewOnly, closing, onStartProsthetic, onOpenPrescription });
+  live.current = { controller, onClose, previewOnly, closing, onStartProsthetic, onOpenPrescription };
   const fresh = (allowPending = false) => {
     const owned = () => live.current.controller === controller && !live.current.previewOnly && !live.current.closing && !running.current;
     if (!owned()) return null;
@@ -148,6 +154,12 @@ export default function CloudClinicalWorkspace({ controller, onClose, previewOnl
   const clearEditor = () => { editorRef.current = null; setEditor(null); };
   const run = async (work: () => Promise<unknown>) => { if (running.current) return; running.current = true; try { await work(); } catch { /* Controllers own fixed messages; no provider error reaches rendering. */ } finally { running.current = false; } };
   return <CloudClinicalWorkspaceView state={state} recovery={recovery} editor={editor} previewOnly={previewOnly} closing={closing} visitController={controller.visit}
+    onStartProsthetic={onStartProsthetic ? snapshot => { const value = fresh();
+      if (value && visitIdle() && !value.draftDirty && !editorRef.current && value.snapshot === snapshot
+        && fresh()?.snapshot === snapshot) live.current.onStartProsthetic?.(snapshot.patientRecordId); } : undefined}
+    onOpenPrescription={onOpenPrescription ? snapshot => { const value = fresh();
+      if (value && visitIdle() && !value.draftDirty && !editorRef.current && value.snapshot === snapshot
+        && fresh()?.snapshot === snapshot) live.current.onOpenPrescription?.(snapshot.patientRecordId); } : undefined}
     onStartVisit={snapshot => { const value = fresh(); if (!value || !visitIdle() || value.draftDirty || editorRef.current || value.snapshot !== snapshot || !controller.visit || fresh()?.snapshot !== snapshot) return;
       void run(() => controller.visit!.begin(snapshot)); }}
     onClose={() => { if (live.current.controller !== controller || live.current.closing || running.current) return;

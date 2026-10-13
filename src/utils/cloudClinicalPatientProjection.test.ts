@@ -41,6 +41,20 @@ test('patient presentation preserves optional stable catalog references and hist
     assert.equal(result.totalCents, 40_001); assert.equal(result.paidCents, 10_001);
   }
 });
+test('patient projection includes the linked prosthetic price snapshot without private supplier details or duplicate cash', () => {
+  const linked = session();
+  linked.data = { ...linked.data, type: 'تركيب زيركون', prostheticCaseId: linked.sessionId,
+    prosthetic: { kind: 'fixed', material: 'تركيب زيركون', units: 3, unitPriceCents: 10_000 },
+    services: [{ id: linked.sessionId, name: 'تركيب زيركون', priceCents: 30_000, tooth: 'ur5', catalogServiceId: id(7000) }] };
+  linked.totalCents = 40_000;
+  const result = projectCloudClinicalPatient(profile(), account([linked]), [linked], [receipt()]);
+  assert.deepEqual(result.patient.sessions[0].prosthetic, { kind: 'fixed', material: 'تركيب زيركون', units: 3, unitPrice: 100 });
+  assert.equal(result.totalCents, 40_000); assert.equal(result.paidCents, 10_001);
+  assert.equal(result.patient.sessions[0].paymentsLog.length, 1);
+  assert.doesNotMatch(JSON.stringify(result.patient), /labId|labCost|supplierCost|unitCostCents|prostheticCaseId/);
+  const legacy = session();
+  assert.equal(Object.hasOwn(projectCloudClinicalPatient(profile(), account([legacy]), [legacy], [receipt()]).patient.sessions[0], 'prosthetic'), false);
+});
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(accept => { resolve = accept; }); return { resolve, promise }; }
 function harness() {

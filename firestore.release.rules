@@ -1,0 +1,682 @@
+rules_version = '2';
+// UNDEPLOYED combined candidate. Only engine-proven domains may be activated.
+// Unfinished domain writes remain denied, never broad owner-only upserts.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function verifiedOwner(uid) {
+      return request.auth != null && request.auth.uid is string
+        && request.auth.uid.size() > 0 && request.auth.uid.size() <= 128
+        && request.auth.uid == uid && request.auth.token is map
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase is map
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.auth.token.dentalClinicId == 'main'
+        && request.auth.token.dentalClinicRole == 'owner'
+        && request.auth.token.auth_time is int
+        && request.auth.token.auth_time >= 0
+        && request.auth.token.auth_time <= 9007199254740991;
+    }
+    function activeOwner(data, uid) {
+      let fields = ['schemaVersion', 'clinicId', 'uid', 'role', 'status', 'identityVersion', 'verifiedAfter'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1
+        && data.clinicId == 'main' && data.uid == uid
+        && data.role == 'owner' && data.status == 'active'
+        && data.identityVersion is int && data.identityVersion >= 1
+        && data.identityVersion <= 9007199254740991
+        && data.verifiedAfter is int && data.verifiedAfter >= 0
+        && data.verifiedAfter <= 9007199254740991
+        && request.auth.token.auth_time >= data.verifiedAfter;
+    }
+    function owner() {
+      return database == '(default)' && request.auth != null && verifiedOwner(request.auth.uid)
+        && activeOwner(get(/databases/$(database)/documents/clinics/main/members/$(request.auth.uid)).data, request.auth.uid);
+    }
+    function uuid(id) {
+      return id is string && id.matches('[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}');
+    }
+    function hash(value) { return value is string && value.matches('[0-9a-f]{64}'); }
+    function patientProfilePath(id) { return /databases/$(database)/documents/clinics/main/patientProfiles/$(id); }
+    function patientOperationPath(id) { return /databases/$(database)/documents/clinics/main/patientOperations/$(id); }
+    function patientFilePath(number) { return /databases/$(database)/documents/clinics/main/patientFiles/$(string(number)); }
+    function patientCounterPath() { return /databases/$(database)/documents/clinics/main/counters/patientFiles; }
+    function patientPositiveNumber(value) { return value is int && value >= 1 && value <= 2000000000; }
+    function asciiDigits(value) {
+      return value.matches('[^٠-٩۰-۹]*') ? value : value.replace('[٠۰]', '0').replace('[١۱]', '1').replace('[٢۲]', '2')
+        .replace('[٣۳]', '3').replace('[٤۴]', '4').replace('[٥۵]', '5')
+        .replace('[٦۶]', '6').replace('[٧۷]', '7').replace('[٨۸]', '8').replace('[٩۹]', '9');
+    }
+    function trimSpaces(value) {
+      let spaces = '[\\x09-\\x0d\\x20\\x{00a0}\\x{1680}\\x{2000}-\\x{200a}\\x{2028}\\x{2029}\\x{202f}\\x{205f}\\x{3000}\\x{feff}]';
+      return value.replace('^' + spaces + '+|' + spaces + '+$', '');
+    }
+    function patientPreparedPhone(value) {
+      let formatted = trimSpaces(asciiDigits(value));
+      let digits = formatted.replace('[^0-9]', '');
+      let international = digits.matches('00.*') ? digits[2:digits.size()] : digits;
+      let canonical = international.matches('01.*') ? '20' + international[1:international.size()] : international;
+      let valid = value.size() <= 60 && value == trimSpaces(value) && value.matches('[^\\x00-\\x1f\\x7f]*')
+        && (value == '' || (formatted.matches('[+]?[0-9 ().-]+')
+          && (!digits.matches('01.*') || digits.matches('01[0-9]{9}'))
+          && canonical.matches('[1-9][0-9]{7,14}')
+          && (!canonical.matches('20.*') || canonical.matches('201[0-9]{9}'))));
+      return { 'valid': valid, 'key': value == '' ? null : hashing.sha256('patient-phone-v1:' + canonical).toHexString().lower() };
+    }
+    function calendarDay(value) {
+      let year = int(value[0:4]);
+      let month = int(value[5:7]);
+      let day = int(value[8:10]);
+      let leap = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
+      return year >= 1900 && ((month == 2 && ((leap && day <= 29) || (!leap && day <= 28)))
+        || (month in [4,6,9,11] && day <= 30) || (month in [1,3,5,7,8,10,12] && day <= 31));
+    }
+    function patientValidProfile(data, phone) {
+      let fields = ['name', 'mobile', 'age', 'gender', 'firstVisit', 'notes', 'allergy'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.name is string && data.name == trimSpaces(data.name)
+        && data.name.size() >= 1 && data.name.size() <= 200 && data.name.matches('[^\\x00-\\x1f\\x7f]*')
+        && data.mobile is string && phone.valid
+        && data.age is int && data.age >= 0 && data.age <= 120
+        && data.gender is string && data.gender == trimSpaces(data.gender)
+        && data.gender.size() <= 40 && data.gender.matches('[^\\x00-\\x1f\\x7f]*')
+        && data.firstVisit is string
+        && data.firstVisit.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+        && calendarDay(data.firstVisit)
+        && data.notes is string && data.notes.size() <= 4000
+        && data.notes.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*')
+        && data.allergy is string && data.allergy.size() <= 1000
+        && data.allergy.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*');
+    }
+    function patientValidEnvelope(data, id, phone) {
+      let fields = ['schemaVersion', 'clinicId', 'recordId', 'fileNo', 'revision', 'lastOperationId', 'phoneKey', 'data'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.recordId == id && patientPositiveNumber(data.fileNo)
+        && patientPositiveNumber(data.revision) && uuid(data.lastOperationId)
+        && data.phoneKey == phone.key && patientValidProfile(data.data, phone);
+    }
+    function patientValidCounter(data) {
+      let fields = ['schemaVersion', 'clinicId', 'lastFileNo', 'lastOperationId'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && data.lastFileNo is int && data.lastFileNo >= 0 && data.lastFileNo <= 2000000000
+        && ((data.lastFileNo == 0 && data.lastOperationId == null) || (data.lastFileNo != 0 && uuid(data.lastOperationId)));
+    }
+    function patientValidFile(data, key) {
+      let fields = ['schemaVersion', 'clinicId', 'fileNo', 'recordId'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && patientPositiveNumber(data.fileNo) && key == string(data.fileNo) && uuid(data.recordId);
+    }
+    function patientValidReceipt(data, id) {
+      // requestHash is a client retry fingerprint, NOT a server content signature.
+      let fields = ['schemaVersion', 'clinicId', 'operationId', 'actorUid', 'recordId', 'fileNo', 'action', 'expectedRevision', 'resultRevision', 'requestHash', 'intentCreatedAt', 'intentRequestHash'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.operationId == id && uuid(data.recordId) && patientPositiveNumber(data.fileNo)
+        && data.actorUid == request.auth.uid && data.action in ['create', 'update']
+        && data.expectedRevision is int && data.expectedRevision >= 0 && data.expectedRevision < 2000000000
+        && patientPositiveNumber(data.resultRevision) && data.resultRevision == data.expectedRevision + 1
+        && ((data.action == 'create') == (data.expectedRevision == 0)) && hash(data.requestHash) && stamp(data.intentCreatedAt) && hash(data.intentRequestHash);
+    }
+    function patientNewReceipt(after) {
+      let receipt = getAfter(patientOperationPath(after.lastOperationId));
+      return !exists(patientOperationPath(after.lastOperationId)) && receipt != null
+        && receipt.data.recordId == after.recordId;
+    }
+    function patientNewAllocation(after) {
+      let beforeCounter = get(patientCounterPath());
+      let afterCounter = getAfter(patientCounterPath());
+      let afterFile = getAfter(patientFilePath(after.fileNo));
+      // The changed counter's own rule validates both its schema and prior
+      // state. Repeating those checks across companions exceeds Rules' budget.
+      return beforeCounter != null
+        && afterCounter != null && afterCounter.data.lastFileNo == beforeCounter.data.lastFileNo + 1
+        && afterCounter.data.lastFileNo == after.fileNo && afterCounter.data.lastOperationId == after.lastOperationId
+        && !exists(patientFilePath(after.fileNo)) && afterFile != null && afterFile.data.recordId == after.recordId;
+    }
+    function patientProfileWrite(before, after, id) {
+      let phone = patientPreparedPhone(after.data.mobile);
+      return patientValidEnvelope(after, id, phone) && patientNewReceipt(after)
+        && ((before == null && after.revision == 1 && patientNewAllocation(after))
+          || (before != null && after.fileNo == before.data.fileNo && after.revision == before.data.revision + 1
+            && after.lastOperationId != before.data.lastOperationId));
+    }
+    function patientProfileChanged(before, after) {
+      return after != null && ((before == null && after.data.revision == 1)
+        || (before != null && after.data.revision == before.data.revision + 1));
+    }
+    function patientReceiptTransition(data) {
+      let before = get(patientProfilePath(data.recordId));
+      let after = getAfter(patientProfilePath(data.recordId));
+      return patientProfileChanged(before, after) && after.data.lastOperationId == data.operationId
+        && after.data.fileNo == data.fileNo && after.data.revision == data.resultRevision
+        && ((before == null && data.expectedRevision == 0 && data.action == 'create')
+          || (before != null && data.expectedRevision == before.data.revision && data.action == 'update'))
+        && profileIntent(data, after.data);
+    }
+    function patientFileTransition(data) {
+      let before = get(patientProfilePath(data.recordId));
+      let after = getAfter(patientProfilePath(data.recordId));
+      return before == null && after != null && after.data.revision == 1 && after.data.fileNo == data.fileNo;
+    }
+    function patientCounterTransition(before, after) {
+      let receipt = getAfter(patientOperationPath(after.lastOperationId));
+      let profile = getAfter(patientProfilePath(receipt.data.recordId));
+      return patientValidCounter(before) && after.diff(before).affectedKeys().hasOnly(['lastFileNo', 'lastOperationId'])
+        && after.schemaVersion is int && after.lastFileNo is int
+        && after.lastFileNo == before.lastFileNo + 1 && after.lastOperationId != before.lastOperationId
+        && after.lastFileNo <= 2000000000
+        && receipt != null && !exists(patientOperationPath(after.lastOperationId)) && receipt.data.action == 'create'
+        // The required create-only receipt rule already proves a new profile;
+        // the profile rule supplies the schema and all allocation companions.
+        && profile != null
+        && profile.data.lastOperationId == after.lastOperationId && profile.data.fileNo == after.lastFileNo;
+    }
+    match /clinics/main/members/{uid} {
+      allow get: if database == '(default)' && verifiedOwner(uid) && activeOwner(resource.data, uid);
+      allow list, create, update, delete: if false;
+    }
+    match /clinics/main/patientProfiles/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && 'limit' in request.query
+        && request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50;
+      allow create, update: if owner() && patientProfileWrite(resource, request.resource.data, id);
+      allow delete: if false;
+    }
+    match /clinics/main/patientOperations/{id} {
+      allow get: if owner() && uuid(id) && (!exists(patientOperationPath(id)) || resource.data.actorUid == request.auth.uid);
+      allow create: if owner() && patientValidReceipt(request.resource.data, id) && patientReceiptTransition(request.resource.data);
+      allow list, update, delete: if false;
+    }
+    match /clinics/main/patientFiles/{key} {
+      allow get: if owner() && key.matches('[1-9][0-9]{0,9}') && int(key) <= 2000000000;
+      allow create: if owner() && patientValidFile(request.resource.data, key) && patientFileTransition(request.resource.data);
+      allow list, update, delete: if false;
+    }
+    match /clinics/main/counters/patientFiles {
+      allow get: if owner();
+      // Trusted setup must seed {lastFileNo:0,lastOperationId:null} separately.
+      // Missing/corrupt counters fail closed; a client never restarts numbering.
+      allow update: if owner() && patientCounterTransition(resource.data, request.resource.data);
+      allow list, create, delete: if false;
+    }
+
+
+
+
+
+
+
+
+    function contactRecordPath(id) { return /databases/$(database)/documents/clinics/main/contactRecords/$(id); }
+    function contactOperationPath(id) { return /databases/$(database)/documents/clinics/main/contactOperations/$(id); }
+    function contactPhonePath(key) { return /databases/$(database)/documents/clinics/main/contactPhones/$(key); }
+
+
+    function contactPreparedPhone(value) {
+      let formatted = trimSpaces(asciiDigits(value));
+      let digits = formatted.replace('[^0-9]', '');
+      let international = digits.matches('00.*') ? digits[2:digits.size()] : digits;
+      let canonical = international.matches('01.*') ? '20' + international[1:international.size()] : international;
+      let valid = value.size() <= 60 && value.matches('[^\\x00-\\x1f\\x7f]*')
+        && formatted.matches('[+]?[0-9 ().-]+')
+        && (!digits.matches('01.*') || digits.matches('01[0-9]{9}'))
+        && canonical.matches('[1-9][0-9]{7,14}')
+        && (!canonical.matches('20.*') || canonical.matches('201[0-9]{9}'));
+      return { 'valid': valid, 'key': hashing.sha256('contact-phone-v1:' + canonical).toHexString().lower() };
+    }
+
+    function contactValidContact(data, id, phone) {
+      return data is map && data.keys().hasAll(['id', 'name', 'mobile', 'createdAt'])
+        && data.keys().hasOnly(['id', 'name', 'mobile', 'createdAt', 'notes'])
+        && data.id == id && data.name is string && trimSpaces(data.name).size() > 0
+        && data.name.size() <= 200 && data.name.matches('[^\\x00-\\x1f\\x7f]*')
+        && data.mobile is string && phone.valid
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000
+          && data.notes.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*')))
+        && data.createdAt is string
+        && data.createdAt.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,3})?Z')
+        && calendarDay(data.createdAt);
+    }
+    function contactValidRecord(data, id, phone) {
+      let fields = ['schemaVersion', 'clinicId', 'recordId', 'revision', 'deleted', 'lastOperationId', 'phoneKey', 'data'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.recordId == id && uuid(data.lastOperationId)
+        && data.revision is int && data.revision >= 1 && data.revision <= 2000000000
+        && data.deleted is bool
+        && (data.deleted ? data.data == null && data.phoneKey == null
+          : data.phoneKey == phone.key && contactValidContact(data.data, id, phone));
+    }
+    function contactValidReceipt(data, id) {
+      // requestHash is the client's stable JSON retry fingerprint, NOT a server
+      // recomputed content signature. Explicit actor/record/action/revision links
+      // are enforced below, and the receipt is create-only. Owner access only.
+      let fields = ['schemaVersion', 'clinicId', 'operationId', 'actorUid', 'recordId', 'action', 'expectedRevision', 'resultRevision', 'requestHash', 'intentCreatedAt', 'intentRequestHash'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && uuid(id) && data.operationId == id && uuid(data.recordId)
+        && data.actorUid == request.auth.uid
+        && data.action in ['create', 'update', 'delete']
+        && data.expectedRevision is int && data.expectedRevision >= 0 && data.expectedRevision < 2000000000
+        && data.resultRevision is int && data.resultRevision == data.expectedRevision + 1
+        && ((data.action == 'create') == (data.expectedRevision == 0)) && hash(data.requestHash) && stamp(data.intentCreatedAt) && hash(data.intentRequestHash);
+    }
+    function contactIndexMatches(data, key, id) {
+      let fields = ['schemaVersion', 'clinicId', 'phoneKey', 'recordId'];
+      return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+        && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
+        && hash(key) && data.phoneKey == key && uuid(id) && data.recordId == id;
+    }
+    function contactRecordTransition(before, after, id, phone) {
+      return contactValidRecord(after, id, phone)
+        && (before == null ? after.revision == 1 && !after.deleted
+          : !before.data.deleted && before.data.recordId == id
+            && after.revision == before.data.revision + 1
+            && after.lastOperationId != before.data.lastOperationId
+            && (after.deleted || after.data.createdAt == before.data.data.createdAt));
+    }
+    function contactRecordReceipt(before, after) {
+      let op = getAfter(contactOperationPath(after.lastOperationId));
+      return !exists(contactOperationPath(after.lastOperationId)) && op != null
+        // A receipt absent before and present after MUST be created in this
+        // batch. Its own create rule validates schema; don't repeat it here.
+        && op.data.recordId == after.recordId;
+    }
+    function contactRecordPhones(before, after, oldKey, nextKey) {
+      return (before == null || get(contactPhonePath(oldKey)).data.recordId == after.recordId)
+        && (oldKey == '' || oldKey == nextKey || !existsAfter(contactPhonePath(oldKey)))
+        && (nextKey == '' || getAfter(contactPhonePath(nextKey)).data.recordId == after.recordId);
+    }
+    function contactContactWrite(before, after, id) {
+      let oldKey = before == null ? '' : before.data.phoneKey;
+      let phone = after.deleted ? { 'valid': true, 'key': '' } : contactPreparedPhone(after.data.mobile);
+      return contactRecordTransition(before, after, id, phone) && contactRecordReceipt(before, after)
+        && contactRecordPhones(before, after, oldKey, phone.key);
+    }
+    function contactCompanionChanged(before, after) {
+      // Full schema/phone checks belong to the record's own write rule. An
+      // unchanged getAfter record cannot authorize a standalone companion write.
+      return after != null && (before == null ? after.data.revision == 1
+        : !before.data.deleted && after.data.revision == before.data.revision + 1
+          && after.data.lastOperationId != before.data.lastOperationId);
+    }
+    function contactReceiptTransition(data) {
+      let before = get(contactRecordPath(data.recordId));
+      let after = getAfter(contactRecordPath(data.recordId));
+      return contactCompanionChanged(before, after)
+        && after.data.lastOperationId == data.operationId && after.data.revision == data.resultRevision
+        && data.expectedRevision == (before == null ? 0 : before.data.revision)
+        && data.action == (before == null ? 'create' : (after.data.deleted ? 'delete' : 'update'))
+        && contactIntent(data, after.data);
+    }
+    function contactIndexTransition(data, key, removing) {
+      let before = get(contactRecordPath(data.recordId));
+      let after = getAfter(contactRecordPath(data.recordId));
+      return contactCompanionChanged(before, after)
+        && (removing ? before != null && before.data.phoneKey == key
+            && (after.data.deleted || after.data.phoneKey != key)
+          : !after.data.deleted && after.data.phoneKey == key);
+    }
+
+
+    function exact(d, keys) { return d is map && d.keys().hasAll(keys) && d.keys().hasOnly(keys); }
+    function stamp(v) {
+      return v is string && v.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9][.][0-9]{3}Z')
+        && calendarDay(v);
+    }
+    function boundedQuery() { return 'limit' in request.query && request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50; }
+    function intentPath(id) { return /databases/$(database)/documents/clinics/main/operationIntents/$(id); }
+    function receiptCollection(kind) {
+      return {'patient-profile':'patientOperations','contact':'contactOperations','catalog':'catalogOperations','clinical':'clinicalOperations',
+        'appointment':'appointmentOperations','prosthetic':'prostheticOperations','expense':'expenseOperations','settings':'settingsOperations'}[kind];
+    }
+    function domainReceiptPath(kind, id) {
+      return /databases/$(database)/documents/clinics/main/$(receiptCollection(kind))/$(id);
+    }
+    function intentEnvelope(d, id) {
+      return exact(d, ['schemaVersion','clinicId','recordId','operationId','actorUid','kind','requestHash','status','revision','createdAt','command'])
+        && d.schemaVersion is int && d.schemaVersion == 1 && d.clinicId == 'main'
+        && uuid(id) && d.recordId == id && d.operationId == id && d.actorUid == request.auth.uid
+        && d.kind in ['patient-profile','contact','catalog','clinical','appointment','prosthetic','expense','settings']
+        && hash(d.requestHash) && stamp(d.createdAt) && d.command is map && d.command.operationId == id
+        && d.status in ['prepared','committed','cancelled'] && d.revision is int
+        && ((d.status == 'prepared' && d.revision == 1) || (d.status != 'prepared' && d.revision == 2));
+    }
+    function preparedProfile(c) {
+      return exact(c, ['operationId','recordId','expectedRevision','action','profile'])
+        && uuid(c.operationId) && uuid(c.recordId) && c.expectedRevision is int && c.expectedRevision >= 0 && c.expectedRevision < 2000000000
+        && c.action in ['create','update'] && ((c.action == 'create') == (c.expectedRevision == 0))
+        && patientValidProfile(c.profile, patientPreparedPhone(c.profile.mobile));
+    }
+    function preparedContact(c) {
+      return exact(c, ['operationId','recordId','expectedRevision','action','contact'])
+        && uuid(c.operationId) && uuid(c.recordId) && c.expectedRevision is int && c.expectedRevision >= 0 && c.expectedRevision < 2000000000
+        && c.action in ['create','update','delete'] && ((c.action == 'create') == (c.expectedRevision == 0))
+        && (c.action == 'delete' ? c.contact == null : contactValidContact(c.contact,c.recordId,contactPreparedPhone(c.contact.mobile)));
+    }
+    function commandValid(d) {
+      return d.kind == 'patient-profile' ? preparedProfile(d.command)
+        : d.kind == 'contact' ? preparedContact(d.command)
+        : d.kind == 'catalog' ? d.command.createdAt==d.createdAt && preparedCatalog(d.command)
+        : d.kind == 'clinical' ? d.command.createdAt==d.createdAt && preparedClinical(d.command) : false;
+    }
+    function coupledIntent(kind, op) {
+      let before = get(intentPath(op));
+      let after = getAfter(intentPath(op));
+      return before != null && before.data.status == 'prepared' && before.data.kind == kind && before.data.actorUid == request.auth.uid
+        && after != null && after.data.status == 'committed' && after.data.revision == 2
+        && after.data.diff(before.data).affectedKeys().hasOnly(['status','revision'])
+        && !exists(domainReceiptPath(kind,op));
+    }
+    function profileIntent(r, profile) {
+      let intent = getAfter(intentPath(r.operationId)).data;
+      return coupledIntent('patient-profile',r.operationId)
+        && r.intentCreatedAt == intent.createdAt && r.intentRequestHash == intent.requestHash
+        && r.recordId == intent.command.recordId && r.expectedRevision == intent.command.expectedRevision && r.action == intent.command.action
+        && profile.data == intent.command.profile;
+    }
+    function contactIntent(r, contact) {
+      let intent = getAfter(intentPath(r.operationId)).data;
+      return coupledIntent('contact',r.operationId)
+        && r.intentCreatedAt == intent.createdAt && r.intentRequestHash == intent.requestHash
+        && r.recordId == intent.command.recordId && r.expectedRevision == intent.command.expectedRevision && r.action == intent.command.action
+        && contact.data == intent.command.contact;
+    }
+    match /clinics/main/operationIntents/{id} {
+      allow get: if owner() && uuid(id) && (!exists(intentPath(id)) || resource.data.actorUid == request.auth.uid);
+      allow list: if owner() && boundedQuery() && resource.data.actorUid == request.auth.uid
+        && resource.data.kind in ['patient-profile','contact','catalog','clinical','appointment','prosthetic','expense','settings'];
+      allow create: if owner() && intentEnvelope(request.resource.data,id) && commandValid(request.resource.data)
+        && request.resource.data.status == 'prepared' && !exists(domainReceiptPath(request.resource.data.kind,id));
+      allow update: if owner() && intentEnvelope(request.resource.data,id) && resource.data.status == 'prepared'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','revision'])
+        && ((request.resource.data.status == 'cancelled'
+          && !exists(domainReceiptPath(resource.data.kind,id)) && !existsAfter(domainReceiptPath(resource.data.kind,id)))
+          || (request.resource.data.status == 'committed' && !exists(domainReceiptPath(resource.data.kind,id))
+            && existsAfter(domainReceiptPath(resource.data.kind,id))));
+      allow delete: if false;
+    }
+
+    match /clinics/main/contactRecords/{id} {
+      allow get: if owner() && uuid(id);
+      // Bounded owner paging includes tombstones. The caller orders by document
+      // ID and filters deleted envelopes after validation; a list is not export
+      // permission and never opens phone indexes, receipts or other domains.
+      allow list: if owner() && 'limit' in request.query
+        && request.query.limit is int && request.query.limit >= 1 && request.query.limit <= 50;
+      allow create, update: if owner() && contactContactWrite(resource, request.resource.data, id);
+      allow delete: if false;
+    }
+    match /clinics/main/contactOperations/{id} {
+      allow get: if owner() && uuid(id);
+      allow create: if owner() && contactValidReceipt(request.resource.data, id) && contactReceiptTransition(request.resource.data);
+      allow list, update, delete: if false;
+    }
+    match /clinics/main/contactPhones/{key} {
+      allow get: if owner() && hash(key);
+      allow create: if owner() && contactIndexMatches(request.resource.data, key, request.resource.data.recordId)
+        && contactIndexTransition(request.resource.data, key, false);
+      allow update: if owner() && request.resource.data == resource.data
+        && contactIndexMatches(resource.data, key, resource.data.recordId) && contactIndexTransition(resource.data, key, false);
+      allow delete: if owner() && contactIndexMatches(resource.data, key, resource.data.recordId)
+        && contactIndexTransition(resource.data, key, true);
+      allow list: if false;
+    }
+
+
+    function money(v) { return v is int && v >= 0 && v <= 1000000000000; }
+    function revision(v) { return v is int && v >= 1 && v <= 2000000000; }
+    function expected(v) { return v is int && v >= 0 && v < 2000000000; }
+    function shortText(v,n) { return v is string && v.size() <= n && v == trimSpaces(v) && v.matches('[^\\x00-\\x1f\\x7f]*'); }
+    function day(v) { return v is string && v.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])') && calendarDay(v); }
+    function nameKey(v) { return trimSpaces(asciiDigits(v).replace('[ً-ٰٟۖ-ۭـ]','').replace('[أإآٱ]','ا').replace('[ىی]','ي').replace(' +',' ')).lower(); }
+    function singletonPath(id) { return /databases/$(database)/documents/clinics/main/settings/$(id); }
+
+    function catalogService(s) {
+      let key=nameKey(s.name);
+      return exact(s,['serviceId','name','kind','priceCents','active']) && uuid(s.serviceId)
+        && shortText(s.name,80) && s.name.size()>0 && s.name.matches('[A-Za-z0-9\\x{0600}-\\x{06ff} ().,+/\\-_:]+')
+        && s.name.matches('[^؀-؅؜۝ٵٶٷٸ]*') && key.size()>0 && !(key in ['__proto__','prototype','constructor'])
+        && s.kind in ['clinical','prosthetic'] && (s.priceCents==null || money(s.priceCents)) && s.active is bool;
+    }
+    function catalogNameHash(name) { return hashing.sha256('catalog-service-name-v2:'+nameKey(name)).toHexString().lower(); }
+    function preparedCatalog(c) {
+      return c.mutationVersion is int && c.mutationVersion==2 && expected(c.expectedRevision)
+        && (c.action=='examination'
+          ? exact(c,['mutationVersion','operationId','expectedRevision','createdAt','action','examinationCents']) && money(c.examinationCents)
+          : c.action=='service' && exact(c,['mutationVersion','operationId','expectedRevision','createdAt','action','index','service'])
+            && c.index is int && c.index>=0 && c.index<300 && catalogService(c['service']));
+    }
+    function ordinaryReceipt(r,id,kind,recordId) {
+      let i=getAfter(intentPath(id)).data;
+      return exact(r,['schemaVersion','clinicId','operationId','recordId','actorUid','expectedRevision','resultRevision','createdAt','requestHash'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && uuid(id) && r.operationId==id
+        && r.recordId==recordId && r.actorUid==request.auth.uid && hash(r.requestHash)
+        && r.expectedRevision==i.command.expectedRevision && r.resultRevision==r.expectedRevision+1 && r.createdAt==i.createdAt
+        && coupledIntent(kind,id);
+    }
+    function catalogWrite(before,after) {
+      let i=getAfter(intentPath(after.lastOperationId)).data;
+      let c=i.command;
+      let old=before==null?{'examinationCents':null,'services':[]}:before.data.data;
+      return exact(after,['schemaVersion','clinicId','recordId','revision','lastOperationId','data'])
+        && after.schemaVersion is int && after.schemaVersion==1 && after.clinicId=='main' && after.recordId=='serviceCatalog'
+        && i.kind=='catalog' && c.mutationVersion==2 && after.revision==c.expectedRevision+1 && revision(after.revision)
+        && exact(after.data,['examinationCents','services']) && money(after.data.examinationCents)
+        && after.data.services is list && after.data.services.size()<=300
+        && ((before==null && c.expectedRevision==0 && c.action=='examination') || (before!=null && before.data.revision==c.expectedRevision))
+        && (c.action=='examination' ? after.data.examinationCents==c.examinationCents && after.data.services==old.services
+          : c.action=='service' && before!=null && c.index<=old.services.size()
+            && (c.index==old.services.size() || old.services[c.index].serviceId==c['service'].serviceId)
+            && after.data.examinationCents==old.examinationCents
+            && after.data.services==(c.index==0?[]:old.services[0:c.index]).concat([c['service']]).concat(c.index+1<old.services.size()?old.services[c.index+1:old.services.size()]:[])
+            && getAfter(anyPath('catalogServiceIds',c['service'].serviceId)).data.lastOperationId==after.lastOperationId)
+        && !exists(domainReceiptPath('catalog',after.lastOperationId)) && existsAfter(domainReceiptPath('catalog',after.lastOperationId));
+    }
+    match /clinics/main/settings/serviceCatalog {
+      allow get: if owner();
+      allow create,update: if owner() && catalogWrite(resource,request.resource.data);
+      allow list,delete: if false;
+    }
+    match /clinics/main/catalogOperations/{id} {
+      allow get: if owner() && uuid(id) && (!exists(domainReceiptPath('catalog',id)) || resource.data.actorUid==request.auth.uid);
+      allow create: if owner() && ordinaryReceipt(request.resource.data,id,'catalog','serviceCatalog')
+        && getAfter(singletonPath('serviceCatalog')).data.lastOperationId==id;
+      allow list,update,delete: if false;
+    }
+
+
+    function catalogUnrouted1(rows,n,id) { return n>=rows.size() || rows[n].serviceId!=id; }
+    function catalogUnrouted2(rows,n,id) { return n>=rows.size() || (catalogUnrouted1(rows,n,id) && catalogUnrouted1(rows,n+1,id)); }
+    function catalogUnrouted4(rows,n,id) { return n>=rows.size() || (catalogUnrouted2(rows,n,id) && catalogUnrouted2(rows,n+2,id)); }
+    function catalogUnrouted8(rows,n,id) { return n>=rows.size() || (catalogUnrouted4(rows,n,id) && catalogUnrouted4(rows,n+4,id)); }
+    function catalogUnrouted16(rows,n,id) { return n>=rows.size() || (catalogUnrouted8(rows,n,id) && catalogUnrouted8(rows,n+8,id)); }
+    function catalogUnrouted32(rows,n,id) { return n>=rows.size() || (catalogUnrouted16(rows,n,id) && catalogUnrouted16(rows,n+16,id)); }
+    function catalogUnrouted64(rows,n,id) { return n>=rows.size() || (catalogUnrouted32(rows,n,id) && catalogUnrouted32(rows,n+32,id)); }
+    function catalogUnrouted128(rows,n,id) { return n>=rows.size() || (catalogUnrouted64(rows,n,id) && catalogUnrouted64(rows,n+64,id)); }
+    function catalogUnrouted(id) {
+      let routing=get(singletonPath('prostheticRouting')).data.data.routes;
+      return routing is list && routing.size()<=100 && (routing.size()==0?true:routing.size()==1?catalogUnrouted1(routing,0,id)
+        :routing.size()<=2?catalogUnrouted2(routing,0,id):routing.size()<=4?catalogUnrouted4(routing,0,id)
+        :routing.size()<=8?catalogUnrouted8(routing,0,id):routing.size()<=16?catalogUnrouted16(routing,0,id)
+        :routing.size()<=32?catalogUnrouted32(routing,0,id):routing.size()<=64?catalogUnrouted64(routing,0,id):catalogUnrouted128(routing,0,id));
+    }
+    function catalogIdWrite(before,a,id) {
+      let c=getAfter(intentPath(a.lastOperationId)).data.command;
+      let catalog=get(singletonPath('serviceCatalog')).data;
+      let next=getAfter(singletonPath('serviceCatalog')).data;
+      let old=c.index<catalog.data.services.size()?catalog.data.services[c.index]:null;
+      return exact(a,['schemaVersion','clinicId','recordId','index','nameKey','revision','lastOperationId'])
+        && a.schemaVersion is int && a.schemaVersion==1 && a.clinicId=='main' && a.recordId==id && uuid(id)
+        && c.mutationVersion==2 && c.action=='service' && c['service'].serviceId==id && a.index==c.index
+        && a.nameKey==catalogNameHash(c['service'].name) && revision(a.revision)
+        && next.lastOperationId==a.lastOperationId && next.revision==c.expectedRevision+1
+        && !exists(domainReceiptPath('catalog',a.lastOperationId)) && existsAfter(domainReceiptPath('catalog',a.lastOperationId))
+        && ((before==null && old==null && a.revision==1)
+          || (before!=null && old!=null && old.serviceId==id && before.data.recordId==id && before.data.index==c.index
+            && before.data.nameKey==catalogNameHash(old.name) && a.revision==before.data.revision+1
+            && get(anyPath('catalogServiceNames',before.data.nameKey)).data.serviceId==id))
+        && getAfter(anyPath('catalogServiceNames',a.nameKey)).data.serviceId==id
+        && ((old==null || (c['service'].active && c['service'].kind==old.kind)) || catalogUnrouted(id));
+    }
+    match /clinics/main/catalogServiceIds/{id} {
+      allow get: if owner() && uuid(id);
+      allow create,update: if owner() && catalogIdWrite(resource,request.resource.data,id);
+      allow list,delete: if false;
+    }
+    match /clinics/main/catalogServiceNames/{key} {
+      allow get: if owner() && hash(key);
+      allow create: if owner() && hash(key) && exact(request.resource.data,['schemaVersion','clinicId','nameKey','serviceId'])
+        && request.resource.data.schemaVersion is int && request.resource.data.schemaVersion==1 && request.resource.data.clinicId=='main'
+        && request.resource.data.nameKey==key && uuid(request.resource.data.serviceId)
+        && getAfter(anyPath('catalogServiceIds',request.resource.data.serviceId)).data.nameKey==key
+        && getAfter(anyPath('catalogServiceIds',request.resource.data.serviceId)).data.lastOperationId
+          ==getAfter(singletonPath('serviceCatalog')).data.lastOperationId
+        && !exists(anyPath('catalogOperations',getAfter(singletonPath('serviceCatalog')).data.lastOperationId));
+      allow list,update,delete: if false;
+    }
+    function longText(v,n) { return v is string && v.size()<=n && v.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*'); }
+    function anyPath(col,id) { return /databases/$(database)/documents/clinics/main/$(col)/$(id); }
+    function teeth(v) { return v is list && v.size()<=32 && v.toSet().size()==v.size()
+      && (v.size()==0 || (v.join(',').matches('(ur|ul|lr|ll)[1-8A-E](,(ur|ul|lr|ll)[1-8A-E])*')
+        && v.join(',').replace('[^,]','').size()==v.size()-1)); }
+    function clinicalProgress(d) {
+      return exact(d,['notes','treatmentStage','rootCanalStatus','visitStatus']) && longText(d.notes,4000)
+        && d.treatmentStage in ['single','first','second','third','follow_up']
+        && d.rootCanalStatus in ['','access_cleaning','working_length','canal_filled','impression','final_restoration']
+        && d.visitStatus in ['completed','follow_up'];
+    }
+    function clinicalRow(rows,n,selected) {
+      return n>=rows.size() || (rows[n] is map && rows[n].keys().hasAll(['id','name','priceCents','tooth'])
+        && rows[n].keys().hasOnly(['id','name','priceCents','tooth','catalogServiceId']) && uuid(rows[n].id)
+        && shortText(rows[n].name,200) && rows[n].name.size()>0 && !rows[n].name.matches('تركيب.*') && money(rows[n].priceCents)
+        && (rows[n].tooth==null || rows[n].tooth in selected) && (!('catalogServiceId' in rows[n]) || rows[n].catalogServiceId==null || uuid(rows[n].catalogServiceId)));
+    }
+    function clinicalRows2(rows,n,t) { return n>=rows.size() || (clinicalRow(rows,n,t) && clinicalRow(rows,n+1,t)); }
+    function clinicalRows4(rows,n,t) { return n>=rows.size() || (clinicalRows2(rows,n,t) && clinicalRows2(rows,n+2,t)); }
+    function clinicalRows8(rows,n,t) { return n>=rows.size() || (clinicalRows4(rows,n,t) && clinicalRows4(rows,n+4,t)); }
+    function clinicalIds2(rows,n) { return n>=rows.size()?[]:n+1>=rows.size()?[rows[n].id]:[rows[n].id,rows[n+1].id]; }
+    function clinicalIds4(rows,n) { return n>=rows.size()?[]:clinicalIds2(rows,n).concat(clinicalIds2(rows,n+2)); }
+    function clinicalIds8(rows,n) { return n>=rows.size()?[]:clinicalIds4(rows,n).concat(clinicalIds4(rows,n+4)); }
+    function clinicalIds(rows) { return rows.size()==0?[]:rows.size()==1?[rows[0].id]:rows.size()<=2?clinicalIds2(rows,0):rows.size()<=4?clinicalIds4(rows,0):clinicalIds8(rows,0); }
+    function clinicalSum2(rows,n) { return n>=rows.size()?0:rows[n].priceCents+(n+1>=rows.size()?0:rows[n+1].priceCents); }
+    function clinicalSum4(rows,n) { return n>=rows.size()?0:clinicalSum2(rows,n)+clinicalSum2(rows,n+2); }
+    function clinicalSum8(rows,n) { return n>=rows.size()?0:clinicalSum4(rows,n)+clinicalSum4(rows,n+4); }
+    function clinicalTotal(d) { let rows=d.services; return d.examinationCents+(rows.size()==0?0:rows.size()==1?rows[0].priceCents:rows.size()<=2?clinicalSum2(rows,0):rows.size()<=4?clinicalSum4(rows,0):clinicalSum8(rows,0)); }
+    function clinicalData(d) {
+      return exact(d,['type','date','teethIds','services','examinationCents','notes','treatmentStage','rootCanalStatus','visitStatus'])
+        && d.teethIds is list && d.teethIds.size()<=32
+        && d.services is list && d.services.size()<=8 && (d.services.size()>0 || d.examinationCents>0)
+        && money(d.examinationCents);
+    }
+    function clinicalMetadata(d) {
+      return shortText(d.type,200) && d.type.size()>0 && !d.type.matches('تركيب.*') && day(d.date) && teeth(d.teethIds)
+        && clinicalProgress({'notes':d.notes,'treatmentStage':d.treatmentStage,'rootCanalStatus':d.rootCanalStatus,'visitStatus':d.visitStatus});
+    }
+    function preparedClinical(c) {
+      return uuid(c.patientId) && uuid(c.sessionId) && expected(c.expectedRevision)
+        && ((c.action=='visit' && exact(c,['operationId','patientId','sessionId','expectedRevision','createdAt','action','data','paidCents'])
+          && c.sessionId==c.operationId && clinicalData(c.data) && money(c.paidCents))
+        || (c.action=='payment' && exact(c,['operationId','patientId','sessionId','expectedRevision','createdAt','action','amountCents','date','note'])
+          && c.expectedRevision>0 && money(c.amountCents) && c.amountCents>0 && day(c.date) && longText(c.note,1000))
+        || (c.action=='progress' && exact(c,['operationId','patientId','sessionId','expectedRevision','createdAt','action','changes'])
+          && c.expectedRevision>0 && clinicalProgress(c.changes)));
+    }
+    function collected(c) { return c.action=='visit'?c.paidCents:c.action=='payment'?c.amountCents:0; }
+    function accountSchema(a,id) {
+      return exact(a,['schemaVersion','clinicId','patientId','fileNo','revision','lastOperationId','totalCents','paidCents','sessionCount'])
+        && a.schemaVersion is int && a.schemaVersion==1 && a.clinicId=='main' && uuid(id) && a.patientId==id
+        && patientPositiveNumber(a.fileNo) && revision(a.revision) && uuid(a.lastOperationId)
+        && money(a.totalCents) && money(a.paidCents) && a.paidCents<=a.totalCents && revision(a.sessionCount) && a.sessionCount<=a.revision;
+    }
+    function clinicalAccountWrite(before,a,id) {
+      let i=getAfter(intentPath(a.lastOperationId)).data;
+      let c=i.command;
+      let p=get(patientProfilePath(id)).data;
+      let s=getAfter(anyPath('patientSessions',c.sessionId)).data;
+      return accountSchema(a,id) && i.kind=='clinical' && c.patientId==id && a.revision==c.expectedRevision+1
+        && a.fileNo==p.fileNo && get(patientFilePath(a.fileNo)).data.recordId==id
+        && ((before==null && c.expectedRevision==0 && c.action=='visit' && a.totalCents==clinicalTotal(c.data)
+          && a.paidCents==collected(c) && a.sessionCount==1)
+        || (before!=null && before.data.revision==c.expectedRevision && a.fileNo==before.data.fileNo
+          && a.totalCents==before.data.totalCents+(c.action=='visit'?clinicalTotal(c.data):0)
+          && a.paidCents==before.data.paidCents+collected(c) && a.sessionCount==before.data.sessionCount+(c.action=='visit'?1:0)))
+        && s.lastOperationId==a.lastOperationId && s.patientId==id && s.fileNo==a.fileNo
+        && !exists(domainReceiptPath('clinical',a.lastOperationId)) && existsAfter(domainReceiptPath('clinical',a.lastOperationId))
+        && (collected(c)>0 ? existsAfter(anyPath('patientReceipts',a.lastOperationId)) : !existsAfter(anyPath('patientReceipts',a.lastOperationId)));
+    }
+    function sessionSchema(s,id) {
+      return exact(s,['schemaVersion','clinicId','sessionId','patientId','fileNo','revision','lastOperationId','totalCents','paidCents','data'])
+        && s.schemaVersion is int && s.schemaVersion==1 && s.clinicId=='main' && uuid(id) && s.sessionId==id
+        && uuid(s.patientId) && patientPositiveNumber(s.fileNo) && revision(s.revision) && uuid(s.lastOperationId)
+        && money(s.totalCents) && money(s.paidCents) && s.paidCents<=s.totalCents;
+    }
+    function clinicalSessionWrite(before,s,id) {
+      let i=getAfter(intentPath(s.lastOperationId)).data;
+      let c=i.command;
+      let a=getAfter(anyPath('patientAccounts',s.patientId)).data;
+      return sessionSchema(s,id) && i.kind=='clinical' && c.sessionId==id && c.patientId==s.patientId
+        && a.lastOperationId==s.lastOperationId && a.revision==c.expectedRevision+1 && a.fileNo==s.fileNo
+        && !exists(domainReceiptPath('clinical',s.lastOperationId)) && existsAfter(domainReceiptPath('clinical',s.lastOperationId))
+        && ((c.action=='visit' && before==null && s.revision==1 && s.data==c.data && s.totalCents==clinicalTotal(c.data) && s.paidCents==c.paidCents
+          && (s.data.services.size()==0?true:s.data.services.size()==1?clinicalRow(s.data.services,0,s.data.teethIds):s.data.services.size()<=2?clinicalRows2(s.data.services,0,s.data.teethIds):s.data.services.size()<=4?clinicalRows4(s.data.services,0,s.data.teethIds):clinicalRows8(s.data.services,0,s.data.teethIds)))
+        || (c.action!='visit' && before!=null && s.revision==before.data.revision+1
+          && s.patientId==before.data.patientId && s.fileNo==before.data.fileNo && s.totalCents==before.data.totalCents
+          && s.paidCents==before.data.paidCents+collected(c)
+          && ((c.action=='payment' && s.data==before.data.data)
+          || (c.action=='progress' && s.data.diff(before.data.data).affectedKeys().hasOnly(['notes','treatmentStage','rootCanalStatus','visitStatus'])
+            && s.data.notes==c.changes.notes && s.data.treatmentStage==c.changes.treatmentStage
+            && s.data.rootCanalStatus==c.changes.rootCanalStatus && s.data.visitStatus==c.changes.visitStatus))));
+    }
+    function clinicalReceipt(r,id) {
+      let i=getAfter(intentPath(id)).data;
+      let c=i.command;
+      let a=getAfter(anyPath('patientAccounts',c.patientId)).data;
+      let s=getAfter(anyPath('patientSessions',c.sessionId)).data;
+      return exact(r,['schemaVersion','clinicId','operationId','actorUid','patientId','sessionId','action','expectedRevision','resultRevision','createdAt','requestHash','fileNo'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && r.operationId==id && r.actorUid==request.auth.uid
+        && r.patientId==c.patientId && r.sessionId==c.sessionId && r.action==c.action && r.expectedRevision==c.expectedRevision
+        && r.resultRevision==c.expectedRevision+1 && r.createdAt==i.createdAt && hash(r.requestHash)
+        && r.fileNo==a.fileNo && s.fileNo==r.fileNo && a.revision==r.resultRevision
+        && a.lastOperationId==id && s.lastOperationId==id && coupledIntent('clinical',id)
+        && (c.action!='visit' || (clinicalMetadata(c.data) && clinicalIds(c.data.services).toSet().size()==c.data.services.size()));
+    }
+    function clinicalCash(r,id) {
+      let i=getAfter(intentPath(id)).data;
+      let c=i.command;
+      let op=getAfter(domainReceiptPath('clinical',id)).data;
+      return exact(r,['schemaVersion','clinicId','receiptId','patientId','sessionId','fileNo','amountCents','date','note','createdAt','actorUid','paymentMethod'])
+        && i.kind=='clinical' && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && r.receiptId==id
+        && r.patientId==c.patientId && r.sessionId==c.sessionId && r.fileNo==op.fileNo && op.operationId==id
+        && r.amountCents==collected(c) && r.amountCents>0 && r.createdAt==i.createdAt && r.actorUid==request.auth.uid && r.paymentMethod=='cash'
+        && ((c.action=='visit' && r.date==c.data.date && r.note=='') || (c.action=='payment' && r.date==c.date && r.note==c.note));
+    }
+    match /clinics/main/patientAccounts/{id} {
+      allow get: if owner() && uuid(id);
+      allow create,update: if owner() && clinicalAccountWrite(resource,request.resource.data,id);
+      allow list,delete: if false;
+    }
+    match /clinics/main/patientSessions/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery() && uuid(resource.data.patientId);
+      allow create,update: if owner() && clinicalSessionWrite(resource,request.resource.data,id);
+      allow delete: if false;
+    }
+    match /clinics/main/patientReceipts/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery() && uuid(resource.data.patientId);
+      allow create: if owner() && uuid(id) && clinicalCash(request.resource.data,id);
+      allow update,delete: if false;
+    }
+    match /clinics/main/clinicalOperations/{id} {
+      allow get: if owner() && uuid(id);
+      allow create: if owner() && uuid(id) && clinicalReceipt(request.resource.data,id);
+      allow list,update,delete: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
+

@@ -9,6 +9,10 @@ import type { CloudOperationIntentRepository } from './cloudOperationIntent';
 import type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
 import type { CloudServiceCatalogRepository } from './cloudServiceCatalogRepository';
 import type { CloudAppointmentCapability } from './cloudAppointmentOperatingCapability';
+import type { FirebaseCloudClinicSettingsCapability } from './firebaseCloudClinicSettings';
+import type { FirebaseCloudProstheticsCapability } from './firebaseCloudProsthetics';
+import type { FirebaseCloudExpensesCapability } from './firebaseCloudExpenses';
+import type { FirebaseCloudClinicSnapshotCapability } from './firebaseCloudClinicSnapshot';
 export type { CloudAppointmentCapability } from './cloudAppointmentOperatingCapability';
 export type { CloudClinicalCapability } from './cloudClinicalWorkspaceController';
 export interface CloudServiceCatalogCapability {
@@ -197,6 +201,10 @@ export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
   getServiceCatalog(): Promise<CloudServiceCatalogCapability>;
   /** Prepared appointment capability; no UI, Rules or Hosting activation. */
   getAppointments(): Promise<CloudAppointmentCapability>;
+  getClinicSettings(): Promise<FirebaseCloudClinicSettingsCapability>;
+  getProsthetics(): Promise<FirebaseCloudProstheticsCapability>;
+  getExpenses(): Promise<FirebaseCloudExpensesCapability>;
+  getClinicSnapshot(): Promise<FirebaseCloudClinicSnapshotCapability>;
 };
 
 /**
@@ -284,7 +292,46 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
     let clinicalCreation: Promise<CloudClinicalCapability> | null = null;
     let catalogCreation: Promise<CloudServiceCatalogCapability> | null = null;
     let appointmentsCreation: Promise<CloudAppointmentCapability> | null = null;
-    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; catalogCreation = null; appointmentsCreation = null; };
+    const additionalCreations = new Map<string, Promise<unknown>>();
+    const revokeCapabilities = () => { ++capabilityGeneration; contactsCreation = null; patientsCreation = null; clinicalCreation = null; catalogCreation = null; appointmentsCreation = null; additionalCreations.clear(); };
+    /** These SDKs already validate every input/output, freshly authorize every
+     * action and permanently bind the exact SDK user/app. Share only capability
+     * construction/lifetime coordination, never a cached authorization flag. */
+    const additionalCapability = async <T>(key: string, create: (isActive: () => boolean) => Promise<T>): Promise<T> => {
+      try {
+        const checked = session.getState(), user = auth.currentUser;
+        if (checked.phase !== 'owner-checked' || !checked.owner || !user || checked.owner.uid !== user.uid) {
+          throw new CloudOperatingAuthError('changed');
+        }
+        const generation = capabilityGeneration, uid = checked.owner.uid;
+        const requireActive = () => {
+          try { requireRuntime(); }
+          catch { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+          const state = session.getState();
+          if (generation !== capabilityGeneration || auth.currentUser !== user || user.uid !== uid || auth.emulatorConfig
+            || state.phase === 'signed-out' || state.phase === 'signing-out' || state.phase === 'closed') {
+            if (generation === capabilityGeneration) revokeCapabilities();
+            throw new CloudOperatingAuthError('changed');
+          }
+        };
+        const authorize = async () => {
+          requireActive(); const owner = await session.authorizeOwner(); requireActive();
+          if (owner.uid !== uid) { revokeCapabilities(); throw new CloudOperatingAuthError('changed'); }
+        };
+        await authorize(); requireActive();
+        if (!additionalCreations.has(key)) {
+          const creation = Promise.resolve().then(async () => {
+            requireActive();
+            const capability = await create(() => { try { requireActive(); return true; } catch { return false; } });
+            requireActive(); return capability;
+          });
+          additionalCreations.set(key, creation);
+          void creation.catch(() => { if (additionalCreations.get(key) === creation) additionalCreations.delete(key); });
+        }
+        const capability = await additionalCreations.get(key) as T;
+        requireActive(); await authorize(); requireActive(); return capability;
+      } catch { throw new CloudOperatingAuthError('unavailable'); }
+    };
     session.subscribe(value => {
       if (value.phase === 'signed-out' || value.phase === 'signing-out' || value.phase === 'closed') revokeCapabilities();
     });
@@ -294,6 +341,26 @@ export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFireb
       invalidate: () => { revokeCapabilities(); session.invalidate(); },
       signOut: () => { revokeCapabilities(); return session.signOut(); },
       dispose: () => { revokeCapabilities(); return session.dispose(); },
+      getClinicSettings: () => additionalCapability('settings', async isActive => {
+        const module = await import('./firebaseCloudClinicSettings');
+        if (!isActive()) throw new CloudOperatingAuthError('changed');
+        return module.createFirebaseCloudClinicSettings(auth, { isActive });
+      }),
+      getProsthetics: () => additionalCapability('prosthetic', async isActive => {
+        const module = await import('./firebaseCloudProsthetics');
+        if (!isActive()) throw new CloudOperatingAuthError('changed');
+        return module.createFirebaseCloudProsthetics(auth, { isActive });
+      }),
+      getExpenses: () => additionalCapability('expense', async isActive => {
+        const module = await import('./firebaseCloudExpenses');
+        if (!isActive()) throw new CloudOperatingAuthError('changed');
+        return module.createFirebaseCloudExpenses(auth, { isActive });
+      }),
+      getClinicSnapshot: () => additionalCapability('snapshot', async isActive => {
+        const module = await import('./firebaseCloudClinicSnapshot');
+        if (!isActive()) throw new CloudOperatingAuthError('changed');
+        return module.createFirebaseCloudClinicSnapshot(auth, { isActive });
+      }),
       getContacts: async (): Promise<CloudOperatingContactCapability> => {
         try {
           const checked = session.getState();

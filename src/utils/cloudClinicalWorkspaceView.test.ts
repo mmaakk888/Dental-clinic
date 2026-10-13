@@ -104,7 +104,8 @@ function harness(loaded = true) {
     dispose: () => { recovery = recoveryState({ closed: true }); } };
   const bundle: CloudClinicalWorkspaceBundle = { file, recovery: history };
   const slots = hooks(); let closes = 0;
-  const render = (changes: { controller?: CloudClinicalWorkspaceBundle; previewOnly?: boolean; closing?: boolean } = {}) => invoke(CloudClinicalWorkspace,
+  const render = (changes: { controller?: CloudClinicalWorkspaceBundle; previewOnly?: boolean; closing?: boolean;
+    onStartProsthetic?: (patientRecordId: string) => void; onOpenPrescription?: (patientRecordId: string) => void } = {}) => invoke(CloudClinicalWorkspace,
     { controller: bundle, onClose: () => closes++, ...changes }, slots).props as CloudClinicalWorkspaceViewProps;
   return { bundle, calls, behavior, slots, render, closes: () => closes, state: () => state,
     setState: (changes: Partial<CloudClinicalWorkspaceState>) => { state = { ...state, ...changes }; for (const notify of fileListeners) notify(state); },

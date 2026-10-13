@@ -22,6 +22,9 @@ const APP = new RegExp(`^clinic-operating-${UUID}${END}`);
 const CATALOG = 'clinics/main/settings/serviceCatalog';
 const OPERATION = new RegExp(`^clinics/main/catalogOperations/${UUID}${END}`);
 const INTENT = new RegExp(`^clinics/main/operationIntents/${UUID}${END}`);
+const SERVICE_ID = new RegExp(`^clinics/main/catalogServiceIds/${UUID}${END}`);
+const SERVICE_NAME = /^clinics\/main\/catalogServiceNames\/[0-9a-f]{64}(?![\s\S])/;
+const ROUTING = 'clinics/main/settings/prostheticRouting';
 const catalogKind = (kind: CloudOperationKind) => { if (kind !== 'catalog') throw new CloudOperationIntentError('invalid'); };
 
 export async function createFirebaseCloudServiceCatalog(auth: Auth,
@@ -58,6 +61,7 @@ export async function createFirebaseCloudServiceCatalog(auth: Auth,
       intent = parseCloudOperationIntent(value);
       const command = prepareCloudServiceCatalogCommand(intent.command);
       if (intent.kind !== 'catalog' || intent.actorUid !== uid || command.createdAt !== intent.createdAt
+        || !('mutationVersion' in command) && intent.status !== 'committed'
         || path !== undefined && path !== `clinics/main/operationIntents/${intent.operationId}`
         || JSON.stringify(prepareCloudIntentCommand(command)) !== JSON.stringify(intent.command)) throw new Error();
     } catch { throw new CloudOperationIntentError('invalid'); }
@@ -85,7 +89,8 @@ export async function createFirebaseCloudServiceCatalog(auth: Auth,
     };
     const reference = (path: string) => {
       requireRuntime();
-      if (typeof path !== 'string' || !(path === CATALOG || OPERATION.test(path) || INTENT.test(path))) {
+      if (typeof path !== 'string' || !(path === CATALOG || path === ROUTING || OPERATION.test(path) || INTENT.test(path)
+        || SERVICE_ID.test(path) || SERVICE_NAME.test(path))) {
         throw new CloudServiceCatalogError('invalid');
       }
       return sdkCall(() => store.doc(database, path));
@@ -107,6 +112,7 @@ export async function createFirebaseCloudServiceCatalog(auth: Auth,
         const result = await work({
           get: async path => readSnapshot(path, await sdkAwait(() => transaction.get(reference(path)))),
           set: (path, value) => {
+            if (path === ROUTING) throw new CloudServiceCatalogError('invalid');
             const target = reference(path);
             // Validate the complete command before changing even its status during cancellation.
             if (INTENT.test(path)) checkedIntent(value, path);
@@ -157,6 +163,13 @@ export async function createFirebaseCloudServiceCatalog(auth: Auth,
         try { command = prepareCloudServiceCatalogCommand(input); }
         catch { throw new CloudOperationIntentError('invalid'); }
         if (createdAt !== command.createdAt) throw new CloudOperationIntentError('invalid');
+        if (!('mutationVersion' in command)) {
+          const historical = await journalRepository.get(command.operationId);
+          const result = historical === null ? null : checkedIntent(historical);
+          if (!result || result.status !== 'committed'
+            || JSON.stringify(result.command) !== JSON.stringify(prepareCloudIntentCommand(command))) throw new CloudOperationIntentError('invalid');
+          return result;
+        }
         return checkedIntent(await journalRepository.prepare(kind, command, createdAt));
       }) as typeof journalRepository.prepare,
       get: (async id => {

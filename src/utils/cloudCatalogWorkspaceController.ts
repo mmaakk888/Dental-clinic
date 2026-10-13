@@ -1,5 +1,6 @@
 import { CloudServiceCatalogError, parseCloudServiceCatalogData, parseCloudServiceCatalogRecord,
-  prepareCloudServiceCatalogCommand, type CloudServiceCatalogCommand, type CloudServiceCatalogRecord,
+  prepareCloudServiceCatalogCommand, prepareCloudServiceCatalogMutationCommand, applyCloudServiceCatalogMutation,
+  type CloudServiceCatalogWriteCommand, type CloudServiceCatalogData, type CloudServiceCatalogRecord,
   type CloudServiceCatalogRepository, type CloudServiceDefinition } from './cloudServiceCatalogRepository';
 import { parseCloudOperationIntent, prepareCloudIntentCommand,
   type CloudOperationIntent, type CloudOperationIntentRepository } from './cloudOperationIntent';
@@ -58,16 +59,17 @@ const empty = (closed = false): CloudCatalogWorkspaceState => ({ snapshot: null,
  * indicator; this controller never reads local settings or enables cloud UI. */
 export function createCloudCatalogWorkspaceController(options: CloudCatalogWorkspaceOptions) {
   let state = freeze(empty()), epoch = 0, closed = false, checkingActive = false, capturing = false;
-  let capability: CloudCatalogWorkspaceCapability | null = null, command: CloudServiceCatalogCommand | null = null;
+  let capability: CloudCatalogWorkspaceCapability | null = null, command: CloudServiceCatalogWriteCommand | null = null;
+  let expectedData: CloudServiceCatalogData | null = null;
   let acknowledged: number | null = null, actorUid: string | null = null;
   const listeners = new Set<(value: CloudCatalogWorkspaceState) => void>();
   function publish(value: CloudCatalogWorkspaceState) {
     state = freeze(value);
-    for (const listener of [...listeners]) { try { listener(state); } catch { /* A view grants no authority. */ } }
+    for (const listener of [...listeners]) { try { listener(value); } catch { /* A view grants no authority. */ } }
   }
   function dispose() {
     if (closed) return;
-    closed = true; ++epoch; capability = null; command = null; acknowledged = null; actorUid = null;
+    closed = true; ++epoch; capability = null; command = null; expectedData = null; acknowledged = null; actorUid = null;
     publish(empty(true)); listeners.clear();
   }
   function active(ticket = epoch) {
@@ -109,7 +111,7 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
     const result = raw === null ? null : parseCloudServiceCatalogRecord(raw);
     assertActive(ticket); return result;
   }
-  function checkedIntent(value: unknown, id?: string, expected?: CloudServiceCatalogCommand) {
+  function checkedIntent(value: unknown, id?: string, expected?: CloudServiceCatalogWriteCommand) {
     const intent = parseCloudOperationIntent(value), recovered = prepareCloudServiceCatalogCommand(intent.command);
     if (intent.kind !== 'catalog' || intent.operationId !== recovered.operationId || id !== undefined && intent.operationId !== id
       || intent.createdAt !== recovered.createdAt || actorUid !== null && intent.actorUid !== actorUid
@@ -138,12 +140,17 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
     try {
       const cap = await getCapability(ticket); assertActive(ticket);
       if (acknowledged === null) {
-        publish({ ...state, saveStatus: 'preparing', error: '', notice: '' }); assertActive(ticket);
-        const journal = cap.journal; assertActive(ticket);
-        const prepared = checkedIntent(await call(ticket, journal, 'prepare', ['catalog', submitted, submitted.createdAt]), submitted.operationId, submitted);
-        assertActive(ticket);
-        if (prepared.intent.status === 'cancelled') fail();
-        actorUid = prepared.intent.actorUid;
+        if ('mutationVersion' in submitted) {
+          publish({ ...state, saveStatus: 'preparing', error: '', notice: '' }); assertActive(ticket);
+          const journal = cap.journal; assertActive(ticket);
+          const prepared = checkedIntent(await call(ticket, journal, 'prepare', ['catalog', submitted, submitted.createdAt]), submitted.operationId, submitted);
+          assertActive(ticket);
+          if (prepared.intent.status === 'cancelled') fail();
+          actorUid = prepared.intent.actorUid;
+        }
+        // Legacy commands enter only through a confirmed committed journal.
+        // The repository verifies their original receipt; never prepare a new
+        // full replacement or replay an uncommitted legacy command.
         publish({ ...state, saveStatus: 'saving' }); assertActive(ticket);
         const repository = cap.repository; assertActive(ticket);
         const receipt = exact(await call(ticket, repository, 'commit', [submitted]), ['status', 'recordId', 'revision']);
@@ -154,10 +161,16 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
       }
       publish({ ...state, loading: true, saveStatus: 'refresh-required', error: '' }); assertActive(ticket);
       const snapshot = await readSnapshot(ticket); assertActive(ticket);
+      const matches = snapshot && (expectedData !== null
+        ? JSON.stringify(snapshot.data) === JSON.stringify(expectedData)
+        : 'mutationVersion' in submitted
+          ? submitted.action === 'examination' ? snapshot.data.examinationCents === submitted.examinationCents
+            : JSON.stringify(snapshot.data.services[submitted.index]) === JSON.stringify(submitted.service)
+          : JSON.stringify(snapshot.data) === JSON.stringify(submitted.data));
       if (!snapshot || snapshot.revision < acknowledged
         || snapshot.revision === acknowledged && (snapshot.lastOperationId !== submitted.operationId
-          || JSON.stringify(snapshot.data) !== JSON.stringify(submitted.data))) fail();
-      command = null; acknowledged = null;
+          || !matches)) fail();
+      command = null; expectedData = null; acknowledged = null;
       publish({ ...state, snapshot, loaded: true, loading: false, draft: null, pendingOperationId: null, saveStatus: 'idle',
         history: [], historyLoaded: false, historyNextAfterId: null, error: '',
         notice: 'تم تأكيد حفظ العملية وقراءة الأسعار الحالية من الخادم. لا يؤثر التعديل في أسعار الجلسات السابقة.' });
@@ -173,18 +186,33 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
   async function save(): Promise<boolean> {
     if (!available() || command || !state.loaded || !state.draft) return false;
     const before = epoch, source = state.draft, snapshot = state.snapshot;
-    let prepared: CloudServiceCatalogCommand;
+    let prepared: CloudServiceCatalogWriteCommand, nextData: CloudServiceCatalogData;
     try {
-      prepared = capture(() => freeze(prepareCloudServiceCatalogCommand({
-        operationId: (options.newId ?? (() => crypto.randomUUID()))(), expectedRevision: snapshot?.revision ?? 0,
-        createdAt: (options.now ?? (() => new Date().toISOString()))(), data: source,
-      })));
+      prepared = capture(() => {
+        const data = parseCloudServiceCatalogData(source), previous = snapshot?.data ?? null;
+        const examinationChanged = previous === null || data.examinationCents !== previous.examinationCents;
+        const oldRows = previous?.services ?? [], changed: number[] = [];
+        if (data.services.length < oldRows.length || data.services.length > oldRows.length + 1) fail();
+        for (let index = 0; index < data.services.length; index++) {
+          if (index < oldRows.length && data.services[index].serviceId !== oldRows[index].serviceId) fail();
+          if (JSON.stringify(data.services[index]) !== JSON.stringify(oldRows[index])) changed.push(index);
+        }
+        if (examinationChanged ? changed.length !== 0 : changed.length !== 1 || previous === null) fail();
+        const mutation = prepareCloudServiceCatalogMutationCommand({ mutationVersion: 2,
+          operationId: (options.newId ?? (() => crypto.randomUUID()))(), expectedRevision: snapshot?.revision ?? 0,
+          createdAt: (options.now ?? (() => new Date().toISOString()))(),
+          ...(examinationChanged ? { action: 'examination', examinationCents: data.examinationCents }
+            : { action: 'service', index: changed[0], service: data.services[changed[0]] }),
+        });
+        nextData = freeze(applyCloudServiceCatalogMutation(previous, mutation));
+        return freeze(mutation);
+      });
     } catch {
-      if (active(before)) publish({ ...state, error: 'حدد قيمة الكشف صراحة، وراجع أسماء الخدمات والأسعار قبل الحفظ.' });
+      if (active(before)) publish({ ...state, error: 'احفظ تعديل قيمة الكشف أو خدمة واحدة فقط في كل عملية. لا يمكن حذف الخدمات أو إعادة ترتيبها؛ يمكن إيقاف الخدمة.' });
       return false;
     }
     if (!active(before) || busy() || command || state.draft !== source || state.snapshot !== snapshot) return false;
-    command = prepared; acknowledged = null;
+    command = prepared; expectedData = nextData!; acknowledged = null;
     const ticket = ++epoch;
     publish({ ...state, saveStatus: 'preparing', pendingOperationId: prepared.operationId, error: '', notice: '' });
     return execute(ticket);
@@ -209,7 +237,7 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
       actorUid = current.intent.actorUid;
       const result = checkedIntent(await call(ticket, journal, 'cancel', [submitted.operationId]), submitted.operationId, submitted);
       assertActive(ticket); if (result.intent.status !== 'cancelled') fail();
-      command = null; acknowledged = null;
+      command = null; expectedData = null; acknowledged = null;
       publish({ ...state, snapshot: null, loaded: false, loading: false, draft: null, pendingOperationId: null, saveStatus: 'idle',
         history: [], historyLoaded: false, historyNextAfterId: null, error: '',
         notice: 'تم تأكيد إلغاء العملية قبل تنفيذها. اقرأ أحدث فهرس قبل أي تعديل جديد.' });
@@ -228,9 +256,13 @@ export function createCloudCatalogWorkspaceController(options: CloudCatalogWorks
       const cap = await getCapability(ticket); assertActive(ticket);
       const journal = cap.journal; assertActive(ticket);
       const result = checkedIntent(await call(ticket, journal, 'get', [operationId]), operationId);
-      assertActive(ticket); if (result.intent.status === 'cancelled') fail();
-      actorUid = result.intent.actorUid; command = freeze(result.recovered); acknowledged = null;
-      publish({ ...state, loading: false, draft: freeze(draft(command.data)), pendingOperationId: command.operationId, saveStatus: 'preparing' });
+      assertActive(ticket); if (result.intent.status === 'cancelled'
+        || !('mutationVersion' in result.recovered) && result.intent.status !== 'committed') fail();
+      actorUid = result.intent.actorUid; command = freeze(result.recovered); expectedData = null; acknowledged = null;
+      // A resumed mutation is not a full catalog snapshot. Do not invent empty
+      // services/default examination values while its acknowledgement is unknown.
+      publish({ ...state, loading: false, draft: 'mutationVersion' in command ? null : freeze(draft(command.data)),
+        pendingOperationId: command.operationId, saveStatus: 'preparing' });
       return execute(ticket);
     } catch {
       if (active(ticket)) publish({ ...state, loading: false, error: 'تعذر استرجاع عملية الأسعار المطلوبة؛ لم ننشئ عملية بديلة.' });
