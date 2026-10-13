@@ -16,6 +16,9 @@ import { createCloudOperatingPageController, type CloudOperatingPageController,
 import { CLOUD_CATALOG_UI_STAGE, createCloudCatalogUiPreview } from '../../utils/cloudCatalogUiStage';
 import type { CloudCatalogWorkspaceController } from '../../utils/cloudCatalogWorkspaceController';
 import { CLOUD_COMPLETE_RELEASE_UI, createCloudReleaseWorkspace, type CloudReleaseWorkspace } from '../../utils/cloudReleaseWorkspaceFactories';
+import type { CloudShellBranding, CloudShellSection } from './CloudClinicShell';
+import { CloudSelectedPatientDisplay, CloudSelectedPatientDisplayView } from '../patient/CloudSelectedPatientDisplay';
+import type { CloudOperatingOwner } from '../../utils/cloudOperatingAuth';
 
 const CloudContactsWorkspace = lazy(() => import('../contacts/CloudContactsWorkspace'));
 const CloudPatientsWorkspace = lazy(() => import('../patients/CloudPatientsWorkspace'));
@@ -26,6 +29,10 @@ const CloudClinicSettingsWorkspace = lazy(() => import('../settings/CloudClinicS
 const CloudProstheticWorkspace = lazy(() => import('../labs/CloudProstheticWorkspace').then(module => ({ default: module.CloudProstheticWorkspace })));
 const CloudPrescriptionWorkspace = lazy(() => import('../patient/CloudPrescriptionWorkspace'));
 const CloudExpensesWorkspace = lazy(() => import('../summary/CloudExpensesWorkspace').then(module => ({ default: module.CloudExpensesWorkspace })));
+const CloudClinicOverviewWorkspace = lazy(() => import('../summary/CloudClinicOverviewWorkspace').then(module => ({ default: module.CloudClinicOverviewWorkspace })));
+const CloudTransferWorkspace = lazy(() => import('../settings/CloudTransferWorkspace').then(module => ({ default: module.CloudTransferWorkspace })));
+const CloudClinicShell = lazy(() => import('./CloudClinicShell').then(module => ({ default: module.CloudClinicShell })));
+const CloudClinicClock = lazy(() => import('./CloudClinicShell').then(module => ({ default: module.CloudClinicClock })));
 type ContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
 
 const INITIAL_STATE: CloudOperatingPageState = {
@@ -60,6 +67,11 @@ export default function CloudOperatingPage() {
   const [catalogWorkspace, setCatalogWorkspace] = useState<CloudCatalogWorkspaceController | null>(null);
   const additionalRef = useRef<CloudReleaseWorkspace | null>(null);
   const [additional, setAdditional] = useState<CloudReleaseWorkspace | null>(null);
+  const lastOwner = useRef<CloudOperatingOwner | null>(null);
+  const [branding, setBranding] = useState<CloudShellBranding | null>(null);
+  const [patientDisplay, setPatientDisplay] = useState(false);
+  const [displayNotice, setDisplayNotice] = useState('');
+  const [selectingWalkIn, setSelectingWalkIn] = useState(false);
   const hasPreview = () => !!(previewRef.current || patientPreviewRef.current || clinicalPreviewRef.current || catalogPreviewRef.current);
 
   useEffect(() => {
@@ -70,6 +82,12 @@ export default function CloudOperatingPage() {
     const unsubscribe = controller.subscribe(next => {
       if (active.current === controller) {
         setView(next);
+        if (next.auth.phase === 'owner-checked' && next.auth.owner) {
+          if (lastOwner.current && lastOwner.current.uid !== next.auth.owner.uid) { setBranding(null); setPatientDisplay(false); }
+          lastOwner.current = next.auth.owner;
+        } else if (next.auth.phase !== 'checking') {
+          lastOwner.current = null; setBranding(null); setPatientDisplay(false); setDisplayNotice(''); setSelectingWalkIn(false);
+        }
         // Temporary Auth checking keeps the same workspace lease. Actual
         // identity loss disposes it in the parent before this UI notification.
         if (next.contacts.phase !== 'open') setWorkspace(null);
@@ -95,10 +113,26 @@ export default function CloudOperatingPage() {
       catalogPreviewRef.current?.dispose();
       catalogPreviewRef.current = null;
       additionalRef.current = null;
+      lastOwner.current = null;
       unsubscribe();
       void controller.dispose().catch(() => undefined);
     };
   }, []);
+
+  useEffect(() => {
+    if (!additional || !['home', 'directory', 'finance', 'export'].includes(additional.kind)) return;
+    if (!(additional.kind === 'home' || additional.kind === 'directory' || additional.kind === 'finance' || additional.kind === 'export')) return;
+    const parent = active.current, ownerUid = lastOwner.current?.uid;
+    const update = () => {
+      if (!parent || !ownerUid || active.current !== parent || lastOwner.current?.uid !== ownerUid
+        || parent.getAdditionalWorkspace(additional.kind) !== additional) return;
+      const state = additional.controller.getState();
+      if (state.closed || !state.snapshot) return;
+      const data = state.snapshot.settings.clinicSettings.data;
+      setBranding({ identity: data.identity, theme: data.theme, content: data.content, readTime: state.snapshot.readTime });
+    };
+    update(); return additional.controller.subscribe(update);
+  }, [additional]);
 
   async function leave(returnToLocal: boolean) {
     const controller = active.current;
@@ -180,7 +214,7 @@ export default function CloudOperatingPage() {
     setPatientPreview(controller);
   }
 
-  async function openPatients() {
+  async function openPatients(create = false) {
     if (!CLOUD_PATIENTS_UI_STAGE.available) return;
     const controller = active.current;
     if (!controller || !validRoute() || hasPreview()) return;
@@ -189,6 +223,7 @@ export default function CloudOperatingPage() {
       || controller.getPatientsWorkspace() !== patients) return;
     setPatientWorkspace(patients);
     await patients.refresh();
+    if (create && active.current === controller && controller.getPatientsWorkspace() === patients && validRoute()) patients.beginCreate();
   }
 
   function closePatients(displayed: CloudPatientWorkspaceController) {
@@ -211,7 +246,7 @@ export default function CloudOperatingPage() {
     setClinicalPreview(controller);
   }
 
-  async function openClinical(patientRecordId?: string) {
+  async function openClinical(patientRecordId?: string, startVisit = false) {
     if (!CLOUD_CLINICAL_UI_STAGE.available) return;
     const controller = active.current;
     if (!controller || !validRoute() || hasPreview()) return;
@@ -221,7 +256,13 @@ export default function CloudOperatingPage() {
     setClinicalWorkspace(clinical);
     // A selected UUID is only a read target, never a profile-only financial
     // snapshot. Opening from the entry alone does not read any clinic records.
-    if (patientRecordId !== undefined) await clinical.file.open(patientRecordId);
+    if (patientRecordId !== undefined) {
+      await clinical.file.open(patientRecordId);
+      const snapshot = clinical.file.getState().snapshot;
+      if (startVisit && snapshot && active.current === controller && controller.getClinicalWorkspace() === clinical && validRoute()) {
+        setSelectingWalkIn(false); await clinical.visit?.begin(snapshot);
+      }
+    }
   }
 
   function closeClinical(displayed: CloudClinicalWorkspaceBundle) {
@@ -260,12 +301,12 @@ export default function CloudOperatingPage() {
     } else if (active.current?.getCatalogWorkspace() === displayed && active.current.closeCatalog(displayed)) setCatalogWorkspace(null);
   }
 
-  async function openAdditional(kind: 'appointments' | 'settings' | 'prosthetics' | 'prescription' | 'expenses', patientRecordId?: string) {
+  async function openAdditional(kind: 'appointments' | 'settings' | 'prosthetics' | 'prescription' | 'expenses' | 'home' | 'directory' | 'finance' | 'export' | 'transfer', patientRecordId?: string) {
     if (!CLOUD_COMPLETE_RELEASE_UI.available || hasPreview()) return;
     const parent = active.current;
     if (!parent || !validRoute() || kind === 'prescription' && patientRecordId === undefined) return;
     const opened = await parent.openAdditional(kind, context => createCloudReleaseWorkspace(context,
-      kind === 'appointments' ? { kind, initialDate: (() => {
+      kind === 'appointments' || kind === 'home' || kind === 'directory' || kind === 'finance' || kind === 'export' ? { kind, initialDate: (() => {
         const parts = new Intl.DateTimeFormat('en', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
         const part = (type: string) => parts.find(item => item.type === type)?.value ?? '';
         return `${part('year')}-${part('month')}-${part('day')}`;
@@ -274,11 +315,40 @@ export default function CloudOperatingPage() {
     if (!opened || active.current !== parent || !validRoute() || parent.getAdditionalWorkspace(kind) !== opened) return;
     additionalRef.current = opened; setAdditional(opened);
     if (opened.kind === 'prosthetics' && patientRecordId !== undefined) await opened.controller.beginOrder(patientRecordId);
+    if (opened.kind === 'home' || opened.kind === 'directory' || opened.kind === 'finance' || opened.kind === 'export') await opened.controller.refresh();
   }
   function closeAdditional(displayed: CloudReleaseWorkspace) {
     const parent = active.current;
     if (!parent || additionalRef.current !== displayed || parent.getAdditionalWorkspace(displayed.kind) !== displayed) return;
     if (parent.closeAdditional(displayed)) { additionalRef.current = null; setAdditional(null); }
+  }
+  function navigate(section: string) {
+    const parent = active.current;
+    if (!CLOUD_COMPLETE_RELEASE_UI.available || !parent || !validRoute() || hasPreview() || patientDisplay
+      || parent.getState().auth.phase !== 'owner-checked' || parent.getState().pending || parent.getState().closing) return;
+    setSelectingWalkIn(section === 'walk-in');
+    if (section === 'patients-new') void openPatients(true);
+    else if (section === 'patients') void openPatients();
+    else if (section === 'contacts' || section === 'directory') void openAdditional('directory');
+    else if (section === 'contact-edit') void openContacts();
+    else if (section === 'walk-in') void openAdditional('directory');
+    else if (section === 'lab') void openAdditional('prosthetics');
+    else if (section === 'summary') void openAdditional('finance');
+    else if (section === 'catalog') void openCatalog();
+    else if (['home', 'appointments', 'settings', 'finance', 'export', 'transfer', 'expenses'].includes(section)) void openAdditional(section as 'home' | 'appointments' | 'settings' | 'finance' | 'export' | 'transfer' | 'expenses');
+  }
+  function togglePatientDisplay() {
+    const parent = active.current;
+    if (!parent || !validRoute() || parent.getState().auth.phase !== 'owner-checked') return;
+    if (patientDisplay) { setPatientDisplay(false); setDisplayNotice(''); return; }
+    const contacts = parent.getContactsWorkspace()?.getState(), patients = parent.getPatientsWorkspace()?.getState();
+    const clinical = parent.getClinicalWorkspace()?.file.getState(), catalog = parent.getCatalogWorkspace()?.getState();
+    if ([contacts, patients, catalog].some(state => state && (state.draft || state.loading || state.saveStatus !== 'idle'))
+      || clinical && (clinical.draftDirty || clinical.loading || clinical.pendingOperationId || clinical.saveStatus !== 'idle')
+      || additionalRef.current && !additionalRef.current.canClose()) {
+      setDisplayNotice('أكمل المسودة أو ألغها وانتظر تأكيد العملية قبل عرض شاشة المريض؛ حتى لا تفقد تعديلًا غير محفوظ.'); return;
+    }
+    setDisplayNotice(''); setPatientDisplay(true);
   }
 
   if (!validRoute()) return <CloudUnavailablePage />;
@@ -291,6 +361,59 @@ export default function CloudOperatingPage() {
   const displayedClinical = clinicalPreview ?? clinicalWorkspace;
   const displayedCatalog = catalogPreview ?? catalogWorkspace;
 
+  const workspaceContent = additional ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح القسم…</section>}>
+    {additional.kind === 'appointments' ? <CloudAppointmentsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} />
+      : additional.kind === 'settings' ? <><div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{([['catalog', 'الخدمات والأسعار'], ['transfer', 'الاستيراد'], ['export', 'التصدير'], ['contact-edit', 'إدارة الأرقام']] as const).map(([section, label]) => <button type="button" className="min-h-11 rounded-xl border border-slate-200 bg-white p-3 font-bold" disabled={blocked} key={section} onClick={() => navigate(section)}>{label}</button>)}</div><CloudClinicSettingsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} /></>
+      : additional.kind === 'prosthetics' ? <CloudProstheticWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={view.closing} />
+      : additional.kind === 'expenses' ? <CloudExpensesWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={view.closing} />
+      : additional.kind === 'transfer' ? <CloudTransferWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={view.closing} />
+      : additional.kind === 'prescription' ? <CloudPrescriptionWorkspace controller={additional.controller} patientRecordId={additional.patientRecordId} onClose={() => closeAdditional(additional)} />
+      : <>{selectingWalkIn && additional.kind === 'directory' && <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 leading-7">اختر ملف المريض من البحث بالاسم أو الرقم لتسجيل زيارة بدون موعد. <button type="button" disabled={blocked} className="min-h-11 font-bold text-indigo-700" onClick={() => navigate('patients-new')}>إنشاء ملف لمريض جديد</button></div>}<CloudClinicOverviewWorkspace controller={additional.controller} disabled={view.closing} onClose={() => closeAdditional(additional)} onOpenPatient={id => void openClinical(id, selectingWalkIn)} onNavigate={navigate} /></>}
+  </Suspense> : displayedCatalog ? <Suspense fallback={<p role="status">جارٍ فتح الخدمات والأسعار…</p>}>
+    <CloudServiceCatalogWorkspace controller={displayedCatalog} onClose={() => closeCatalog(displayedCatalog)} previewOnly={catalogPreview !== null} />
+  </Suspense> : displayedClinical ? <Suspense fallback={<p role="status">جارٍ فتح الملف السريري…</p>}>
+    <CloudClinicalWorkspace controller={displayedClinical} onClose={() => closeClinical(displayedClinical)} previewOnly={clinicalPreview !== null} closing={view.closing}
+      onStartProsthetic={CLOUD_COMPLETE_RELEASE_UI.available && clinicalPreview === null ? id => void openAdditional('prosthetics', id) : undefined}
+      onOpenPrescription={CLOUD_COMPLETE_RELEASE_UI.available && clinicalPreview === null ? id => void openAdditional('prescription', id) : undefined} />
+  </Suspense> : displayedPatients ? <Suspense fallback={<p role="status">جارٍ فتح ملفات المرضى…</p>}>
+    <CloudPatientsWorkspace controller={displayedPatients} onClose={() => closePatients(displayedPatients)} previewOnly={patientPreview !== null} closing={view.closing}
+      onOpenClinical={patientPreview === null && CLOUD_CLINICAL_UI_STAGE.available ? id => void openClinical(id) : undefined} />
+  </Suspense> : displayedWorkspace ? <Suspense fallback={<p role="status">جارٍ فتح جهات الاتصال…</p>}>
+    <CloudContactsWorkspace controller={displayedWorkspace} onClose={() => closeContacts(displayedWorkspace)} previewOnly={preview !== null} />
+  </Suspense> : null;
+
+  if (CLOUD_COMPLETE_RELEASE_UI.available && (owner || view.auth.phase === 'checking' && lastOwner.current)) {
+    const section: CloudShellSection = displayedPatients || displayedClinical ? 'patients' : displayedWorkspace ? 'contacts'
+      : additional?.kind === 'appointments' ? 'appointments' : additional?.kind === 'prosthetics' ? 'lab'
+      : additional?.kind === 'finance' || additional?.kind === 'expenses' ? 'summary' : additional?.kind === 'directory' ? 'contacts'
+      : additional?.kind === 'settings' || additional?.kind === 'transfer' || additional?.kind === 'export' || displayedCatalog ? 'settings' : 'home';
+    return <Suspense fallback={<main dir="rtl" role="status" className="min-h-dvh bg-slate-50 p-6">جارٍ فتح مساحة العيادة…</main>}><CloudClinicShell branding={branding} section={section} accountEmail={owner?.email || ''} disabled={view.closing || view.cleanupFailed}
+      checking={view.auth.phase !== 'owner-checked'} error={view.error || displayNotice || view.contacts.error || view.patients.error || view.clinical.error || view.catalog.error}
+      patientDisplayActive={patientDisplay} onPatientDisplay={togglePatientDisplay}
+      patientDisplay={displayedClinical ? <CloudSelectedPatientDisplay controller={displayedClinical.file} /> : <CloudSelectedPatientDisplayView snapshot={null} />}
+      onNavigate={navigate} onSignOut={() => void leave(false)} onRefreshSession={() => void active.current?.refresh()}>
+      {section === 'home' && <CloudClinicClock />}
+      {workspaceContent || <section className="rounded-3xl border border-slate-200 bg-white p-6"><h1 className="text-xl font-extrabold">العيادة</h1><p className="my-3 leading-7">ابدأ العمل أو اختر قسمًا من الشريط. لا تُرفع أي بيانات محلية إلى حسابك.</p><button type="button" className="min-h-12 rounded-xl bg-indigo-600 px-5 py-3 font-bold text-white" disabled={blocked} onClick={() => navigate('home')}>ابدأ العمل</button></section>}
+    </CloudClinicShell></Suspense>;
+  }
+  if (CLOUD_COMPLETE_RELEASE_UI.available) return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-8 text-slate-900">
+    <section className="mx-auto w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+      <div className="mb-6 flex items-center gap-3"><ClinicLogo layout="icon-only" size="lg" showText={false}/><div><h1 className="text-xl font-extrabold">إدارة العيادة</h1><p className="mt-1 text-sm text-slate-500">دخول المالك</p></div></div>
+      {view.error && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-3 text-sm leading-7 text-rose-800">{view.error}</p>}
+      <form className="space-y-4" aria-busy={busy} onSubmit={event => {
+        event.preventDefault(); const parent = active.current;
+        if (!parent || blocked || hasPreview() || !validRoute()) return;
+        const submittedPassword = password; setPassword(''); void parent.signIn(email, submittedPassword);
+      }}>
+        <label className="block space-y-2"><span className="text-sm font-bold">البريد الإلكتروني</span><input name="email" type="email" dir="ltr" autoComplete="username" required maxLength={254} disabled={blocked} value={email} onChange={event => setEmail(event.target.value)} className="min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-base" /></label>
+        <label className="block space-y-2"><span className="text-sm font-bold">كلمة سر حساب الموقع</span><input name="password" type="password" autoComplete="current-password" required maxLength={4096} disabled={blocked} value={password} onChange={event => setPassword(event.target.value)} className="min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-base" /></label>
+        <button type="submit" disabled={blocked} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 font-bold text-white disabled:opacity-50">{busy ? <LoaderCircle size={20}/> : <ShieldCheck size={20}/>} {busy ? 'جارٍ التحقق…' : 'دخول العيادة'}</button>
+      </form>
+      {busy && <button type="button" disabled={view.closing || view.cleanupFailed} className="mt-3 min-h-11 w-full rounded-xl border border-slate-300 p-3 font-bold" onClick={() => void leave(false)}>{view.closing ? 'جارٍ إغلاق الجلسة…' : 'إلغاء وتسجيل الخروج'}</button>}
+      <p className="mt-5 text-xs leading-6 text-slate-500">اكتب كلمة سر الموقع، وليس حساب Google. الجلسة في الذاكرة فقط؛ لا تُحمّل بيانات المرضى قبل تسجيل الدخول.</p>
+    </section>
+  </main>;
+
   return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-5 sm:px-6 sm:py-8 text-slate-900">
     <div className="mx-auto w-full max-w-5xl space-y-5 sm:space-y-7">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -298,24 +421,7 @@ export default function CloudOperatingPage() {
         <button type="button" onClick={() => void leave(true)} disabled={view.closing || view.cleanupFailed} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 disabled:opacity-50"><ArrowRight size={18} aria-hidden="true" /> العودة للنسخة المحلية</button>
       </header>
 
-      {additional ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح القسم…</section>}>
-        {additional.kind === 'appointments' ? <CloudAppointmentsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} />
-          : additional.kind === 'settings' ? <CloudClinicSettingsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} />
-          : additional.kind === 'prosthetics' ? <CloudProstheticWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={view.closing} />
-          : additional.kind === 'expenses' ? <CloudExpensesWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={view.closing} />
-          : <CloudPrescriptionWorkspace controller={additional.controller} patientRecordId={additional.patientRecordId} onClose={() => closeAdditional(additional)} />}
-      </Suspense> : displayedCatalog ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح الخدمات والأسعار…</section>}>
-        <CloudServiceCatalogWorkspace controller={displayedCatalog} onClose={() => closeCatalog(displayedCatalog)} previewOnly={catalogPreview !== null} />
-      </Suspense> : displayedClinical ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح الملف السريري وسجل الاسترجاع…</section>}>
-        <CloudClinicalWorkspace controller={displayedClinical} onClose={() => closeClinical(displayedClinical)} previewOnly={clinicalPreview !== null} closing={view.closing}
-          onStartProsthetic={CLOUD_COMPLETE_RELEASE_UI.available && clinicalPreview === null ? patientId => void openAdditional('prosthetics', patientId) : undefined}
-          onOpenPrescription={CLOUD_COMPLETE_RELEASE_UI.available && clinicalPreview === null ? patientId => void openAdditional('prescription', patientId) : undefined} />
-      </Suspense> : displayedPatients ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة ملفات المرضى…</section>}>
-        <CloudPatientsWorkspace controller={displayedPatients} onClose={() => closePatients(displayedPatients)} previewOnly={patientPreview !== null} closing={view.closing}
-          onOpenClinical={patientPreview === null && CLOUD_CLINICAL_UI_STAGE.available ? patientRecordId => void openClinical(patientRecordId) : undefined} />
-      </Suspense> : displayedWorkspace ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح واجهة جهات الاتصال…</section>}>
-        <CloudContactsWorkspace controller={displayedWorkspace} onClose={() => closeContacts(displayedWorkspace)} previewOnly={preview !== null} />
-      </Suspense> : <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+      {workspaceContent || <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
         <section className="min-w-0 rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm" aria-labelledby="operating-account-title">
           <div className="mb-5 flex items-start gap-3"><span className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><ShieldCheck size={25} aria-hidden="true" /></span><div className="min-w-0"><h2 id="operating-account-title" className="text-lg font-extrabold">حساب مالك العيادة</h2><p className="mt-1 text-sm leading-7 text-slate-500">نستخدم حساب Firebase وعضويتك المعتمدة، وليس حساب الدخول المحلي.</p></div></div>
 

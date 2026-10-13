@@ -18,6 +18,13 @@ export interface CloudPatientCommand {
   operationId: string; recordId: string; expectedRevision: number;
   action: 'create' | 'update'; profile: CloudPatientProfile;
 }
+/** Explicit owner historical-number import, never a general upsert. Existing
+ * create/update command shapes and retry fingerprints remain unchanged. */
+export interface CloudPatientImportCommand {
+  operationId: string; recordId: string; expectedRevision: 0;
+  action: 'import'; fileNo: number; profile: CloudPatientProfile;
+}
+export type CloudPatientWriteCommand = CloudPatientCommand | CloudPatientImportCommand;
 export interface CloudPatientCommit {
   status: 'committed' | 'already-committed'; recordId: string; fileNo: number; revision: number;
 }
@@ -86,16 +93,23 @@ function calendarDay(value: unknown): value is string {
 function profile(value: unknown): CloudPatientProfile {
   const item = fields(value, ['name', 'mobile', 'age', 'gender', 'firstVisit', 'notes', 'allergy']);
   if (!text(item.name, 200) || !item.name || !text(item.mobile, 60) || item.mobile !== '' && !normalizeContactPhone(item.mobile)
-    || !integer(item.age, true) || item.age > 120 || !text(item.gender, 40) || !calendarDay(item.firstVisit)
+    || !integer(item.age, true) || item.age > 120 || !text(item.gender, 40) || item.firstVisit !== '' && !calendarDay(item.firstVisit)
     || !text(item.notes, 4000, true) || !text(item.allergy, 1000, true)) invalid();
   return { name: item.name, mobile: item.mobile, age: item.age, gender: item.gender,
     firstVisit: item.firstVisit, notes: item.notes, allergy: item.allergy };
 }
-export function prepareCloudPatientCommand(value: unknown): CloudPatientCommand {
+export function prepareCloudPatientCommand(value: unknown): CloudPatientWriteCommand {
   try {
-    const item = fields(value, ['operationId', 'recordId', 'expectedRevision', 'action', 'profile']);
+    const item = fields(value, ['operationId', 'recordId', 'expectedRevision', 'action', 'profile'], ['fileNo']);
     if (!uuid(item.operationId) || !uuid(item.recordId) || !integer(item.expectedRevision, true) || item.expectedRevision >= MAX
-      || !['create', 'update'].includes(item.action as string) || (item.action === 'create') !== (item.expectedRevision === 0)) invalid();
+      || !['create', 'update', 'import'].includes(item.action as string)
+      || (item.action !== 'update') !== (item.expectedRevision === 0)) invalid();
+    if (item.action === 'import') {
+      if (!integer(item.fileNo)) invalid();
+      return { operationId: item.operationId, recordId: item.recordId, expectedRevision: 0,
+        action: 'import', fileNo: item.fileNo, profile: profile(item.profile) };
+    }
+    if (Object.hasOwn(item, 'fileNo')) invalid();
     return { operationId: item.operationId, recordId: item.recordId, expectedRevision: item.expectedRevision,
       action: item.action as CloudPatientCommand['action'], profile: profile(item.profile) };
   } catch { return invalid(); }
@@ -230,13 +244,16 @@ function createPatientRepository(adapter: CloudPatientAdapter, options: CloudPat
         await reauthorize(uid); return result;
       } catch (error) { throw safeError(error); }
     },
-    async commit(input: CloudPatientCommand): Promise<CloudPatientCommit> {
+    async commit(input: CloudPatientWriteCommand): Promise<CloudPatientCommit> {
       try {
         // Snapshot before the first await. The caller retains these identifiers
         // and content after an uncertain reply, never substitutes a new ID.
-        const prepared = prepareCloudPatientCommand(input), uid = await authorize();
+        const prepared = prepareCloudPatientCommand(input);
+        if (prepared.action === 'import' && !journalRequired) invalid();
+        const uid = await authorize();
         const requestHash = await hash(JSON.stringify([uid, prepared.operationId, prepared.recordId,
-          prepared.expectedRevision, prepared.action, prepared.profile]));
+          prepared.expectedRevision, prepared.action, prepared.profile,
+          ...(prepared.action === 'import' ? [prepared.fileNo] : [])]));
         const phoneKey = await phoneHash(prepared.profile);
         const baseReceipt = { schemaVersion: 1, clinicId: 'main', operationId: prepared.operationId,
           actorUid: uid, recordId: prepared.recordId, action: prepared.action, expectedRevision: prepared.expectedRevision,
@@ -255,19 +272,22 @@ function createPatientRepository(adapter: CloudPatientAdapter, options: CloudPat
             ? { intentCreatedAt: intent.createdAt, intentRequestHash: intent.requestHash } : {}) };
           if (oldReceipt !== null) {
             const item = fields(oldReceipt, [...Object.keys(expectedReceipt), 'fileNo']);
-            if (!integer(item.fileNo) || Object.keys(expectedReceipt).some(key => item[key] !== expectedReceipt[key as keyof typeof expectedReceipt])) throw new CloudPatientError('conflict');
+            if (!integer(item.fileNo) || prepared.action === 'import' && item.fileNo !== prepared.fileNo
+              || Object.keys(expectedReceipt).some(key => item[key] !== expectedReceipt[key as keyof typeof expectedReceipt])) throw new CloudPatientError('conflict');
             await reauthorize(uid);
             return { status: 'already-committed', recordId: prepared.recordId, fileNo: item.fileNo, revision: baseReceipt.resultRevision };
           }
           const stored = await tx.get(recordPath(prepared.recordId));
           const current = stored === null ? null : await checkedRecord(stored, prepared.recordId);
-          if (prepared.action === 'create' ? current !== null : !current || current.revision !== prepared.expectedRevision) throw new CloudPatientError('conflict');
+          if (prepared.action !== 'update' ? current !== null : !current || current.revision !== prepared.expectedRevision) throw new CloudPatientError('conflict');
           let fileNo: number;
-          if (prepared.action === 'create') {
+          let nextCounter: number | null = null;
+          if (prepared.action !== 'update') {
             const latest = counter(await tx.get(counterPath));
-            if (latest.lastFileNo >= MAX) unavailable();
+            if (prepared.action === 'create' && latest.lastFileNo >= MAX) unavailable();
             if (latest.lastOperationId === prepared.operationId) throw new CloudPatientError('conflict');
-            fileNo = latest.lastFileNo + 1;
+            fileNo = prepared.action === 'import' ? prepared.fileNo : latest.lastFileNo + 1;
+            nextCounter = Math.max(latest.lastFileNo, fileNo);
             if (await tx.get(filePath(fileNo)) !== null) throw new CloudPatientError('conflict');
           } else {
             fileNo = current!.fileNo;
@@ -276,8 +296,8 @@ function createPatientRepository(adapter: CloudPatientAdapter, options: CloudPat
           // All reads precede writes. Rules must independently couple these
           // records and check current owner membership at server commit.
           await reauthorize(uid);
-          if (prepared.action === 'create') {
-            tx.set(counterPath, { schemaVersion: 1, clinicId: 'main', lastFileNo: fileNo, lastOperationId: prepared.operationId });
+          if (prepared.action !== 'update') {
+            tx.set(counterPath, { schemaVersion: 1, clinicId: 'main', lastFileNo: nextCounter!, lastOperationId: prepared.operationId });
             tx.set(filePath(fileNo), { schemaVersion: 1, clinicId: 'main', fileNo, recordId: prepared.recordId });
           }
           tx.set(recordPath(prepared.recordId), { schemaVersion: 1, clinicId: 'main', recordId: prepared.recordId,

@@ -3,8 +3,9 @@
  * pnpm exec tsx scripts/bootstrap-empty-clinic.ts --apply --project=... 
  *   --cli-root=<installed firebase-tools> --owner-uid=<verified UID>
  *   --operation-id=<retained UUID> --routing-operation-id=<different UUID>
+ *   --settings-operation-id=<third distinct retained UUID>
  *   --created-at=<retained ISO timestamp>
- * Keep both IDs/time for an exact retry after an uncertain reply. The tool
+ * Keep all three IDs/time for an exact retry after an uncertain reply. The tool
  * never generates a replacement, uploads browser data or logs owner details.
  * --inspect verifies infrastructure only; it does NOT close release gates.
  * REST transaction/query/create preconditions:
@@ -56,7 +57,7 @@ function decodeFields(fields: any, depth = 0): Record<string, unknown> {
   return result;
 }
 function argumentsOf(argv: string[]) {
-  const allowed = ['project', 'cli-root', 'owner-uid', 'operation-id', 'routing-operation-id', 'created-at'];
+  const allowed = ['project', 'cli-root', 'owner-uid', 'operation-id', 'routing-operation-id', 'settings-operation-id', 'created-at'];
   const input: Record<string, string> = {}; let mode: 'apply' | 'inspect' | null = null;
   for (const arg of argv) {
     if (arg === '--apply' || arg === '--inspect') { if (mode) throw new Error(); mode = arg === '--apply' ? 'apply' : 'inspect'; continue; }
@@ -66,7 +67,7 @@ function argumentsOf(argv: string[]) {
   }
   if (!mode || input.project !== CLOUD_PROJECT_ID || !input['cli-root'] || !path.isAbsolute(input['cli-root'])
     || !input['owner-uid'] || !/^[A-Za-z0-9_-]{1,128}$/.test(input['owner-uid'])
-    || mode === 'apply' && (!input['operation-id'] || !input['routing-operation-id'] || !input['created-at'])) throw new Error();
+    || mode === 'apply' && (!input['operation-id'] || !input['routing-operation-id'] || !input['settings-operation-id'] || !input['created-at'])) throw new Error();
   return { mode, input };
 }
 
@@ -144,7 +145,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
           },
           create: (target, value) => {
             staged = true;
-            if (writes.length >= 8 || target.includes('/members/')) throw new Error();
+            if (writes.length >= 11 || target.includes('/members/')) throw new Error();
             const encoded = encode(value) as { mapValue: { fields: object } };
             writes.push({ update: { name: checkedPath(target).slice(1), fields: encoded.mapValue.fields }, currentDocument: { exists: false } });
           },
@@ -160,7 +161,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
     },
   };
   const result = await createCloudEmptyClinicBootstrap(adapter).initialize({ operationId: input['operation-id'],
-    routingOperationId: input['routing-operation-id'], createdAt: input['created-at'] });
+    routingOperationId: input['routing-operation-id'], settingsOperationId: input['settings-operation-id'], createdAt: input['created-at'] });
   return { ...result, project, examinationEGP: 100, browserDataMigrated: false };
 }
 

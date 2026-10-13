@@ -26,6 +26,11 @@ export interface CloudAppointmentSlot { recordId: string; startMinute: number; e
 export interface CloudAppointmentDay {
   schemaVersion: 1; clinicId: 'main'; recordId: string; revision: number;
   lastOperationId: string; slots: CloudAppointmentSlot[];
+  /** Absent only on historical read-only UUID-sorted indexes. */
+  slotIndexVersion?: 2;
+}
+export interface CloudAppointmentDayChange {
+  date: string; expectedDayRevision: number; removeAt: number; insertAt: number;
 }
 export interface CloudAppointmentCommit {
   status: 'committed' | 'already-committed'; recordId: string; revision: number;
@@ -137,24 +142,27 @@ export function parseCloudAppointmentRecord(value: unknown): CloudAppointmentRec
 }
 export function parseCloudAppointmentDay(value: unknown): CloudAppointmentDay {
   try {
-    const item = fields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'slots']);
+    const modern = !!value && typeof value === 'object' && Object.hasOwn(value, 'slotIndexVersion');
+    const item = fields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'slots',
+      ...(modern ? ['slotIndexVersion'] : [])]);
     if (item.schemaVersion !== 1 || item.clinicId !== 'main' || !calendarDay(item.recordId)
+      || modern && item.slotIndexVersion !== 2
       || !integer(item.revision, 1, MAX_REVISION) || !uuid(item.lastOperationId) || !Array.isArray(item.slots)
       || item.slots.length > MAX_CLOUD_APPOINTMENT_DAY_SLOTS || Reflect.ownKeys(item.slots).length !== item.slots.length + 1) invalid();
-    const rawSlots = item.slots; let previous = '';
+    const rawSlots = item.slots; let previous = ''; const ids = new Set<string>();
     const slots = Array.from({ length: rawSlots.length }, (_, index): CloudAppointmentSlot => {
       const descriptor = Object.getOwnPropertyDescriptor(rawSlots, String(index));
       if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) invalid();
       const slot = fields(descriptor.value, ['recordId', 'startMinute', 'endMinute']);
-      if (!uuid(slot.recordId) || slot.recordId <= previous || !integer(slot.startMinute, 0, 1439)
+      if (!uuid(slot.recordId) || ids.has(slot.recordId) || !modern && slot.recordId <= previous || !integer(slot.startMinute, 0, 1439)
         || !integer(slot.endMinute, 1, 1440) || slot.endMinute <= slot.startMinute) invalid();
-      previous = slot.recordId;
+      previous = slot.recordId; ids.add(slot.recordId);
       return { recordId: slot.recordId, startMinute: slot.startMinute, endMinute: slot.endMinute };
     });
-    const ordered = [...slots].sort((a, b) => a.startMinute - b.startMinute);
+    const ordered = modern ? slots : [...slots].sort((a, b) => a.startMinute - b.startMinute);
     if (ordered.some((slot, index) => index > 0 && ordered[index - 1].endMinute > slot.startMinute)) invalid();
     return { schemaVersion: 1, clinicId: 'main', recordId: item.recordId, revision: item.revision,
-      lastOperationId: item.lastOperationId, slots };
+      lastOperationId: item.lastOperationId, slots, ...(modern ? { slotIndexVersion: 2 as const } : {}) };
   } catch { return invalid(); }
 }
 /** Full day history is distinct from occupied slots and includes inactive
@@ -182,6 +190,28 @@ async function sha256(value: string) {
 const occupied = (item: CloudAppointmentData) => OCCUPIED.includes(item.status);
 const slotFor = (id: string, item: CloudAppointmentData): CloudAppointmentSlot => ({ recordId: id,
   startMinute: startMinute(item.time), endMinute: startMinute(item.time) + item.durationMinutes });
+/** Receipts are immutable, so historical ACK validates their exact proof shape
+ * without reading a newer booking/day or attempting to reconstruct old state. */
+function historicalDayChanges(value: unknown, command: CloudAppointmentCommand): CloudAppointmentDayChange[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2
+    || Reflect.ownKeys(value).length !== value.length + 1) invalid();
+  let previous = '';
+  const changes = Array.from({ length: value.length }, (_, index): CloudAppointmentDayChange => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) invalid();
+    const item = fields(descriptor.value, ['date', 'expectedDayRevision', 'removeAt', 'insertAt']);
+    if (!calendarDay(item.date) || item.date <= previous || !integer(item.expectedDayRevision, 0, MAX_REVISION - 1)
+      || !integer(item.removeAt, -1, MAX_CLOUD_APPOINTMENT_DAY_SLOTS - 1)
+      || !integer(item.insertAt, -1, MAX_CLOUD_APPOINTMENT_DAY_SLOTS - 1)
+      || item.expectedDayRevision === 0 && item.removeAt !== -1
+      || (item.insertAt >= 0) !== (item.date === command.data.date && occupied(command.data))) invalid();
+    previous = item.date;
+    return { date: item.date, expectedDayRevision: item.expectedDayRevision, removeAt: item.removeAt, insertAt: item.insertAt };
+  });
+  if (!changes.some(item => item.date === command.data.date)
+    || command.expectedRevision === 0 && (changes.length !== 1 || changes[0].removeAt !== -1)) invalid();
+  return changes;
+}
 export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapter, options: CloudAppointmentOptions = {}) {
   const digest = options.digest ?? sha256;
   const authorize = async () => { const uid = await adapter.authorizeOwner(); if (!actor(uid)) invalid(); return uid; };
@@ -245,8 +275,13 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
           await reauthorize(uid);
           if (intent.createdAt !== command.createdAt || intent.status !== (oldReceipt === null ? 'prepared' : 'committed')) conflict();
           if (oldReceipt !== null) {
-            const old = fields(oldReceipt, Object.keys(receipt));
+            const modern = typeof oldReceipt === 'object' && Object.hasOwn(oldReceipt, 'dayIndexVersion');
+            const old = fields(oldReceipt, [...Object.keys(receipt), ...(modern ? ['dayIndexVersion', 'dayChanges'] : [])]);
             if (Object.keys(receipt).some(key => old[key] !== receipt[key as keyof typeof receipt])) conflict();
+            if (modern) {
+              if (old.dayIndexVersion !== 2) invalid();
+              historicalDayChanges(old.dayChanges, command);
+            }
             await reauthorize(uid);
             // Historical acknowledgement never reads or rewrites newer slots,
             // appointments or linked patient profiles.
@@ -260,7 +295,7 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
           const days = new Map<string, CloudAppointmentDay | null>();
           for (const date of dates) {
             const raw = await checked.get(dayPath(date)), day = raw === null ? null : parseCloudAppointmentDay(raw);
-            if (day && day.recordId !== date) invalid(); days.set(date, day);
+            if (day && (day.recordId !== date || day.slotIndexVersion !== 2)) invalid(); days.set(date, day);
           }
           if (command.data.patientRecordId !== null) {
             const raw = await checked.get(`clinics/main/patientProfiles/${command.data.patientRecordId}`);
@@ -275,22 +310,28 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
               if (!own || own.startMinute !== expected.startMinute || own.endMinute !== expected.endMinute) invalid();
             } else if (own) invalid();
           }
-          const nextDays: CloudAppointmentDay[] = [];
+          const nextDays: CloudAppointmentDay[] = [], dayChanges: CloudAppointmentDayChange[] = [];
           for (const date of dates) {
             // Fence ALL records, not only occupied reservations. An inactive
             // booking can be edited/moved while the full-day reader paginates.
             // Always advance both affected days so it detects that race.
             const previous = days.get(date)!;
             if (previous && previous.revision >= MAX_REVISION) unavailable();
-            const slots = (previous?.slots ?? []).filter(slot => slot.recordId !== command.recordId);
+            const slots = [...(previous?.slots ?? [])];
+            const removeAt = slots.findIndex(slot => slot.recordId === command.recordId);
+            if (removeAt >= 0) slots.splice(removeAt, 1);
+            let insertAt = -1;
             if (newOccupied && command.data.date === date) {
               const nextSlot = slotFor(command.recordId, command.data);
               if (slots.some(slot => slot.startMinute < nextSlot.endMinute && nextSlot.startMinute < slot.endMinute)) conflict();
-              if (slots.length >= MAX_CLOUD_APPOINTMENT_DAY_SLOTS) conflict(); slots.push(nextSlot);
+              if (slots.length >= MAX_CLOUD_APPOINTMENT_DAY_SLOTS) conflict();
+              insertAt = slots.findIndex(slot => slot.startMinute >= nextSlot.startMinute);
+              if (insertAt < 0) insertAt = slots.length;
+              slots.splice(insertAt, 0, nextSlot);
             }
-            slots.sort((a, b) => a.recordId < b.recordId ? -1 : 1);
+            dayChanges.push({ date, expectedDayRevision: previous?.revision ?? 0, removeAt, insertAt });
             nextDays.push(parseCloudAppointmentDay({ schemaVersion: 1, clinicId: 'main', recordId: date,
-              revision: (previous?.revision ?? 0) + 1, lastOperationId: command.operationId, slots }));
+              revision: (previous?.revision ?? 0) + 1, lastOperationId: command.operationId, slots, slotIndexVersion: 2 }));
           }
           const next = parseCloudAppointmentRecord({ schemaVersion: 1, clinicId: 'main', recordId: command.recordId,
             revision: receipt.resultRevision, lastOperationId: command.operationId, data: command.data });
@@ -299,7 +340,7 @@ export function createCloudAppointmentRepository(adapter: CloudAppointmentAdapte
           await reauthorize(uid);
           transaction.set(recordPath(command.recordId), next);
           for (const day of nextDays) transaction.set(dayPath(day.recordId), day);
-          transaction.set(receiptPath(command.operationId), receipt);
+          transaction.set(receiptPath(command.operationId), { ...receipt, dayIndexVersion: 2, dayChanges });
           markCloudOperationIntentCommitted(transaction, intent);
           return { status: 'committed', recordId: command.recordId, revision: next.revision };
         });

@@ -220,6 +220,23 @@ test('same patient operation retry returns historical receipt without allocating
   assert.equal(h.rows.get(COUNTER).lastFileNo, 1);
 });
 
+test('patient SDK historical import retains numeric fileNo and unknown visit date without widening paths', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value });
+  const command = h.copy({ ...h.payload, action: 'import', fileNo: 450, profile: { ...h.payload.profile, firstVisit: '' } });
+  await repo.journal.prepare('patient-profile', command, CREATED); assert.equal((await repo.commit(command)).fileNo, 450);
+  assert.equal(h.rows.get(COUNTER).lastFileNo, 450); assert.equal(h.rows.get(`clinics/main/patientProfiles/${ID}`).data.firstVisit, '');
+  assert.equal(h.calls.some(call => /patientAccounts|patientSessions|patientReceipts/.test(call)), false);
+  const count = h.calls.length; assert.equal((await repo.commit(command)).status, 'already-committed'); assert.equal(h.calls.slice(count).some(call => call.startsWith('set:') || call === `get:${COUNTER}`), false);
+});
+
+test('patient SDK validates historical fileNo before prepare and rejects tampered import cancellation before writes', async () => {
+  const h = await harness(), repo = await h.service.createFirebaseCloudPatients(h.auth, { isActive: () => h.active.value });
+  for (const fileNo of [0, '450', 2_000_000_001, 4.5]) { const count = h.calls.length; await assert.rejects(repo.journal.prepare('patient-profile', h.copy({ ...h.payload, action: 'import', fileNo }), CREATED)); assert.equal(h.calls.slice(count).includes('transaction'), false); }
+  const command = h.copy({ ...h.payload, action: 'import', fileNo: 450 }); await repo.journal.prepare('patient-profile', command, CREATED);
+  const saved = h.rows.get(`clinics/main/operationIntents/${OP}`); saved.command.fileNo = 0;
+  const before = h.copy([...h.rows]), count = h.calls.length; await assert.rejects(repo.journal.cancel(OP)); assert.deepEqual(h.copy([...h.rows]), before); assert.equal(h.calls.slice(count).some(call => call.startsWith('set:')), false);
+});
+
 test('unverified, missing/disabled membership or old password-auth cutoff never schedules a patient transaction', async () => {
   for (const options of [{ verified: false }, { memberDisabled: true }, { missingMember: true }, { staleAuthTime: true }]) {
     const h = await harness(options), repo = await h.service.createFirebaseCloudPatients(h.auth);

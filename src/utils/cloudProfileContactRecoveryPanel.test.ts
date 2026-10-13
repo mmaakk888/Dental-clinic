@@ -59,6 +59,17 @@ test('recovery panel renders empty and subscribes without acquiring a journal or
   assert.deepEqual(h.calls, []); assert.match(html, /سجل الحفظ والاسترجاع/); assert.match(html, /تحميل سجل العمليات/);
   assert.doesNotMatch(html, /اسم مصطنع/); assert.match(html, /min-h-11/); assert.match(html, /motion-reduce/);
 });
+
+test('recovery history labels imported historical file numbers as imports, never ordinary allocation', async () => {
+  const base = intent('prepared', 'patient-profile'), command = prepareCloudIntentCommand({ ...base.command, action: 'import', fileNo: 450,
+    profile: { ...(base.command.profile as object), firstVisit: '' } });
+  const imported: CloudOperationIntent = { ...base, command, requestHash: createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', base.actorUid, base.kind, command])).digest('hex') };
+  const controller = createCloudProfileContactRecoveryController({ kind: 'patient-profile', isActive: () => true, getJournal: async () => ({
+    prepare: async () => { throw new Error(); }, get: async () => imported, cancel: async () => { throw new Error(); },
+    listPreparedPage: async () => ({ records: [imported], nextAfterId: null }), listHistoryPage: async () => ({ records: [imported], nextAfterId: null }) }) });
+  await controller.loadFirst(); const html = renderToStaticMarkup(React.createElement(CloudProfileContactRecoveryPanel, { controller, onResume() {}, disabled: false }));
+  assert.match(html, /استيراد ملف مريض #450/); assert.doesNotMatch(html, /إنشاء ملف مريض|تعديل ملف مريض/);
+});
 for (const status of ['prepared', 'committed', 'cancelled'] as const) {
   test(`panel displays ${status} explicitly and never creates or cancels a domain operation`, async () => {
     const h = fixture(status); await h.controller.loadFirst(); const r = renderer(), tree = r.render(h.props);

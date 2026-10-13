@@ -1,6 +1,7 @@
 import type { ClinicContact } from '../types';
 import { CloudContactError, parseCloudContactRecord, prepareCloudContactCommand, type CloudContactCommand,
-  type CloudContactRecord, type CloudContactRepository } from './cloudContactRepository';
+  type CloudContactData, type CloudContactRecord, type CloudContactRepository } from './cloudContactRepository';
+import { normalizeContactPhone } from './clinicContacts';
 import { parseCloudOperationIntent, prepareCloudIntentCommand, type CloudOperationIntentRepository } from './cloudOperationIntent';
 import { createCloudProfileContactRecoveryController } from './cloudProfileContactRecoveryController';
 
@@ -10,7 +11,7 @@ const PAGE_SIZE = 25;
 const MAX_LOADED = 500;
 export type CloudContactWorkspaceCapability = CloudContactRepository & { readonly journal?: CloudOperationIntentRepository };
 export type CloudContactWorkspaceDraft = Readonly<{
-  action: CloudContactCommand['action']; recordId: string; expectedRevision: number; contact: Readonly<ClinicContact> | null;
+  action: CloudContactCommand['action']; recordId: string; expectedRevision: number; contact: Readonly<CloudContactData> | null;
 }>;
 export type CloudContactWorkspaceState = Readonly<{
   records: readonly CloudContactRecord[]; nextAfterId: string | null; loaded: boolean; loading: boolean; recoveryLoading: boolean;
@@ -21,6 +22,7 @@ export type CloudContactWorkspaceState = Readonly<{
 function frozenRecord(value: CloudContactRecord): CloudContactRecord {
   const checked = parseCloudContactRecord(value);
   if (checked.data) Object.freeze(checked.data);
+  if (checked.data?.campaignConsent) Object.freeze(checked.data.campaignConsent);
   return Object.freeze(checked);
 }
 function fail(): never { throw new CloudContactError('unavailable'); }
@@ -290,11 +292,25 @@ export function createCloudContactWorkspaceController(options: {
           for (const key of keys as string[]) { const property = Object.getOwnPropertyDescriptor(fields, key);
             if (!property || !('value' in property) || !property.enumerable) fail(); values[key] = property.value; }
           if (typeof values.name !== 'string' || typeof values.mobile !== 'string' || values.notes !== undefined && typeof values.notes !== 'string') fail();
-          return Object.freeze({ ...draft.contact!, name: values.name, mobile: values.mobile,
-            ...(values.notes === undefined ? {} : { notes: values.notes as string }) });
+          const { campaignConsent: previousConsent, ...base } = draft.contact!;
+          return Object.freeze({ ...base, name: values.name, mobile: values.mobile,
+            ...(values.notes === undefined ? {} : { notes: values.notes as string }),
+            ...(previousConsent && normalizeContactPhone(values.mobile) === normalizeContactPhone(base.mobile) ? { campaignConsent: previousConsent } : {}) });
         });
         if (!active(ticket) || busy() || command || state.draft !== draft) return false;
         publish({ ...state, draft: Object.freeze({ ...draft, contact }), error: '' }); return active(ticket);
+      } catch { return false; }
+    },
+    changeCampaignConsent: (status: 'allowed' | 'declined' | null, expected: CloudContactWorkspaceDraft): boolean => {
+      if (!available() || command || state.draft !== expected || !expected.contact || !['allowed', 'declined', null].includes(status)) return false;
+      const ticket = epoch;
+      try {
+        const phone = normalizeContactPhone(expected.contact.mobile); if (!phone) fail();
+        const { campaignConsent: _old, ...base } = expected.contact;
+        const consent = status === null ? null : capture(() => ({ status, phone, recordedAt: timestamp((options.now ?? (() => new Date().toISOString()))()) }));
+        if (!active(ticket) || state.draft !== expected || busy() || command) return false;
+        publish({ ...state, draft: Object.freeze({ ...expected, contact: Object.freeze({ ...base, ...(consent ? { campaignConsent: Object.freeze(consent) } : {}) }) }), error: '' });
+        return active(ticket);
       } catch { return false; }
     },
     cancelDraft: (): boolean => {

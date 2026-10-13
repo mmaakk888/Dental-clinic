@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createCloudContactRepository, parseCloudContactRecord, CloudContactError,
+import { createCloudContactRepository, parseCloudContactRecord, prepareCloudContactCommand, CloudContactError,
   type CloudContactAdapter, type CloudContactCommand, type CloudContactTransaction } from './cloudContactRepository';
 
 const ID = '10000000-0000-4000-8000-000000000001';
@@ -17,6 +17,18 @@ const oPath = (id = OP) => `clinics/main/contactOperations/${id}`;
 const input = (changes: Partial<CloudContactCommand> = {}): CloudContactCommand => ({ operationId: OP, recordId: ID, expectedRevision: 0, action: 'create',
   contact: { id: ID, name: 'جهة اختبار وهمية', mobile: '01000000001', notes: 'ملاحظة وهمية', createdAt: '2026-10-08T10:00:00.000Z' }, ...changes });
 const hasCode = (code: CloudContactError['code']) => (error: unknown) => error instanceof CloudContactError && error.code === code;
+
+test('optional campaign consent binds the exact canonical phone and is absent from historical payloads', () => {
+  const old = input(); assert.deepEqual(prepareCloudContactCommand(old), old);
+  const consent = { status: 'allowed' as const, phone: '201000000001', recordedAt: '2026-10-13T00:00:00.000Z' };
+  const prepared = prepareCloudContactCommand({ ...old, contact: { ...old.contact, campaignConsent: consent } });
+  assert.deepEqual(prepared.contact?.campaignConsent, consent); assert.notEqual(prepared.contact?.campaignConsent, consent);
+  for (const bad of [{ ...consent, phone: '201000000002' }, { ...consent, phone: '01000000001' },
+    { ...consent, status: 'yes' }, { ...consent, recordedAt: '2026-02-30T00:00:00.000Z' },
+    { ...consent, extra: true }, null, { ...consent, get phone() { return assert.fail('getter must not execute'); } }]) {
+    assert.throws(() => prepareCloudContactCommand({ ...old, contact: { ...old.contact, campaignConsent: bad } }), hasCode('invalid'));
+  }
+});
 
 // In-memory *synthetic* atomic adapter: failed callbacks never publish staged
 // writes. Serialization is only a deterministic test aid, not a Firestore test.

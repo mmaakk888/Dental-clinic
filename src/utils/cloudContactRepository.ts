@@ -20,12 +20,14 @@ export class CloudContactError extends Error {
 }
 
 type Action = 'create' | 'update' | 'delete';
+export interface CloudContactCampaignConsent { status: 'allowed' | 'declined'; phone: string; recordedAt: string }
+export type CloudContactData = ClinicContact & { campaignConsent?: CloudContactCampaignConsent };
 export interface CloudContactCommand {
   operationId: string;
   recordId: string;
   expectedRevision: number;
   action: Action;
-  contact: ClinicContact | null;
+  contact: CloudContactData | null;
 }
 export interface CloudContactRecord {
   schemaVersion: 1;
@@ -36,7 +38,7 @@ export interface CloudContactRecord {
   lastOperationId: string;
   /** Server-validated derived key; null only for tombstones. Not encryption. */
   phoneKey: string | null;
-  data: ClinicContact | null;
+  data: CloudContactData | null;
 }
 export interface CloudContactCommit {
   status: 'committed' | 'already-committed';
@@ -93,13 +95,24 @@ function record(value: unknown, required: readonly string[], optional: readonly 
   }
   return copy;
 }
-function contact(value: unknown): ClinicContact {
-  const fields = record(value, ['id', 'name', 'mobile', 'createdAt'], ['notes']);
-  if (clinicContactValidationError(fields)) invalid();
+function contact(value: unknown): CloudContactData {
+  const fields = record(value, ['id', 'name', 'mobile', 'createdAt'], ['notes', 'campaignConsent']);
+  const { campaignConsent, ...base } = fields;
+  if (clinicContactValidationError(base)) invalid();
+  let consent: CloudContactCampaignConsent | undefined;
+  if (Object.hasOwn(fields, 'campaignConsent')) {
+    const item = record(campaignConsent, ['status', 'phone', 'recordedAt']);
+    if (!['allowed', 'declined'].includes(item.status as string) || typeof item.phone !== 'string'
+      || item.phone !== normalizeContactPhone(fields.mobile as string) || !/^[1-9]\d{7,14}(?![\s\S])/.test(item.phone)
+      || typeof item.recordedAt !== 'string' || item.recordedAt.length !== 24 || item.recordedAt < '1900-01-01T00:00:00.000Z'
+      || !Number.isFinite(Date.parse(item.recordedAt)) || new Date(item.recordedAt).toISOString() !== item.recordedAt) invalid();
+    consent = { status: item.status as 'allowed' | 'declined', phone: item.phone, recordedAt: item.recordedAt };
+  }
   // The phone index alone uses an equivalent canonical number; original display
   // values are retained. This is not a migration/import codec.
   return { id: fields.id as string, name: fields.name as string, mobile: fields.mobile as string,
-    createdAt: fields.createdAt as string, ...(fields.notes === undefined ? {} : { notes: fields.notes as string }) };
+    createdAt: fields.createdAt as string, ...(fields.notes === undefined ? {} : { notes: fields.notes as string }),
+    ...(consent === undefined ? {} : { campaignConsent: consent }) };
 }
 function revision(value: unknown, allowZero = false): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= (allowZero ? 0 : 1) && value <= MAX_REVISION;
@@ -253,6 +266,9 @@ function contactRepository(adapter: CloudContactAdapter, options: CloudContactRe
           if (prepared.action === 'create' ? current !== null : !current || current.deleted || current.revision !== prepared.expectedRevision) throw new CloudContactError('conflict');
           if (current?.data && prepared.contact && (current.data.id !== prepared.contact.id || current.data.createdAt !== prepared.contact.createdAt)) throw new CloudContactError('conflict');
           const oldPhoneKey = current?.data ? await hash(`contact-phone-v1:${normalizeContactPhone(current.data.mobile)}`) : null;
+          // A changed number is a different consent subject. Even an owner must
+          // save the phone change first, then explicitly record new consent.
+          if (current?.data && prepared.contact && oldPhoneKey !== nextPhoneKey && prepared.contact.campaignConsent !== undefined) invalid();
           if (current && current.phoneKey !== oldPhoneKey) invalid();
           const keys = Array.from(new Set([oldPhoneKey, nextPhoneKey].filter((key): key is string => key !== null)));
           const indexes = new Map<string, string | null>();

@@ -6,12 +6,15 @@ import { CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS, CloudBootstrapError, createCloudEmpt
   type CloudBootstrapAdapter, type CloudBootstrapAuthority } from './cloudEmptyClinicBootstrap';
 import { createCloudOperationIntentRepository } from './cloudOperationIntent';
 import { createCloudServiceCatalogRepository } from './cloudServiceCatalogRepository';
+import { createCloudClinicSettingsRepository } from './cloudClinicSettingsRepository';
+import { createCloudInitialClinicSettings } from './cloudInitialClinicSettings';
 
 const OWNER = 'synthetic-bootstrap-owner';
 const OP = '10000000-0000-4000-8000-000000000001';
 const OP2 = '10000000-0000-4000-8000-000000000002';
+const OP3 = '10000000-0000-4000-8000-000000000003';
 const WHEN = '2026-10-12T00:00:00.000Z';
-const command = () => ({ operationId: OP, routingOperationId: OP2, createdAt: WHEN });
+const command = () => ({ operationId: OP, routingOperationId: OP2, settingsOperationId: OP3, createdAt: WHEN });
 const path = (collection: string, id: string) => `clinics/main/${collection}/${id}`;
 const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: CloudBootstrapError['code']) => (value: unknown) => value instanceof CloudBootstrapError && value.code === expected;
@@ -65,13 +68,14 @@ test('trusted bootstrap construction is inert and never imports local account/cl
   const source = readFileSync(new URL('./cloudEmptyClinicBootstrap.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /from ['"].*(?:storage|firebaseService|passwords)['"]|localStorage|sessionStorage|Date\.now|randomUUID/);
 });
-test('bootstrap atomically creates eight metadata/counter/catalog/routing records, no operational or account data', async () => {
+test('bootstrap atomically creates eleven metadata/counter/catalog/routing/settings records, no operational or account data', async () => {
   const h = harness();
   assert.deepEqual(await h.bootstrap.initialize(command()), { status: 'created', clinicalRecordsCreated: 0 });
-  assert.equal(h.writes(), 8); assert.equal(h.docs.size, 9);
+  assert.equal(h.writes(), 11); assert.equal(h.docs.size, 12);
   assert.deepEqual(h.docs.get(path('counters', 'patientFiles')), { schemaVersion: 1, clinicId: 'main', lastFileNo: 0, lastOperationId: null });
   assert.deepEqual(h.docs.get(path('settings', 'serviceCatalog')).data, { examinationCents: 10_000, services: [] });
   assert.equal(h.docs.get(path('operationIntents', OP)).status, 'committed');
+  assert.deepEqual(h.docs.get(path('settings', 'clinicSettings')).data, createCloudInitialClinicSettings());
   for (const name of ['patientProfiles', 'contactRecords', 'appointmentRecords', 'labCases', 'expenseRecords', 'materialUsages']) {
     assert.equal([...h.docs.keys()].some(key => key.startsWith(`clinics/main/${name}/`)), false);
   }
@@ -112,7 +116,7 @@ test('bootstrap seed receipt is acknowledged by the normal catalog repository an
 test('concurrent same-command bootstrap creates only once', async () => {
   const h = harness();
   const results = await Promise.all([h.bootstrap.initialize(command()), h.bootstrap.initialize(command())]);
-  assert.deepEqual(results.map(item => item.status), ['created', 'already-initialized']); assert.equal(h.writes(), 8);
+  assert.deepEqual(results.map(item => item.status), ['created', 'already-initialized']); assert.equal(h.writes(), 11);
 });
 for (const collection of CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS) {
   test(`bootstrap refuses nonempty ${collection} without deleting or overwriting anything`, async () => {
@@ -129,7 +133,7 @@ test('existing counter/catalog without matching completed bootstrap marker is ne
   }
 });
 test('partial or mutated seed history and a different initialization command fail closed', async () => {
-  for (const change of ['counter', 'catalog', 'receipt', 'intent', 'hash', 'command', 'actor', 'time', 'new-operation']) {
+  for (const change of ['counter', 'catalog', 'receipt', 'intent', 'hash', 'command', 'actor', 'time', 'new-operation', 'settings', 'settings-receipt', 'settings-intent', 'settings-hash', 'settings-command', 'same-settings-id']) {
     const h = harness(); await h.bootstrap.initialize(command());
     let retry = command();
     if (change === 'counter') h.docs.get(path('counters', 'patientFiles')).lastFileNo = -1;
@@ -141,6 +145,12 @@ test('partial or mutated seed history and a different initialization command fai
     if (change === 'actor') h.docs.get(path('bootstrap', 'initialRelease')).actorUid = 'other-synthetic-owner';
     if (change === 'time') retry = { ...retry, createdAt: '2026-10-12T00:00:01.000Z' };
     if (change === 'new-operation') retry = { ...retry, operationId: OP2 };
+    if (change === 'settings') h.docs.delete(path('settings', 'clinicSettings'));
+    if (change === 'settings-receipt') h.docs.delete(path('settingsOperations', OP3));
+    if (change === 'settings-intent') h.docs.delete(path('operationIntents', OP3));
+    if (change === 'settings-hash') h.docs.get(path('settingsOperations', OP3)).requestHash = '0'.repeat(64);
+    if (change === 'settings-command') h.docs.get(path('operationIntents', OP3)).command.data.identity.clinicName = 'تغيير غير مقبول';
+    if (change === 'same-settings-id') retry = { ...retry, settingsOperationId: OP2 };
     const before = structuredClone(h.docs), count = h.writes();
     await assert.rejects(h.bootstrap.initialize(retry)); assert.deepEqual(h.docs, before); assert.equal(h.writes(), count);
   }
@@ -171,7 +181,7 @@ test('invalid commands, accessors and array-hole queries never write', async () 
   await assert.rejects(h.bootstrap.initialize(command()), code('unavailable')); assert.equal(h.writes(), 0);
 });
 test('failed write rolls back atomic initialization and never leaks provider details', async () => {
-  for (let index = 1; index <= 8; index++) {
+  for (let index = 1; index <= 11; index++) {
     const h = harness(); h.faults.writeAt = index; const before = structuredClone(h.docs);
     await assert.rejects(h.bootstrap.initialize(command()), value => {
       assert.ok(code('unavailable')(value)); assert.doesNotMatch(String(value), /PRIVATE/); return true;
@@ -183,7 +193,30 @@ test('authorization loss before transaction or after accepted commit never claim
   const h = harness(); h.faults.authAt = 3;
   await assert.rejects(h.bootstrap.initialize(command()), code('unavailable')); assert.equal(h.writes(), 0);
   const accepted = harness(); accepted.faults.authAt = 5;
-  await assert.rejects(accepted.bootstrap.initialize(command()), code('unavailable')); assert.equal(accepted.docs.size, 9);
+  await assert.rejects(accepted.bootstrap.initialize(command()), code('unavailable')); assert.equal(accepted.docs.size, 12);
   accepted.faults.authAt = 0;
-  assert.equal((await accepted.bootstrap.initialize(command())).status, 'already-initialized'); assert.equal(accepted.writes(), 8);
+  assert.equal((await accepted.bootstrap.initialize(command())).status, 'already-initialized'); assert.equal(accepted.writes(), 11);
+});
+
+test('initial settings are independent valid metadata, never fake clinical records or automatic messaging', () => {
+  const initial = createCloudInitialClinicSettings(), again = createCloudInitialClinicSettings();
+  assert.notEqual(initial, again); assert.deepEqual(initial.medications, []);
+  assert.equal(initial.whatsapp.autoRemind24h, false); assert.equal(initial.identity.phone, '');
+  initial.content.navigationLabels.home = 'تغيير'; assert.equal(again.content.navigationLabels.home, 'الرئيسية');
+});
+test('bootstrap settings and routing receipts are acknowledged by normal settings journal/repository without writes', async () => {
+  const h = harness(); await h.bootstrap.initialize(command());
+  const adapter = { authorizeOwner: async () => OWNER,
+    readRecord: async (key: string) => structuredClone(h.docs.get(key) ?? null),
+    runTransaction: async <T>(work: (tx: any) => Promise<T>) => work({
+      get: async (key: string) => structuredClone(h.docs.get(key) ?? null), set: () => assert.fail('historical ACK is read-only') }) };
+  const journal = createCloudOperationIntentRepository(adapter, { digest });
+  const repository = createCloudClinicSettingsRepository(adapter, { digest });
+  for (const original of [
+    { operationId: OP3, createdAt: WHEN, expectedRevision: 0, target: 'clinicSettings', recordId: 'clinicSettings', data: createCloudInitialClinicSettings() },
+    { operationId: OP2, createdAt: WHEN, expectedRevision: 0, target: 'prostheticRouting', recordId: 'prostheticRouting', data: { routes: [] } },
+  ] as const) {
+    assert.equal((await journal.prepare('settings', original, WHEN)).status, 'committed');
+    assert.equal((await repository.commit(original)).status, 'already-committed');
+  }
 });

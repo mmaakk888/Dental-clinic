@@ -91,6 +91,83 @@ test('journaled patient creation writes profile number receipt and committed int
   assert.equal(receipt.requestHash, await digest(JSON.stringify([OWNER, OP, ID, 0, 'create', command().profile])));
 });
 
+test('historical import preserves sparse file numbers and advances the shared maximum monotonically', async () => {
+  const h = journalHarness();
+  const imports = [450, 12, 700].map((fileNo, index) => ({ ...command(), operationId: [OP, OP2, OP3][index],
+    recordId: [ID, OTHER, '10000000-0000-4000-8000-000000000003'][index], expectedRevision: 0 as const, action: 'import' as const, fileNo,
+    profile: { ...command().profile, firstVisit: '' } }));
+  for (const [index, item] of imports.entries()) {
+    await h.journal.prepare('patient-profile', item, CREATED);
+    assert.equal((await h.repo.commit(item)).fileNo, item.fileNo);
+    assert.equal(h.documents.get(counterPath).lastFileNo, [450, 450, 700][index]);
+    assert.equal(h.documents.get(counterPath).lastOperationId, item.operationId);
+    assert.equal(h.documents.get(filePath(item.fileNo)).recordId, item.recordId);
+    assert.equal(h.documents.get(recordPath(item.recordId)).data.firstVisit, '');
+  }
+  const next = command({ operationId: '20000000-0000-4000-8000-000000000004', recordId: '10000000-0000-4000-8000-000000000004' });
+  await h.journal.prepare('patient-profile', next, CREATED);
+  assert.equal((await h.repo.commit(next)).fileNo, 701);
+});
+
+test('historical imports have no non-journaled legacy-stage bypass', async () => {
+  const h = harness(), imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 450 };
+  await assert.rejects(h.repo.commit(imported), code('invalid')); assert.deepEqual(h.calls, []); assert.equal(h.documents.size, 1);
+});
+
+test('import retry is historical and cannot rewrite newer profile counter or index', async () => {
+  const h = journalHarness(), imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 450 };
+  await h.journal.prepare('patient-profile', imported, CREATED); await h.repo.commit(imported);
+  const updated = command({ operationId: OP2, expectedRevision: 1, action: 'update', profile: { ...imported.profile, name: 'تعديل أحدث مصطنع' } });
+  await h.journal.prepare('patient-profile', updated, CREATED); await h.repo.commit(updated);
+  h.documents.set(counterPath, { schemaVersion: 1, clinicId: 'main', lastFileNo: 900, lastOperationId: OP3 });
+  const before = structuredClone(h.documents), count = h.calls.length;
+  assert.deepEqual(await h.repo.commit(imported), { status: 'already-committed', recordId: ID, fileNo: 450, revision: 1 });
+  assert.deepEqual(h.documents, before);
+  assert.equal(h.calls.slice(count).some(call => call.startsWith('set:') || call === `get:${counterPath}` || call === `get:${recordPath()}`), false);
+  await assert.rejects(h.repo.commit({ ...imported, fileNo: 451 }));
+});
+
+test('historical import refuses duplicate UUID or file number without touching financial domains', async () => {
+  const h = journalHarness(), imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 450 };
+  await h.journal.prepare('patient-profile', imported, CREATED); await h.repo.commit(imported);
+  for (const item of [{ ...imported, operationId: OP2, recordId: OTHER }, { ...imported, operationId: OP3, fileNo: 451 }]) {
+    await h.journal.prepare('patient-profile', item, CREATED); const before = structuredClone(h.documents);
+    await assert.rejects(h.repo.commit(item), code('conflict')); assert.deepEqual(h.documents, before);
+  }
+  assert.equal(h.calls.some(call => /patientAccounts|patientSessions|patientReceipts/.test(call)), false);
+});
+
+test('import accepts a free historical gap even at exhausted counter; ordinary allocation stays exhausted', async () => {
+  const h = journalHarness(); h.documents.set(counterPath, { schemaVersion: 1, clinicId: 'main', lastFileNo: 2_000_000_000, lastOperationId: OP3 });
+  const imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 42 };
+  await h.journal.prepare('patient-profile', imported, CREATED); assert.equal((await h.repo.commit(imported)).fileNo, 42);
+  assert.equal(h.documents.get(counterPath).lastFileNo, 2_000_000_000);
+  const next = command({ operationId: OP2, recordId: OTHER }); await h.journal.prepare('patient-profile', next, CREATED);
+  await assert.rejects(h.repo.commit(next), code('unavailable'));
+});
+
+test('import rejects missing corrupt counters and malformed fileNo or import/update combinations', async () => {
+  const imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 450 };
+  for (const item of [{ ...imported, fileNo: 0 }, { ...imported, fileNo: '450' }, { ...imported, fileNo: 2_000_000_001 },
+    { ...imported, fileNo: 4.5 }, { ...imported, expectedRevision: 1 }, { ...command(), fileNo: 450 }, { ...imported, profile: { ...imported.profile, firstVisit: '2026-02-30' } }]) assert.throws(() => prepareCloudPatientCommand(item));
+  for (const counterValue of [null, {}, { schemaVersion: 1, clinicId: 'main', lastFileNo: 12, lastOperationId: null }]) {
+    const h = journalHarness(); counterValue === null ? h.documents.delete(counterPath) : h.documents.set(counterPath, counterValue);
+    await h.journal.prepare('patient-profile', imported, CREATED); const before = structuredClone(h.documents);
+    await assert.rejects(h.repo.commit(imported)); assert.deepEqual(h.documents, before);
+  }
+});
+
+test('simultaneous historical import and normal creation serialize without lowering the maximum', async () => {
+  for (const importFirst of [true, false]) {
+    const h = journalHarness(), imported = { ...command(), expectedRevision: 0 as const, action: 'import' as const, fileNo: 450 };
+    const normal = command({ operationId: OP2, recordId: OTHER });
+    await h.journal.prepare('patient-profile', imported, CREATED); await h.journal.prepare('patient-profile', normal, CREATED);
+    const result = await Promise.all(importFirst ? [h.repo.commit(imported), h.repo.commit(normal)] : [h.repo.commit(normal), h.repo.commit(imported)]);
+    assert.equal(new Set(result.map(item => item.fileNo)).size, 2);
+    assert.equal(h.documents.get(counterPath).lastFileNo, importFirst ? 451 : 450);
+  }
+});
+
 test('journaled patient commit rejects wrong actor kind command fingerprint and cancelled intent before writes', async () => {
   const cases = [
     (intent: any) => { intent.actorUid = 'other-owner'; },

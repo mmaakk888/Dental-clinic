@@ -80,8 +80,8 @@ service cloud.firestore {
         && data.gender is string && data.gender == trimSpaces(data.gender)
         && data.gender.size() <= 40 && data.gender.matches('[^\\x00-\\x1f\\x7f]*')
         && data.firstVisit is string
-        && data.firstVisit.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
-        && calendarDay(data.firstVisit)
+        && (data.firstVisit=='' || (data.firstVisit.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+          && calendarDay(data.firstVisit)))
         && data.notes is string && data.notes.size() <= 4000
         && data.notes.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*')
         && data.allergy is string && data.allergy.size() <= 1000
@@ -114,10 +114,10 @@ service cloud.firestore {
       return data is map && data.keys().hasAll(fields) && data.keys().hasOnly(fields)
         && data.schemaVersion is int && data.schemaVersion == 1 && data.clinicId == 'main'
         && uuid(id) && data.operationId == id && uuid(data.recordId) && patientPositiveNumber(data.fileNo)
-        && data.actorUid == request.auth.uid && data.action in ['create', 'update']
+        && data.actorUid == request.auth.uid && data.action in ['create', 'update', 'import']
         && data.expectedRevision is int && data.expectedRevision >= 0 && data.expectedRevision < 2000000000
         && patientPositiveNumber(data.resultRevision) && data.resultRevision == data.expectedRevision + 1
-        && ((data.action == 'create') == (data.expectedRevision == 0)) && hash(data.requestHash) && stamp(data.intentCreatedAt) && hash(data.intentRequestHash);
+        && ((data.action in ['create','import']) == (data.expectedRevision == 0)) && hash(data.requestHash) && stamp(data.intentCreatedAt) && hash(data.intentRequestHash);
     }
     function patientNewReceipt(after) {
       let receipt = getAfter(patientOperationPath(after.lastOperationId));
@@ -128,11 +128,13 @@ service cloud.firestore {
       let beforeCounter = get(patientCounterPath());
       let afterCounter = getAfter(patientCounterPath());
       let afterFile = getAfter(patientFilePath(after.fileNo));
+      let importing = getAfter(patientOperationPath(after.lastOperationId)).data.action=='import';
       // The changed counter's own rule validates both its schema and prior
       // state. Repeating those checks across companions exceeds Rules' budget.
       return beforeCounter != null
-        && afterCounter != null && afterCounter.data.lastFileNo == beforeCounter.data.lastFileNo + 1
-        && afterCounter.data.lastFileNo == after.fileNo && afterCounter.data.lastOperationId == after.lastOperationId
+        && afterCounter != null && afterCounter.data.lastFileNo == (importing
+          ? (beforeCounter.data.lastFileNo>after.fileNo?beforeCounter.data.lastFileNo:after.fileNo) : beforeCounter.data.lastFileNo+1)
+        && (importing || afterCounter.data.lastFileNo == after.fileNo) && afterCounter.data.lastOperationId == after.lastOperationId
         && !exists(patientFilePath(after.fileNo)) && afterFile != null && afterFile.data.recordId == after.recordId;
     }
     function patientProfileWrite(before, after, id) {
@@ -151,7 +153,7 @@ service cloud.firestore {
       let after = getAfter(patientProfilePath(data.recordId));
       return patientProfileChanged(before, after) && after.data.lastOperationId == data.operationId
         && after.data.fileNo == data.fileNo && after.data.revision == data.resultRevision
-        && ((before == null && data.expectedRevision == 0 && data.action == 'create')
+        && ((before == null && data.expectedRevision == 0 && data.action in ['create','import'])
           || (before != null && data.expectedRevision == before.data.revision && data.action == 'update'))
         && profileIntent(data, after.data);
     }
@@ -165,13 +167,14 @@ service cloud.firestore {
       let profile = getAfter(patientProfilePath(receipt.data.recordId));
       return patientValidCounter(before) && after.diff(before).affectedKeys().hasOnly(['lastFileNo', 'lastOperationId'])
         && after.schemaVersion is int && after.lastFileNo is int
-        && after.lastFileNo == before.lastFileNo + 1 && after.lastOperationId != before.lastOperationId
+        && after.lastFileNo == (receipt.data.action=='import'
+          ? (before.lastFileNo>receipt.data.fileNo?before.lastFileNo:receipt.data.fileNo) : before.lastFileNo+1) && after.lastOperationId != before.lastOperationId
         && after.lastFileNo <= 2000000000
-        && receipt != null && !exists(patientOperationPath(after.lastOperationId)) && receipt.data.action == 'create'
+        && receipt != null && !exists(patientOperationPath(after.lastOperationId)) && receipt.data.action in ['create','import']
         // The required create-only receipt rule already proves a new profile;
         // the profile rule supplies the schema and all allocation companions.
         && profile != null
-        && profile.data.lastOperationId == after.lastOperationId && profile.data.fileNo == after.lastFileNo;
+        && profile.data.lastOperationId == after.lastOperationId && profile.data.fileNo == receipt.data.fileNo;
     }
     match /clinics/main/members/{uid} {
       allow get: if database == '(default)' && verifiedOwner(uid) && activeOwner(resource.data, uid);
@@ -192,14 +195,16 @@ service cloud.firestore {
     match /clinics/main/patientFiles/{key} {
       allow get: if owner() && key.matches('[1-9][0-9]{0,9}') && int(key) <= 2000000000;
       allow create: if owner() && patientValidFile(request.resource.data, key) && patientFileTransition(request.resource.data);
-      allow list, update, delete: if false;
+      allow list: if owner() && boundedQuery();
+      allow update, delete: if false;
     }
     match /clinics/main/counters/patientFiles {
       allow get: if owner();
       // Trusted setup must seed {lastFileNo:0,lastOperationId:null} separately.
       // Missing/corrupt counters fail closed; a client never restarts numbering.
       allow update: if owner() && patientCounterTransition(resource.data, request.resource.data);
-      allow list, create, delete: if false;
+      allow list: if owner() && 'limit' in request.query && request.query.limit==1;
+      allow create, delete: if false;
     }
 
 
@@ -229,7 +234,7 @@ service cloud.firestore {
 
     function contactValidContact(data, id, phone) {
       return data is map && data.keys().hasAll(['id', 'name', 'mobile', 'createdAt'])
-        && data.keys().hasOnly(['id', 'name', 'mobile', 'createdAt', 'notes'])
+        && data.keys().hasOnly(['id', 'name', 'mobile', 'createdAt', 'notes', 'campaignConsent'])
         && data.id == id && data.name is string && trimSpaces(data.name).size() > 0
         && data.name.size() <= 200 && data.name.matches('[^\\x00-\\x1f\\x7f]*')
         && data.mobile is string && phone.valid
@@ -237,7 +242,12 @@ service cloud.firestore {
           && data.notes.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*')))
         && data.createdAt is string
         && data.createdAt.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,3})?Z')
-        && calendarDay(data.createdAt);
+        && calendarDay(data.createdAt)
+        && (!('campaignConsent' in data) || (exact(data.campaignConsent,['status','phone','recordedAt'])
+          && data.campaignConsent.status in ['allowed','declined']
+          && data.campaignConsent.phone is string && data.campaignConsent.phone.matches('[1-9][0-9]{7,14}')
+          && hashing.sha256('contact-phone-v1:'+data.campaignConsent.phone).toHexString().lower()==phone.key
+          && stamp(data.campaignConsent.recordedAt)));
     }
     function contactValidRecord(data, id, phone) {
       let fields = ['schemaVersion', 'clinicId', 'recordId', 'revision', 'deleted', 'lastOperationId', 'phoneKey', 'data'];
@@ -345,22 +355,45 @@ service cloud.firestore {
         && ((d.status == 'prepared' && d.revision == 1) || (d.status != 'prepared' && d.revision == 2));
     }
     function preparedProfile(c) {
-      return exact(c, ['operationId','recordId','expectedRevision','action','profile'])
+      let p=c.profile;
+      return (c.action=='import' ? exact(c,['operationId','recordId','expectedRevision','action','profile','fileNo']) && patientPositiveNumber(c.fileNo)
+          : exact(c, ['operationId','recordId','expectedRevision','action','profile']))
         && uuid(c.operationId) && uuid(c.recordId) && c.expectedRevision is int && c.expectedRevision >= 0 && c.expectedRevision < 2000000000
-        && c.action in ['create','update'] && ((c.action == 'create') == (c.expectedRevision == 0))
-        && patientValidProfile(c.profile, patientPreparedPhone(c.profile.mobile));
+        && c.action in ['create','update','import'] && ((c.action in ['create','import']) == (c.expectedRevision == 0))
+        // Private preparation is exact/bounded; the REQUIRED profile write
+        // performs full phone, calendar and text validation before any file
+        // number/counter/receipt can commit. Avoid duplicating that expensive
+        // validation in the journal-create expression budget.
+        && exact(p,['name','mobile','age','gender','firstVisit','notes','allergy'])
+        && p.name is string && p.name.size()>0 && p.name.size()<=200 && p.mobile is string && p.mobile.size()<=60
+        && p.age is int && p.age>=0 && p.age<=120 && p.gender is string && p.gender.size()<=40
+        && p.firstVisit is string && p.firstVisit.size()<=10 && p.notes is string && p.notes.size()<=4000
+        && p.allergy is string && p.allergy.size()<=1000;
     }
     function preparedContact(c) {
+      let d=c.contact;
       return exact(c, ['operationId','recordId','expectedRevision','action','contact'])
         && uuid(c.operationId) && uuid(c.recordId) && c.expectedRevision is int && c.expectedRevision >= 0 && c.expectedRevision < 2000000000
         && c.action in ['create','update','delete'] && ((c.action == 'create') == (c.expectedRevision == 0))
-        && (c.action == 'delete' ? c.contact == null : contactValidContact(c.contact,c.recordId,contactPreparedPhone(c.contact.mobile)));
+        // Preparation is private and bounded, not a usable contact or consent.
+        // Its mutually REQUIRED contact record performs full phone/calendar/
+        // text/consent validation before any receipt/index can commit.
+        && (c.action == 'delete' ? d == null : d is map && d.keys().hasAll(['id','name','mobile','createdAt'])
+          && d.keys().hasOnly(['id','name','mobile','createdAt','notes','campaignConsent']) && d.id==c.recordId
+          && d.name is string && d.name.size()>0 && d.name.size()<=200 && d.mobile is string && d.mobile.size()<=60
+          && d.createdAt is string && d.createdAt.size()>=20 && d.createdAt.size()<=24
+          && (!('notes' in d) || d.notes is string && d.notes.size()<=2000)
+          && (!('campaignConsent' in d) || exact(d.campaignConsent,['status','phone','recordedAt'])
+            && d.campaignConsent.status in ['allowed','declined'] && d.campaignConsent.phone is string
+            && d.campaignConsent.phone.size()>=8 && d.campaignConsent.phone.size()<=15
+            && d.campaignConsent.recordedAt is string && d.campaignConsent.recordedAt.size()==24));
     }
     function commandValid(d) {
       return d.kind == 'patient-profile' ? preparedProfile(d.command)
         : d.kind == 'contact' ? preparedContact(d.command)
         : d.kind == 'catalog' ? d.command.createdAt==d.createdAt && preparedCatalog(d.command)
-        : d.kind == 'clinical' ? d.command.createdAt==d.createdAt && preparedClinical(d.command) : false;
+        : d.kind == 'clinical' ? d.command.createdAt==d.createdAt && preparedClinical(d.command)
+        : d.kind == 'appointment' ? d.command.createdAt==d.createdAt && preparedAppointment(d.command) : false;
     }
     function coupledIntent(kind, op) {
       let before = get(intentPath(op));
@@ -375,6 +408,7 @@ service cloud.firestore {
       return coupledIntent('patient-profile',r.operationId)
         && r.intentCreatedAt == intent.createdAt && r.intentRequestHash == intent.requestHash
         && r.recordId == intent.command.recordId && r.expectedRevision == intent.command.expectedRevision && r.action == intent.command.action
+        && (r.action!='import' || intent.command.fileNo==r.fileNo)
         && profile.data == intent.command.profile;
     }
     function contactIntent(r, contact) {
@@ -478,7 +512,8 @@ service cloud.firestore {
     match /clinics/main/settings/serviceCatalog {
       allow get: if owner();
       allow create,update: if owner() && catalogWrite(resource,request.resource.data);
-      allow list,delete: if false;
+      allow list: if owner() && 'limit' in request.query && request.query.limit==1;
+      allow delete: if false;
     }
     match /clinics/main/catalogOperations/{id} {
       allow get: if owner() && uuid(id) && (!exists(domainReceiptPath('catalog',id)) || resource.data.actorUid==request.auth.uid);
@@ -697,17 +732,18 @@ service cloud.firestore {
     match /clinics/main/patientAccounts/{id} {
       allow get: if owner() && uuid(id);
       allow create,update: if owner() && clinicalAccountWrite(resource,request.resource.data,id);
-      allow list,delete: if false;
+      allow list: if owner() && boundedQuery();
+      allow delete: if false;
     }
     match /clinics/main/patientSessions/{id} {
       allow get: if owner() && uuid(id);
-      allow list: if owner() && boundedQuery() && uuid(resource.data.patientId);
+      allow list: if owner() && boundedQuery();
       allow create,update: if owner() && clinicalSessionWrite(resource,request.resource.data,id);
       allow delete: if false;
     }
     match /clinics/main/patientReceipts/{id} {
       allow get: if owner() && uuid(id);
-      allow list: if owner() && boundedQuery() && uuid(resource.data.patientId);
+      allow list: if owner() && boundedQuery();
       allow create: if owner() && uuid(id) && clinicalCash(request.resource.data,id);
       allow update,delete: if false;
     }
@@ -722,6 +758,125 @@ service cloud.firestore {
       allow list,update,delete: if false;
     }
 
+    function appointmentText(v,n,multiline) {
+      let spaces='[\\x09-\\x0d\\x20\\x{00a0}\\x{1680}\\x{2000}-\\x{200a}\\x{2028}\\x{2029}\\x{202f}\\x{205f}\\x{3000}\\x{feff}]';
+      return v is string && v.size()<=n && (v=='' || ((multiline || !v.matches(spaces+'.*|.*'+spaces))
+        && (multiline ? v.matches('[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}]*')
+          : v.matches('[^\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}]*'))));
+    }
+    function appointmentStart(d) { return int(d.time[0:2])*60+int(d.time[3:5]); }
+    function appointmentOccupied(d) { return d.status in ['scheduled','confirmed','waiting','attended']; }
+    function appointmentSlot(id,d) { return {'recordId':id,'startMinute':appointmentStart(d),'endMinute':appointmentStart(d)+d.durationMinutes}; }
+    function preparedAppointment(c) {
+      let d=c.data;
+      return exact(c,['operationId','recordId','expectedRevision','createdAt','data']) && uuid(c.recordId) && expected(c.expectedRevision)
+        && exact(d,['patientRecordId','patientName','phone','date','time','durationMinutes','status','reason','notes','doctorName','appointmentType','isFollowUp','isWalkIn'])
+        && (d.patientRecordId==null || uuid(d.patientRecordId)) && d.patientName is string && d.patientName.size()>0 && d.patientName.size()<=200
+        && d.phone is string && (d.phone=='' || (d.phone.matches('[1-9][0-9]{7,14}') && (!d.phone.matches('20.*') || d.phone.matches('201[0-9]{9}'))))
+        && day(d.date) && d.time is string && d.time.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && d.durationMinutes is int && d.durationMinutes>=1 && d.durationMinutes<=1440 && appointmentStart(d)+d.durationMinutes<=1440
+        && d.status in ['scheduled','confirmed','waiting','attended','cancelled','apologized','no_show']
+        // Prepared drafts are exact and bounded, not successful bookings. The
+        // required record/day writes below collectively validate text content.
+        && d.reason is string && d.reason.size()<=200 && d.notes is string && d.notes.size()<=4000
+        && d.doctorName is string && d.doctorName.size()<=200 && d.appointmentType is string && d.appointmentType.size()<=80
+        && d.isFollowUp is bool && d.isWalkIn is bool;
+    }
+    function appointmentChange(r,date) {
+      return r.dayChanges[0].date==date ? r.dayChanges[0] : r.dayChanges[1];
+    }
+    function appointmentChangeShape(p) {
+      // Dates are compared with the already validated command/old record below;
+      // repeat calendar parsing here needlessly exceeds the cross-day budget.
+      return exact(p,['date','expectedDayRevision','removeAt','insertAt']) && expected(p.expectedDayRevision)
+        && p.removeAt is int && p.removeAt>=-1 && p.removeAt<200 && p.insertAt is int && p.insertAt>=-1 && p.insertAt<200;
+    }
+    function appointmentDayFence(p,op) {
+      let a=getAfter(anyPath('appointmentDays',p.date)).data;
+      return a.lastOperationId==op && a.revision==p.expectedDayRevision+1 && a.slotIndexVersion==2;
+    }
+    function appointmentReceipt(r,id) {
+      let i=getAfter(intentPath(id)).data;
+      let c=i.command;
+      let old=get(anyPath('appointmentRecords',c.recordId));
+      let a=getAfter(anyPath('appointmentRecords',c.recordId)).data;
+      let p=r.dayChanges;
+      let two=old!=null && old.data.data.date!=c.data.date;
+      return exact(r,['schemaVersion','clinicId','operationId','recordId','actorUid','expectedRevision','resultRevision','createdAt','requestHash','dayIndexVersion','dayChanges'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && uuid(id) && r.operationId==id && r.recordId==c.recordId
+        && r.actorUid==request.auth.uid && hash(r.requestHash) && r.expectedRevision==c.expectedRevision && r.resultRevision==c.expectedRevision+1
+        && r.createdAt==i.createdAt && r.dayIndexVersion is int && r.dayIndexVersion==2 && coupledIntent('appointment',id)
+        && a.lastOperationId==id && a.revision==r.resultRevision
+        && p is list && p.size()==(two?2:1) && appointmentChangeShape(p[0])
+        && (two ? appointmentChangeShape(p[1])
+            && int(p[0].date.replace('-',''))<int(p[1].date.replace('-',''))
+            && (p[0].date==old.data.data.date || p[1].date==old.data.data.date)
+            && (p[0].date==c.data.date || p[1].date==c.data.date) && appointmentDayFence(p[1],id)
+          : p[0].date==c.data.date)
+        && appointmentDayFence(p[0],id);
+    }
+    function appointmentRecordWrite(before,a,id) {
+      let r=getAfter(domainReceiptPath('appointment',a.lastOperationId)).data;
+      let i=getAfter(intentPath(a.lastOperationId)).data;
+      let c=i.command;
+      return exact(a,['schemaVersion','clinicId','recordId','revision','lastOperationId','data']) && a.schemaVersion is int && a.schemaVersion==1
+        && a.clinicId=='main' && uuid(id) && a.recordId==id && uuid(a.lastOperationId) && i.kind=='appointment' && i.status=='committed'
+        && !exists(domainReceiptPath('appointment',a.lastOperationId)) && r.recordId==id && r.operationId==a.lastOperationId
+        && c.recordId==id && a.data==c.data && revision(a.revision) && a.revision==c.expectedRevision+1
+        && appointmentText(c.data.patientName,200,false) && appointmentText(c.data.reason,200,false) && appointmentText(c.data.notes,4000,true)
+        && (before==null ? c.expectedRevision==0 : before.data.revision==c.expectedRevision && before.data.recordId==id)
+        && (c.data.patientRecordId==null || exists(patientProfilePath(c.data.patientRecordId)));
+    }
+    // Inductive native list transition: preserve every other slot without
+    // evaluating 200 rows. Only the removed own slot and new neighbors change.
+    // Empty slices are explicitly guarded for the Firestore Rules runtime.
+    function appointmentRemoved(slots,at) {
+      return at<0 ? slots : (at==0?[]:slots[0:at]).concat(at+1<slots.size()?slots[at+1:slots.size()]:[]);
+    }
+    function appointmentInserted(slots,at,slot) {
+      return at<0 ? slots : (at==0?[]:slots[0:at]).concat([slot]).concat(at<slots.size()?slots[at:slots.size()]:[]);
+    }
+    function appointmentDaySlots(beforeSlots,a,p,c,old) {
+      let remove=old!=null && old.data.data.date==a.recordId && appointmentOccupied(old.data.data);
+      let insert=c.data.date==a.recordId && appointmentOccupied(c.data);
+      let remaining=appointmentRemoved(beforeSlots,p.removeAt);
+      let slot=appointmentSlot(c.recordId,c.data);
+      return (remove ? p.removeAt>=0 && p.removeAt<beforeSlots.size() && beforeSlots[p.removeAt]==appointmentSlot(c.recordId,old.data.data) : p.removeAt==-1)
+        && (insert ? p.insertAt>=0 && p.insertAt<=remaining.size()
+          && (p.insertAt==0 || remaining[p.insertAt-1].endMinute<=slot.startMinute)
+          && (p.insertAt==remaining.size() || slot.endMinute<=remaining[p.insertAt].startMinute) : p.insertAt==-1)
+        && a.slots==appointmentInserted(remaining,p.insertAt,slot);
+    }
+    function appointmentDayWrite(before,a,date) {
+      let r=getAfter(domainReceiptPath('appointment',a.lastOperationId)).data;
+      let c=getAfter(intentPath(a.lastOperationId)).data.command;
+      let old=get(anyPath('appointmentRecords',c.recordId));
+      let p=appointmentChange(r,date);
+      return exact(a,['schemaVersion','clinicId','recordId','revision','lastOperationId','slots','slotIndexVersion'])
+        && a.schemaVersion is int && a.schemaVersion==1 && a.clinicId=='main' && day(date) && a.recordId==date && a.slotIndexVersion is int && a.slotIndexVersion==2
+        && a.slots is list && a.slots.size()<=200 && uuid(a.lastOperationId) && r.operationId==a.lastOperationId && p.date==date
+        && !exists(domainReceiptPath('appointment',a.lastOperationId)) && revision(a.revision) && a.revision==p.expectedDayRevision+1
+        && (before==null ? p.expectedDayRevision==0 : before.data.slotIndexVersion==2 && before.data.revision==p.expectedDayRevision)
+        && (date!=c.data.date || (appointmentText(c.data.doctorName,200,false) && appointmentText(c.data.appointmentType,80,false)))
+        && appointmentDaySlots(before==null?[]:before.data.slots,a,p,c,old);
+    }
+    match /clinics/main/appointmentRecords/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery();
+      allow create,update: if owner() && appointmentRecordWrite(resource,request.resource.data,id);
+      allow delete: if false;
+    }
+    match /clinics/main/appointmentDays/{date} {
+      allow get: if owner() && day(date);
+      allow list: if owner() && boundedQuery();
+      allow create,update: if owner() && appointmentDayWrite(resource,request.resource.data,date);
+      allow delete: if false;
+    }
+    match /clinics/main/appointmentOperations/{id} {
+      allow get: if owner() && uuid(id);
+      allow create: if owner() && appointmentReceipt(request.resource.data,id);
+      allow list,update,delete: if false;
+    }
     match /{document=**} { allow read, write: if false; }
   }
 }

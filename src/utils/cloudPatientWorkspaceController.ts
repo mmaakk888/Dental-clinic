@@ -1,6 +1,6 @@
 import { normalizeContactPhone } from './clinicContacts';
 import { CloudPatientError, parseCloudPatientRecord, prepareCloudPatientCommand,
-  prepareCloudPatientPhoneInput, type CloudPatientCommand, type CloudPatientPage,
+  prepareCloudPatientPhoneInput, type CloudPatientWriteCommand, type CloudPatientPage,
   type CloudPatientPhoneInput, type CloudPatientProfile, type CloudPatientRecord,
   type CloudPatientRepository } from './cloudPatientRepository';
 import { CloudOperationIntentError, parseCloudOperationIntent, prepareCloudIntentCommand,
@@ -18,9 +18,9 @@ const validNumber = (value: unknown): value is number => typeof value === 'numbe
   && Number.isSafeInteger(value) && value > 0 && value <= MAX_NUMBER;
 
 export type CloudPatientWorkspaceDraft = Readonly<{
-  action: CloudPatientCommand['action']; recordId: string; expectedRevision: number;
+  action: 'create' | 'update'; recordId: string; expectedRevision: number;
   profile: Readonly<CloudPatientProfile>;
-}>;
+}> | Readonly<{ action: 'import'; recordId: string; expectedRevision: 0; fileNo: number; profile: Readonly<CloudPatientProfile> }>;
 export type CloudPatientWorkspaceQuery = Readonly<{ kind: 'all' }
   | { kind: 'phone'; mobile: string } | { kind: 'file'; fileNo: number }>;
 export type CloudPatientWorkspaceState = Readonly<{
@@ -109,7 +109,7 @@ export function createCloudPatientWorkspaceController(options: {
     query: Object.freeze({ kind: 'all' }), error: '', notice: '', closed: false });
   let epoch = 0, closed = false, checkingActive = false, capturing = false;
   let repository: CloudPatientWorkspaceCapability | null = null;
-  let command: Readonly<CloudPatientCommand> | null = null;
+  let command: Readonly<CloudPatientWriteCommand> | null = null;
   let createdAt: string | null = null, actorUid: string | null = null, intentHash: string | null = null;
   let acknowledgedFileNo: number | null = null;
   let originalFileNo: number | null = null;
@@ -178,7 +178,7 @@ export function createCloudPatientWorkspaceController(options: {
   history.subscribe(value => {
     if (!closed && state.recoveryLoading !== value.loading) publish({ ...state, recoveryLoading: value.loading });
   });
-  function checkedIntent(value: unknown, id: string, expected?: Readonly<CloudPatientCommand>, time?: string) {
+  function checkedIntent(value: unknown, id: string, expected?: Readonly<CloudPatientWriteCommand>, time?: string) {
     const intent = parseCloudOperationIntent(value), recovered = prepareCloudPatientCommand(intent.command);
     if (intent.kind !== 'patient-profile' || intent.operationId !== id || recovered.operationId !== id
       || actorUid !== null && intent.actorUid !== actorUid || intentHash !== null && intent.requestHash !== intentHash
@@ -310,7 +310,7 @@ export function createCloudPatientWorkspaceController(options: {
       const before = epoch, draft = state.draft;
       try {
         capturing = true;
-        let prepared: CloudPatientCommand, time: string;
+        let prepared: CloudPatientWriteCommand, time: string;
         try {
           const operationId = (options.newId ?? (() => crypto.randomUUID()))();
           time = (options.now ?? (() => new Date().toISOString()))();
@@ -422,11 +422,14 @@ export function createCloudPatientWorkspaceController(options: {
       assertActive(ticket); if (result.intent.status === 'cancelled') throw new CloudPatientError('conflict');
       const known = state.selected?.recordId === result.recovered.recordId ? state.selected
         : state.records.find(record => record.recordId === result.recovered.recordId) ?? null;
-      originalFileNo = result.recovered.action === 'update' ? known?.fileNo ?? null : null;
+      originalFileNo = result.recovered.action === 'import' ? result.recovered.fileNo
+        : result.recovered.action === 'update' ? known?.fileNo ?? null : null;
       command = Object.freeze({ ...result.recovered, profile: Object.freeze(result.recovered.profile) });
       createdAt = result.intent.createdAt; actorUid = result.intent.actorUid; intentHash = result.intent.requestHash; acknowledgedFileNo = null;
       publish({ ...state, loading: false, pendingOperationId: operationId, saveStatus: 'preparing',
-        draft: Object.freeze({ action: command.action, recordId: command.recordId, expectedRevision: command.expectedRevision, profile: command.profile }),
+        draft: Object.freeze(command.action === 'import'
+          ? { action: 'import' as const, recordId: command.recordId, expectedRevision: 0 as const, fileNo: command.fileNo, profile: command.profile }
+          : { action: command.action, recordId: command.recordId, expectedRevision: command.expectedRevision, profile: command.profile }),
         error: '', notice: 'استرجعنا الأمر الأصلي؛ لم ننشئ عملية أو رقم ملف بديلًا.' });
       assertActive(ticket); await execute(ticket);
       return active() && state.pendingOperationId === null && state.saveStatus === 'idle';

@@ -4,20 +4,24 @@ import type { CloudClinicSettingsWorkspaceController } from './cloudClinicSettin
 import type { createCloudProstheticWorkspaceController } from './cloudProstheticWorkspaceController';
 import type { CloudPrescriptionWorkspaceController } from './cloudPrescriptionWorkspaceController';
 import type { CloudExpenseWorkspaceController } from './cloudExpenseWorkspaceController';
+import type { CloudClinicOverviewController } from './cloudClinicOverviewController';
+import type { CloudTransferWorkspaceController } from './cloudTransferWorkspaceController';
 
 /** A closed release gate, not user permission or a URL/env override. Remains
  * false until complete integration/Rules/empty-start acceptance is recorded
  * in RELEASE-CHECKLIST.ar.md. Existing local App is never its fallback. */
-export const CLOUD_COMPLETE_RELEASE_UI = Object.freeze({ available: false,
-  reason: 'الربط الكامل وقواعد الحفظ المجمعة تحت الاختبار؛ التشغيل الفعلي غير مفعّل بعد.' });
+export { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 type Controller = CloudAppointmentWorkspaceController | CloudClinicSettingsWorkspaceController
-  | ReturnType<typeof createCloudProstheticWorkspaceController> | CloudPrescriptionWorkspaceController | CloudExpenseWorkspaceController;
+  | ReturnType<typeof createCloudProstheticWorkspaceController> | CloudPrescriptionWorkspaceController | CloudExpenseWorkspaceController
+  | CloudClinicOverviewController | CloudTransferWorkspaceController;
 export type CloudReleaseWorkspace = (
   | { kind: 'appointments'; controller: CloudAppointmentWorkspaceController }
   | { kind: 'settings'; controller: CloudClinicSettingsWorkspaceController }
   | { kind: 'prosthetics'; controller: ReturnType<typeof createCloudProstheticWorkspaceController> }
   | { kind: 'prescription'; controller: CloudPrescriptionWorkspaceController; patientRecordId: string }
   | { kind: 'expenses'; controller: CloudExpenseWorkspaceController }
+  | { kind: 'home' | 'directory' | 'finance' | 'export'; controller: CloudClinicOverviewController }
+  | { kind: 'transfer'; controller: CloudTransferWorkspaceController }
 ) & { canClose(): boolean; dispose(): void };
 const wrap = <T extends { kind: string; controller: Controller }>(value: T): T & { canClose(): boolean; dispose(): void } =>
   Object.freeze({ ...value, canClose: () => value.controller.canClose(), dispose: () => value.controller.dispose() });
@@ -26,9 +30,22 @@ const wrap = <T extends { kind: string; controller: Controller }>(value: T): T &
  * user action; no SDK/data access, ID/clock or local configuration on mount. */
 export async function createCloudReleaseWorkspace(context: CloudOperatingAdditionalContext,
   request: { kind: 'appointments'; initialDate: string } | { kind: 'settings' | 'prosthetics' | 'expenses' }
+    | { kind: 'home' | 'directory' | 'finance' | 'export'; initialDate: string } | { kind: 'transfer' }
     | { kind: 'prescription'; patientRecordId: string }): Promise<CloudReleaseWorkspace> {
   const requireActive = () => { if (!context.isActive()) throw new Error('تعذر فتح القسم في هذه الجلسة.'); };
   requireActive();
+  if (request.kind === 'home' || request.kind === 'directory' || request.kind === 'finance' || request.kind === 'export') {
+    const module = await import('./cloudClinicOverviewController'); requireActive();
+    const controller = module.createCloudClinicOverviewController({ getSnapshot: context.getClinicSnapshot,
+      isActive: context.isActive, initialDate: request.initialDate });
+    controller.setTab(request.kind === 'export' ? 'export' : request.kind);
+    return wrap({ kind: request.kind, controller });
+  }
+  if (request.kind === 'transfer') {
+    const module = await import('./cloudTransferWorkspaceController'); requireActive();
+    return wrap({ kind: 'transfer' as const, controller: module.createCloudTransferWorkspaceController({ ownerUid: context.ownerUid,
+      isActive: context.isActive, getPatients: context.getPatients, getContacts: context.getContacts, getSnapshot: context.getClinicSnapshot }) });
+  }
   if (request.kind === 'appointments') {
     const module = await import('./cloudAppointmentWorkspaceController'); requireActive();
     return wrap({ kind: 'appointments' as const, controller: module.createCloudAppointmentWorkspaceController({

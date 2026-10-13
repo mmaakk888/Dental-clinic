@@ -59,6 +59,7 @@ export async function loadCloudAppointmentDay(repository: CloudAppointmentReposi
       const startMinute = Number(record.data.time.slice(0, 2)) * 60 + Number(record.data.time.slice(3, 5));
       return { recordId: record.recordId, startMinute, endMinute: startMinute + record.data.durationMinutes };
     });
+    if (last?.slotIndexVersion === 2) slots.sort((a, b) => a.startMinute - b.startMinute);
     if (JSON.stringify(slots) !== JSON.stringify(last?.slots ?? [])) fail();
     assertActive();
     return freeze({ date: query.date, revision: last?.revision ?? 0, index: last,

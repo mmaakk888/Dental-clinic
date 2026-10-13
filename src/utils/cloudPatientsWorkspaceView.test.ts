@@ -69,6 +69,14 @@ test('patient view starts unloaded with no SDK/read on render, clinical totals, 
   assert.doesNotMatch(html, /أحمد اختبار|المتبقي|المدفوع|رصيد|تم الحفظ|<nav/);
 });
 
+test('unknown historical first visit displays unrecorded and recovered import clearly retains original number', () => {
+  const selected = record({ data: { ...record().data, firstVisit: '' } });
+  const details = viewProps({ state: state({ selected, loaded: true }) }).html(); assert.match(details, /غير مسجل/);
+  const draft = { action: 'import' as const, recordId: ID, expectedRevision: 0 as const, fileNo: 450, profile: selected.data };
+  const rendered = viewProps({ state: state({ draft, pendingOperationId: OP, saveStatus: 'retry-required' }) }).html();
+  assert.match(rendered, /استرجاع استيراد ملف #450/); assert.match(rendered, /الاسترجاع لا يخصص رقمًا جديدًا/); assert.match(rendered, /تاريخ أول زيارة — اختياري/);
+});
+
 test('preview masks supplied records, selected, draft, query inputs and raw notices, and guards all data handlers', () => {
   const data = record(), h = viewProps({ previewOnly: true, loadedQuery: 'PRIVATE_FILTER', fileQuery: '401', phoneQuery: 'PRIVATE_PHONE',
     state: state({ loaded: true, records: [data], selected: data, nextAfterId: ID, error: 'PRIVATE_ERROR', notice: 'PRIVATE_NOTICE', query: { kind: 'phone', mobile: 'PRIVATE_QUERY' },

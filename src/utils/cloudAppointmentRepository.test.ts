@@ -25,7 +25,7 @@ const command = (number = 1, expectedRevision = 0, changes: Partial<CloudAppoint
 const record = (changes: Record<string, unknown> = {}) => ({ schemaVersion: 1, clinicId: 'main', recordId: id(101),
   revision: 1, lastOperationId: id(1), data: data(), ...changes });
 const day = (changes: Record<string, unknown> = {}) => ({ schemaVersion: 1, clinicId: 'main', recordId: DAY,
-  revision: 1, lastOperationId: id(1), slots: [{ recordId: id(101), startMinute: 600, endMinute: 630 }], ...changes });
+  revision: 1, lastOperationId: id(1), slots: [{ recordId: id(101), startMinute: 600, endMinute: 630 }], slotIndexVersion: 2, ...changes });
 const profile = (recordId = id(501), changes: Record<string, unknown> = {}) => ({ schemaVersion: 1, clinicId: 'main', recordId,
   fileNo: 401, revision: 1, lastOperationId: id(500), phoneKey: null,
   data: { name: 'مريض مصطنع', mobile: '', age: 30, gender: '', firstVisit: '2026-10-12', notes: '', allergy: '' }, ...changes });
@@ -356,14 +356,14 @@ test('bounded text/enums/booleans and exact fields reject controls, unknown coer
     assert.throws(() => parseCloudAppointmentRecord({ ...record(), ...change }), code('invalid'));
   }
 });
-test('day index accepts exactly 200 UUID-sorted non-overlapping slots, never truncates capacity', async () => {
+test('day index accepts exactly 200 time-sorted non-overlapping slots, never truncates capacity', async () => {
   const slots = Array.from({ length: 200 }, (_, index) => ({ recordId: id(1000 + index), startMinute: index * 2, endMinute: index * 2 + 1 }));
   assert.equal(MAX_CLOUD_APPOINTMENT_DAY_SLOTS, 200); assert.equal(parseCloudAppointmentDay(day({ slots })).slots.length, 200);
   assert.throws(() => parseCloudAppointmentDay(day({ slots: [...slots, { recordId: id(1200), startMinute: 500, endMinute: 501 }] })), code('invalid'));
   const h = harness(); h.docs.set(dayPath(), day({ slots })); const input = command(); await h.prepare(input); const before = structuredClone(h.docs);
   await assert.rejects(h.repo.commit(input), code('conflict')); assert.deepEqual(h.docs, before);
 });
-test('day index rejects duplicate/reversed UUIDs, overlaps, sparse/accessor arrays and malformed slot envelopes', () => {
+test('day index rejects duplicate IDs/time disorder, overlaps, sparse/accessor arrays and malformed slot envelopes', () => {
   const own = day().slots[0], other = { recordId: id(102), startMinute: 630, endMinute: 640 };
   assert.doesNotThrow(() => parseCloudAppointmentDay(day({ slots: [own, other] })));
   for (const slots of [[own, own], [other, own], [own, { ...other, startMinute: 629 }], [{ ...own, endMinute: 600 }],
@@ -371,6 +371,44 @@ test('day index rejects duplicate/reversed UUIDs, overlaps, sparse/accessor arra
     new Array(1), Object.assign([own], { extra: true })]) assert.throws(() => parseCloudAppointmentDay(day({ slots })), code('invalid'));
   for (const changes of [{ recordId: '2026-02-30' }, { revision: 0 }, { schemaVersion: 2 }, { clinicId: 'other' }, { lastOperationId: null }, { extra: true }]) {
     assert.throws(() => parseCloudAppointmentDay(day(changes)), code('invalid'));
+  }
+});
+test('new day indexes sort by time, not UUID, and immutable transition proofs identify exact list positions', async()=>{
+  const h=harness();await h.commit(command(1,0,{time:'11:00'},id(101)));
+  await h.commit(command(2,0,{time:'10:00'},id(102)));
+  assert.deepEqual(h.docs.get(dayPath()).slots.map((slot:any)=>slot.recordId),[id(102),id(101)]);
+  assert.deepEqual(h.docs.get(operation(2)).dayChanges,[{date:DAY,expectedDayRevision:1,removeAt:-1,insertAt:0}]);
+  await h.commit(command(3,1,{time:'09:00'},id(101)));
+  assert.deepEqual(h.docs.get(operation(3)).dayChanges,[{date:DAY,expectedDayRevision:2,removeAt:1,insertAt:0}]);
+  assert.deepEqual(h.docs.get(dayPath()).slots.map((slot:any)=>slot.recordId),[id(101),id(102)]);
+});
+test('time-sorted 200-slot indexes support removing/reinserting first, middle and last without truncation',async()=>{
+  const slots=Array.from({length:200},(_,n)=>({recordId:id(1200-n),startMinute:n*4,endMinute:n*4+2}));
+  for(const [at,nextMinute]of [[0,1390],[100,403],[199,2]]){
+    const h=harness(),own=slots[at],time=(n:number)=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+    h.docs.set(dayPath(),day({slots}));h.docs.set(recordPath(own.recordId),record({recordId:own.recordId,data:data({time:time(own.startMinute),durationMinutes:2})}));
+    await h.commit(command(2,1,{time:time(nextMinute),durationMinutes:1},own.recordId));
+    const p=h.docs.get(operation(2)).dayChanges[0];assert.equal(p.removeAt,at);assert.equal(h.docs.get(dayPath()).slots.length,200);
+    assert.equal(h.docs.get(dayPath()).slots[p.insertAt].recordId,own.recordId);
+  }
+});
+test('legacy indexes stay readable but cannot be silently migrated by a business write; legacy receipt ACK is read-only',async()=>{
+  const h=harness(),legacy:any=day();delete legacy.slotIndexVersion;h.docs.set(dayPath(),legacy);
+  assert.equal((await h.repo.getDay(DAY))?.slotIndexVersion,undefined);
+  await h.prepare(command(2,0,{},id(102)));const before=structuredClone(h.docs);
+  await assert.rejects(h.repo.commit(command(2,0,{},id(102))),code('invalid'));assert.deepEqual(h.docs,before);
+  const x=harness(),original=command();await x.commit(original);const receipt=x.docs.get(operation(1));delete receipt.dayIndexVersion;delete receipt.dayChanges;
+  x.docs.delete(recordPath());x.docs.delete(dayPath());x.calls.length=0;
+  assert.equal((await x.repo.commit(original)).status,'already-committed');
+  assert.deepEqual(x.calls.filter(call=>call.startsWith('get:')),[`get:${operation(1)}`,`get:${intentPath(1)}`]);
+});
+test('historical modern ACK rejects malformed, unknown or noncanonical transition proofs without newer-state reads',async()=>{
+  for(const change of [(r:any)=>{r.dayIndexVersion=3;},(r:any)=>{r.dayChanges=[];},(r:any)=>{r.dayChanges.push({...r.dayChanges[0]});},
+    (r:any)=>{r.dayChanges[0].removeAt=0;},(r:any)=>{r.dayChanges[0].insertAt=-1;},(r:any)=>{r.dayChanges[0].date=OTHER_DAY;},
+    (r:any)=>{r.dayChanges[0].expectedDayRevision=-1;},(r:any)=>{r.dayChanges[0].extra=true;},(r:any)=>{r.dayChanges[0].insertAt=200;}]){
+    const h=harness();await h.commit(command());change(h.docs.get(operation(1)));h.calls.length=0;
+    await assert.rejects(h.repo.commit(command()),code('invalid'));
+    assert.deepEqual(h.calls.filter(call=>call.startsWith('get:')),[`get:${operation(1)}`,`get:${intentPath(1)}`]);
   }
 });
 test('getters/hidden/symbol/prototype data and proxies never execute as record values', () => {

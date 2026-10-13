@@ -54,6 +54,6 @@ test('preview unsubscribe and reentrant lifetime callbacks do not fabricate a ca
 test('preview graph cannot initialize a controller, SDK, storage, random ID, clock or provider', async () => {
   const result = await build({ entryPoints: ['src/utils/cloudCatalogUiStage.ts'], bundle: true, write: false,
     metafile: true, platform: 'browser', format: 'esm', logLevel: 'silent' });
-  assert.deepEqual(Object.keys(result.metafile!.inputs), ['src/utils/cloudCatalogUiStage.ts']);
+  assert.deepEqual(Object.keys(result.metafile!.inputs), ['src/utils/cloudReleaseReadiness.ts', 'src/utils/cloudCatalogUiStage.ts']);
   assert.doesNotMatch(result.outputFiles[0].text, /firebase|initializeApp|localStorage|sessionStorage|fetch\(|randomUUID|new Date|createCloudCatalogWorkspaceController/);
 });

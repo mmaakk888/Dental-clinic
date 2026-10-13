@@ -101,11 +101,21 @@ async function collect() {
   const p = await scenario('patient-create', 'patient-profile', { operationId: id(1), recordId: id(101), expectedRevision: 0, action: 'create', profile });
   scenarios.push(p, await scenario('patient-update', 'patient-profile', { ...p.command, operationId: id(2), expectedRevision: 1,
     action: 'update', profile: { ...profile, name: 'مريض مصطنع معدل' } }, p.after));
+  const high=await scenario('patient-import-high','patient-profile',{operationId:id(6),recordId:id(106),expectedRevision:0,action:'import',fileNo:450,
+    profile:{...profile,firstVisit:''}});
+  const low=await scenario('patient-import-low','patient-profile',{operationId:id(7),recordId:id(107),expectedRevision:0,action:'import',fileNo:12,
+    profile:{...profile,firstVisit:''}},high.after);
+  scenarios.push(high,low,await scenario('patient-create-after-import','patient-profile',{operationId:id(8),recordId:id(108),expectedRevision:0,
+    action:'create',profile},low.after));
   const c = await scenario('contact-create', 'contact', { operationId: id(3), recordId: id(201), expectedRevision: 0, action: 'create',
     contact: { id: id(201), name: 'جهة مصطنعة', mobile: '01012345678', createdAt: WHEN } });
   const cu = await scenario('contact-update-phone', 'contact', { ...c.command, operationId: id(4), expectedRevision: 1, action: 'update',
     contact: { ...c.command.contact, mobile: '01012345679' } }, c.after);
   scenarios.push(c, cu, await scenario('contact-delete', 'contact', { ...c.command, operationId: id(5), expectedRevision: 2, action: 'delete', contact: null }, cu.after));
+  const consent=await scenario('contact-explicit-campaign-consent','contact',{...c.command,operationId:id(220),recordId:id(221),
+    contact:{...c.command.contact,id:id(221),campaignConsent:{status:'allowed',phone:'201012345678',recordedAt:WHEN}}});
+  scenarios.push(consent,await scenario('contact-explicit-campaign-decline','contact',{...consent.command,operationId:id(222),expectedRevision:1,action:'update',
+    contact:{...consent.command.contact,campaignConsent:{...consent.command.contact.campaignConsent,status:'declined'}}},consent.after));
   const exam = await scenario('catalog-initialize-examination', 'catalog', { mutationVersion: 2, action: 'examination',
     operationId: id(10), expectedRevision: 0, createdAt: WHEN, examinationCents: 10000 });
   const append = await scenario('catalog-append-service', 'catalog', { mutationVersion: 2, action: 'service',
@@ -152,6 +162,33 @@ async function collect() {
       reason: '', notes: '', doctorName: '', appointmentType: '', isFollowUp: false, isWalkIn: false } });
   scenarios.push(appt, await scenario('appointment-cancel', 'appointment', { ...appt.command, operationId: id(502), expectedRevision: 1,
     data: { ...appt.command.data, status: 'cancelled' } }, appt.after));
+  const otherDay='2026-10-13';
+  const clock=(minute:number)=>`${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`;
+  const appointmentSeed=(count:number,date=DAY,offset=0)=>{
+    const rows=seedBase(),slots=Array.from({length:count},(_,n)=>({recordId:id(5000+offset+count-n),startMinute:n*4,endMinute:n*4+2}));
+    rows.set(path('appointmentDays',date),{schemaVersion:1,clinicId:'main',recordId:date,revision:1,lastOperationId:id(999),slotIndexVersion:2,slots});
+    for(const slot of slots)rows.set(path('appointmentRecords',slot.recordId),{schemaVersion:1,clinicId:'main',recordId:slot.recordId,revision:1,lastOperationId:id(999),
+      data:{...appt.command.data,date,time:clock(slot.startMinute),durationMinutes:2}});
+    return {rows,slots};
+  };
+  const almost=appointmentSeed(199);
+  scenarios.push(await scenario('appointment-create-200th','appointment',{...appt.command,operationId:id(510),recordId:id(5500),
+    data:{...appt.command.data,time:clock(199*4),durationMinutes:2}},almost.rows));
+  const full=appointmentSeed(200);
+  for(const [n,newMinute] of [[0,1390],[100,403],[199,2]] as const){const own=full.slots[n];
+    scenarios.push(await scenario(`appointment-reschedule-200-${n}`,'appointment',{...appt.command,operationId:id(520+n),recordId:own.recordId,expectedRevision:1,
+      data:{...appt.command.data,time:clock(newMinute),durationMinutes:1}},full.rows));}
+  for(const n of [0,100,199])scenarios.push(await scenario(`appointment-cancel-200-${n}`,'appointment',{...appt.command,operationId:id(730+n),
+    recordId:full.slots[n].recordId,expectedRevision:1,data:{...appt.command.data,time:clock(n*4),durationMinutes:2,status:'cancelled'}},full.rows));
+  const destination=appointmentSeed(199,otherDay,1000),both=new Map([...full.rows,...destination.rows]);
+  scenarios.push(await scenario('appointment-cross-day-200','appointment',{...appt.command,operationId:id(940),recordId:full.slots[100].recordId,expectedRevision:1,
+    data:{...appt.command.data,date:otherDay,time:clock(199*4),durationMinutes:2}},both));
+  const inactiveAppointment=await scenario('appointment-inactive-create','appointment',{...appt.command,operationId:id(941),data:{...appt.command.data,status:'no_show'}});
+  scenarios.push(inactiveAppointment,await scenario('appointment-inactive-cross-day','appointment',{...inactiveAppointment.command,operationId:id(942),expectedRevision:1,
+    data:{...inactiveAppointment.command.data,date:otherDay,notes:'ملاحظة'}},inactiveAppointment.after));
+  scenarios.push(await scenario('appointment-linked-profile','appointment',{...appt.command,operationId:id(943),data:{...appt.command.data,patientRecordId:id(101)}},seedPatient()));
+  scenarios.push(await scenario('appointment-max-text','appointment',{...appt.command,operationId:id(944),data:{...appt.command.data,
+    patientName:'أ'.repeat(200),reason:'أ'.repeat(200),notes:'أ'.repeat(4000),doctorName:'أ'.repeat(200),appointmentType:'أ'.repeat(80),phone:'201012345678'}},seedBase()));
   const e = await scenario('expense-create', 'expense', { action: 'create', operationId: id(600), recordId: id(601), expectedRevision: 0, createdAt: WHEN,
     paidCents: 2000, data: { title: 'فاتورة مصطنعة', category: 'supplies', expenseType: 'supplies', date: DAY, note: '', isFixed: false,
       recurringPeriod: 'none', supplierName: 'مورد مصطنع', supplierPhone: '', supplierAddress: '', invoiceNumber: '1', invoiceDate: DAY, invoiceTime: '',
@@ -181,6 +218,74 @@ async function check(name: string, expected: boolean, state: Map<string, any>, w
   catch (error: any) { throw new Error(`${name}: ${String(error?.message ?? 'unknown')}`); }
   results.push({ name, expected, actual });
   if (actual !== expected) console.log(JSON.stringify({ name, expected, actual }));
+}
+async function appointmentTransactionAcceptance(initial:Scenario) {
+  await seed(initial.before);const {app,database}=client();
+  const adapter:any={authorizeOwner:async()=>UID,runTransaction:(work:any)=>runTransaction(database,async tx=>work({
+    get:async(key:string)=>{const snap=await tx.get(doc(database,key));return snap.exists()?snap.data():null;},
+    set:(key:string,data:object)=>tx.set(doc(database,key),data),
+  }))};
+  try{
+    const repo=createCloudAppointmentRepository(adapter,{digest}),journal=createCloudOperationIntentRepository(adapter,{digest});
+    const a={...initial.command,operationId:id(1950),recordId:id(5501)},b={...initial.command,operationId:id(1951),recordId:id(5502)};
+    await journal.prepare('appointment',a,WHEN);await journal.prepare('appointment',b,WHEN);
+    const outcomes=await Promise.allSettled([repo.commit(a),repo.commit(b)]);
+    assert.equal(outcomes.filter(v=>v.status==='fulfilled').length,1,'one winner for overlapping200th slot');
+    const winner=outcomes[0].status==='fulfilled'?a:b;
+    const accepted=(await getDoc(doc(database,path('appointmentDays',DAY)))).data()!;
+    assert.equal(accepted.slots.length,200);assert.equal(accepted.revision,2);
+    await journal.prepare('appointment',{...winner,operationId:id(1952),expectedRevision:1,data:{...winner.data,status:'cancelled'}},WHEN);
+    await repo.commit({...winner,operationId:id(1952),expectedRevision:1,data:{...winner.data,status:'cancelled'}});
+    assert.equal((await repo.commit(winner)).status,'already-committed');
+    const later=(await getDoc(doc(database,path('appointmentDays',DAY)))).data()!;
+    assert.equal(later.slots.length,199);assert.equal(later.revision,3);
+    results.push({name:'appointment:actual-transactions-collision-max200-and-historical-ACK',expected:true,actual:true});
+  }finally{await deleteApp(app);}
+}
+async function readerQueryAcceptance(state:Map<string,any>) {
+  const cases:[string,boolean,(db:ReturnType<typeof getFirestore>)=>Promise<unknown>][]=[];
+  for(const name of ['patientProfiles','patientFiles','patientAccounts','patientSessions','patientReceipts','contactRecords','appointmentRecords','appointmentDays']){
+    cases.push([`${name}:bounded-whole-snapshot`,true,db=>getDocs(query(collection(db,`clinics/main/${name}`),orderBy(documentId()),limit(50)))]);
+    cases.push([`${name}:unbounded-denied`,false,db=>getDocs(query(collection(db,`clinics/main/${name}`),orderBy(documentId())))]);
+  }
+  cases.push(['catalog:exact-ID-query',true,db=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==','serviceCatalog'),orderBy(documentId()),limit(1)))]);
+  cases.push(['counter:exact-ID-query',true,db=>getDocs(query(collection(db,'clinics/main/counters'),where(documentId(),'==','patientFiles'),orderBy(documentId()),limit(1)))]);
+  cases.push(['settings:unfiltered-denied',false,db=>getDocs(query(collection(db,'clinics/main/settings'),limit(1)))]);
+  cases.push(['counter:unfiltered-denied',false,db=>getDocs(query(collection(db,'clinics/main/counters'),limit(1)))]);
+  cases.push(['appointment:date-filtered-page',true,db=>getDocs(query(collection(db,'clinics/main/appointmentRecords'),where('data.date','==',DAY),orderBy(documentId()),limit(50)))]);
+  for(const name of ['operationIntents','patientOperations','clinicalOperations','clinicalSessionProofs','invoiceImages'])
+    cases.push([`${name}:private-unfiltered-denied`,false,db=>getDocs(query(collection(db,`clinics/main/${name}`),limit(50)))]);
+  for(const [name,expected,run]of cases){await seed(state);const {app,database}=client();let actual=false;
+    try{await run(database);actual=true;}catch(error:any){if(error?.code!=='permission-denied')throw error;}finally{await deleteApp(app);}
+    results.push({name:`reader:${name}`,expected,actual});if(actual!==expected)console.log(JSON.stringify({name:`reader:${name}`,expected,actual}));
+  }
+}
+async function patientImportTransactionAcceptance(initial:Scenario){
+  await seed(initial.after);const {app,database}=client();
+  const adapter:any={authorizeOwner:async()=>UID,runTransaction:(work:any)=>runTransaction(database,async tx=>work({
+    get:async(key:string)=>{const snap=await tx.get(doc(database,key));return snap.exists()?snap.data():null;},set:(key:string,data:object)=>tx.set(doc(database,key),data),
+  })).catch(error=>{console.log(JSON.stringify({patientTransactionDiagnostic:String(error?.message??'unknown').slice(0,2000)}));throw error;})};
+  try{const repo=createJournaledCloudPatientRepository(adapter,{digest}),journal=createCloudOperationIntentRepository(adapter,{digest});
+    const importing={action:'import' as const,operationId:id(1960),recordId:id(1961),expectedRevision:0 as const,fileNo:500,profile:{...profile,firstVisit:''}};
+    const ordinary={action:'create' as const,operationId:id(1962),recordId:id(1963),expectedRevision:0,profile};
+    await journal.prepare('patient-profile',importing,WHEN);await journal.prepare('patient-profile',ordinary,WHEN);
+    // The engine can deny a stale companion before returning ABORTED to Lite.
+    // Recovery must replay the ORIGINAL operation, never allocate a replacement
+    // ID or assume a failed response rolled back a server-accepted transaction.
+    const attempts=await Promise.allSettled([repo.commit(importing),repo.commit(ordinary)]);
+    assert.ok(attempts.some(value=>value.status==='fulfilled'),'at least one valid counter allocation wins');
+    const importResult=await repo.commit(importing),createResult=await repo.commit(ordinary);
+    assert.equal(importResult.fileNo,500);assert.ok(createResult.fileNo===451||createResult.fileNo===501);
+    const counter=(await getDoc(doc(database,path('counters','patientFiles')))).data()!;
+    assert.equal(counter.lastFileNo,Math.max(500,createResult.fileNo));
+    const collisionA={...importing,operationId:id(1964),recordId:id(1965),fileNo:600},collisionB={...importing,operationId:id(1966),recordId:id(1967),fileNo:600};
+    await journal.prepare('patient-profile',collisionA,WHEN);await journal.prepare('patient-profile',collisionB,WHEN);
+    const outcomes=await Promise.allSettled([repo.commit(collisionA),repo.commit(collisionB)]);
+    assert.equal(outcomes.filter(v=>v.status==='fulfilled').length,1);
+    assert.equal((await repo.commit(importing)).status,'already-committed');
+    assert.equal((await getDoc(doc(database,path('counters','patientFiles')))).data()!.lastFileNo,600);
+    results.push({name:'patient-import:actual-concurrent-create-import-collision-historical-ACK',expected:true,actual:true});
+  }finally{await deleteApp(app);}
 }
 try {
   await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.release.rules', content: readFileSync('firestore.release.rules', 'utf8') }] } });
@@ -228,7 +333,58 @@ try {
     await check(`${s.name}:physical-domain-deletion`, false, s.after, deletion);
     const noIntent = structuredClone(s.before); noIntent.delete(path('operationIntents', s.command.operationId));
     await check(`${s.name}:missing-prepared-intent`, false, noIntent, s.writes);
+    if(s.kind==='appointment'){
+      const receiptKey=path('appointmentOperations',s.command.operationId),receipt=s.writes.get(receiptKey);
+      for(const field of ['removeAt','insertAt','expectedDayRevision','date'] as const){const bad=structuredClone(s.writes),p=bad.get(receiptKey).dayChanges[0];
+        if(field==='date')p.date='2026-10-15';else p[field]++;
+        await check(`${s.name}:forged-${field}`,false,s.before,bad);}
+      const wrongVersion=structuredClone(s.writes);wrongVersion.get(receiptKey).dayIndexVersion=1;
+      await check(`${s.name}:reject-legacy-write`,false,s.before,wrongVersion);
+      const extraProof=structuredClone(s.writes);extraProof.get(receiptKey).dayChanges.push({...receipt.dayChanges[0]});
+      await check(`${s.name}:extra-day-proof`,false,s.before,extraProof);
+      for(const [key,value]of s.writes)if(key.includes('/appointmentDays/')&&value.slots.length>1){
+        const altered=structuredClone(s.writes);altered.get(key).slots[0].endMinute++;
+        await check(`${s.name}:unrelated-slot-tamper`,false,s.before,altered);
+        const reordered=structuredClone(s.writes);reordered.get(key).slots.reverse();
+        await check(`${s.name}:slot-reordering`,false,s.before,reordered);
+      }
+      if(s.command.data.patientRecordId){const missingProfile=structuredClone(s.before);missingProfile.delete(path('patientProfiles',s.command.data.patientRecordId));
+        await check(`${s.name}:missing-linked-profile`,false,missingProfile,s.writes);}
+      const stale=structuredClone(s.before),old=stale.get(path('appointmentRecords',s.command.recordId));
+      if(old){old.revision++;await check(`${s.name}:stale-record-revision`,false,stale,s.writes);}
+      if(s.name==='appointment-max-text')for(const field of ['patientName','reason','notes','doctorName','appointmentType']as const){
+        for(const suffix of ['\u202e','\u0000','\u2028']){const badBefore=structuredClone(s.before),badWrites=structuredClone(s.writes);
+          const bad=field==='notes'?'نص'+suffix:'نص'+suffix;
+          badBefore.get(path('operationIntents',s.command.operationId)).command.data[field]=bad;
+          badWrites.get(path('operationIntents',s.command.operationId)).command.data[field]=bad;
+          badWrites.get(path('appointmentRecords',s.command.recordId)).data[field]=bad;
+          await check(`${s.name}:invalid-${field}-${suffix.charCodeAt(0)}`,false,badBefore,badWrites);}
+      }
+    }
+    if(s.kind==='patient-profile'&&s.command.action==='import'){
+      const counter=path('counters','patientFiles');
+      for(const delta of [-1,1]){const bad=structuredClone(s.writes);bad.get(counter).lastFileNo+=delta;
+        await check(`${s.name}:counter-must-be-exact-max-${delta}`,false,s.before,bad);}
+      const wrongIntent=structuredClone(s.before);wrongIntent.get(path('operationIntents',s.command.operationId)).command.fileNo++;
+      await check(`${s.name}:import-fileNo-must-match-intent`,false,wrongIntent,s.writes);
+      const collision=structuredClone(s.before);collision.set(path('patientFiles',s.command.fileNo),{schemaVersion:1,clinicId:'main',fileNo:s.command.fileNo,recordId:id(109)});
+      await check(`${s.name}:existing-file-number-cannot-be-overwritten`,false,collision,s.writes);
+      const duplicate=structuredClone(s.before);duplicate.set(path('patientProfiles',s.command.recordId),{...patient,recordId:s.command.recordId,fileNo:s.command.fileNo});
+      await check(`${s.name}:existing-profile-cannot-be-overwritten`,false,duplicate,s.writes);
+    }
+    if(s.kind==='contact'&&s.command.contact?.campaignConsent){
+      for(const patch of [{phone:'201012345679'},{status:'yes'},{recordedAt:'2026-02-30T00:00:00.000Z'},{extra:true}]){
+        const badBefore=structuredClone(s.before),badWrites=structuredClone(s.writes);
+        Object.assign(badBefore.get(path('operationIntents',s.command.operationId)).command.contact.campaignConsent,patch);
+        Object.assign(badWrites.get(path('operationIntents',s.command.operationId)).command.contact.campaignConsent,patch);
+        Object.assign(badWrites.get(path('contactRecords',s.command.recordId)).data.campaignConsent,patch);
+        await check(`${s.name}:forged-consent-${Object.keys(patch)[0]}`,false,badBefore,badWrites);
+      }
+    }
   }
+  if(selected.some(s=>s.kind==='appointment'))await appointmentTransactionAcceptance(scenarios.find(s=>s.name==='appointment-create-200th')!);
+  if(selected.some(s=>s.kind==='patient-profile'||s.kind==='appointment'))await readerQueryAcceptance(scenarios.find(s=>s.name==='patient-import-low')!.after);
+  if(selected.some(s=>s.kind==='patient-profile'))await patientImportTransactionAcceptance(scenarios.find(s=>s.name==='patient-import-low')!);
   const failed = results.filter(r => r.expected !== r.actual);
   console.log(JSON.stringify({ target: '127.0.0.1:8789 DEMO-only', rulesEngineCases: results.length, passed: results.length - failed.length, failed,
     testedDomains: [...new Set(selected.map(s => s.kind))], completeRelease: false }));

@@ -9,8 +9,9 @@ const color = { prepared: 'bg-amber-50 text-amber-900', committed: 'bg-emerald-5
 function title(intent: CloudOperationIntent) {
   const data = intent.kind === 'contact' ? intent.command.contact : intent.command.profile;
   const name = data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' ? data.name : '';
-  const action = intent.command.action === 'create' ? 'إنشاء' : intent.command.action === 'delete' ? 'حذف' : 'تعديل';
-  return `${action} ${intent.kind === 'contact' ? 'جهة اتصال' : 'ملف مريض'}${name ? ` — ${name}` : ''}`;
+  const action = intent.command.action === 'import' ? 'استيراد' : intent.command.action === 'create' ? 'إنشاء' : intent.command.action === 'delete' ? 'حذف' : 'تعديل';
+  const file = intent.kind === 'patient-profile' && intent.command.action === 'import' && typeof intent.command.fileNo === 'number' ? ` #${intent.command.fileNo}` : '';
+  return `${action} ${intent.kind === 'contact' ? 'جهة اتصال' : 'ملف مريض'}${file}${name ? ` — ${name}` : ''}`;
 }
 
 /** Explicit read-only history; rendering/subscribing never reads the server.

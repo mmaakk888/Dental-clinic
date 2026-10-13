@@ -1,11 +1,12 @@
 import { CloudClinicalError } from './cloudClinicalRepository';
 import { createCloudClinicalWorkspaceController, type CloudClinicalWorkspaceController } from './cloudClinicalWorkspaceController';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 import { createCloudClinicalRecoveryController, type CloudClinicalRecoveryController } from './cloudClinicalRecoveryController';
 import type { CloudClinicalVisitWorkspaceController, CloudClinicalVisitWorkspaceState } from './cloudClinicalVisitWorkspaceController';
 
 /** Reviewed readiness only, NOT authorization; no URL/storage/env override. */
 export const CLOUD_CLINICAL_UI_STAGE = Object.freeze({
-  available: false,
+  available: CLOUD_COMPLETE_RELEASE_UI.available,
   reason: 'التشغيل السريري السحابي غير مفعّل بعد؛ يلزم اكتمال الترابط والقواعد المحمية واختبارات الاسترجاع قبل تشغيل العيادة.',
 });
 export type CloudClinicalWorkspaceBundle = Readonly<{

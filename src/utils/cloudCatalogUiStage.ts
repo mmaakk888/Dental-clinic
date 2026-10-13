@@ -1,8 +1,9 @@
 import type { CloudCatalogWorkspaceController, CloudCatalogWorkspaceState } from './cloudCatalogWorkspaceController';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 /** Reviewed readiness only, NOT authorization; no URL/storage/env override. */
 export const CLOUD_CATALOG_UI_STAGE = Object.freeze({
-  available: false,
+  available: CLOUD_COMPLETE_RELEASE_UI.available,
   reason: 'فهرس الخدمات السحابي غير مفعّل؛ يلزم اكتمال الترابط والقواعد المحمية واختبارات الاسترجاع قبل التشغيل.',
 });
 

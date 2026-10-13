@@ -16,7 +16,9 @@ test('complete-release UI remains explicitly source-disabled and frozen; no part
   assert.equal(CLOUD_COMPLETE_RELEASE_UI.available, false); assert.equal(Object.isFrozen(CLOUD_COMPLETE_RELEASE_UI), true);
 });
 for (const request of [{ kind: 'appointments', initialDate: '2026-10-13' }, { kind: 'settings' }, { kind: 'prosthetics' },
-  { kind: 'prescription', patientRecordId: ID }, { kind: 'expenses' }] as const) {
+  { kind: 'prescription', patientRecordId: ID }, { kind: 'expenses' }, { kind: 'transfer' },
+  { kind: 'home', initialDate: '2026-10-13' }, { kind: 'directory', initialDate: '2026-10-13' },
+  { kind: 'finance', initialDate: '2026-10-13' }, { kind: 'export', initialDate: '2026-10-13' }] as const) {
   test(`${request.kind} section construction binds scoped context but never initializes capabilities or reads on opening`, async () => {
     const h = context(), section = await createCloudReleaseWorkspace(h.value, request);
     assert.equal(section.kind, request.kind); assert.deepEqual(h.calls, []); assert.equal(Object.isFrozen(section), true);

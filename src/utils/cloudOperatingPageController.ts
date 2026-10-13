@@ -10,7 +10,7 @@ export type CloudOperatingContactsWorkspace = ReturnType<typeof createCloudConta
 type AdditionalCapabilityKey = 'getContacts' | 'getPatients' | 'getClinical' | 'getServiceCatalog'
   | 'getAppointments' | 'getClinicSettings' | 'getProsthetics' | 'getExpenses' | 'getClinicSnapshot';
 export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey>>;
-export type CloudOperatingAdditionalKind = 'appointments' | 'prosthetics' | 'expenses' | 'settings' | 'directory' | 'finance' | 'home' | 'whatsapp' | 'transfer' | 'prescription';
+export type CloudOperatingAdditionalKind = 'appointments' | 'prosthetics' | 'expenses' | 'settings' | 'directory' | 'finance' | 'home' | 'export' | 'whatsapp' | 'transfer' | 'prescription';
 export interface CloudOperatingAdditionalWorkspace { canClose(): boolean; dispose(): void }
 export type CloudOperatingAdditionalContext = Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey> & {
   readonly ownerUid: string; readonly isActive: () => boolean;
@@ -156,7 +156,7 @@ export function createCloudOperatingPageController(
   }
   function openAdditional<T extends CloudOperatingAdditionalWorkspace>(kind: CloudOperatingAdditionalKind,
     create: (context: CloudOperatingAdditionalContext) => T | Promise<T>): Promise<T | null> {
-    if (!['appointments', 'prosthetics', 'expenses', 'settings', 'directory', 'finance', 'home', 'whatsapp', 'transfer', 'prescription'].includes(kind)
+    if (!['appointments', 'prosthetics', 'expenses', 'settings', 'directory', 'finance', 'home', 'export', 'whatsapp', 'transfer', 'prescription'].includes(kind)
       || typeof create !== 'function' || closed || closing || cleanupFailed || state.pending || workspaceSwitching
       || additionalInvalidating || contactsInvalidating || patientsInvalidating || clinicalInvalidating || catalogInvalidating) return Promise.resolve(null);
     if (!runtimeValid()) { void rejectRuntime(); return Promise.resolve(null); }

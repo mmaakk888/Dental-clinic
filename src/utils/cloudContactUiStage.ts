@@ -1,5 +1,6 @@
 import { CloudContactError } from './cloudContactRepository';
 import { createCloudContactWorkspaceController } from './cloudContactWorkspaceController';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 /**
  * A reviewed release boundary, NOT authorization. Neither URLs, storage nor
@@ -7,7 +8,7 @@ import { createCloudContactWorkspaceController } from './cloudContactWorkspaceCo
  * the patient-derived directory are still unintegrated. Keep server checks.
  */
 export const CLOUD_CONTACTS_UI_STAGE = Object.freeze({
-  available: false,
+  available: CLOUD_COMPLETE_RELEASE_UI.available,
   reason: 'الحفظ السحابي غير مفعّل بعد. يلزم ربط جهات الاتصال بملفات المرضى وبقية سجلات العيادة واختبار الصلاحيات قبل التشغيل.',
 });
 
@@ -32,6 +33,7 @@ export function createCloudContactUiPreview(isViewActive: () => boolean): Return
     changeDraft: () => false,
     cancelDraft: () => false,
     save: async () => undefined,
+    changeCampaignConsent: () => false,
     resume: async () => false,
     cancelPending: async () => false,
   });

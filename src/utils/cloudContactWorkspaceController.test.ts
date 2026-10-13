@@ -130,6 +130,34 @@ test('uncertain save retains immutable operation and payload; exact same-ID retr
   assert.equal(h.controller.getState().error.includes('PRIVATE'), false);
 });
 
+test('campaign consent is explicit exact-draft metadata, retained only for the same canonical mobile', () => {
+  const h = harness(); h.createDraft(); const first = h.controller.getState().draft!;
+  assert.equal(h.controller.changeCampaignConsent('allowed', first), true);
+  const allowed = h.controller.getState().draft!;
+  assert.deepEqual(allowed.contact?.campaignConsent, { status: 'allowed', phone: '201000000001', recordedAt: TIME });
+  assert.equal(Object.isFrozen(allowed.contact?.campaignConsent), true);
+  assert.equal(h.controller.changeCampaignConsent('declined', first), false, 'old draft cannot change current consent');
+  assert.equal(h.controller.changeDraft({ name: 'اسم معدل', mobile: '+20 1000000001' }), true);
+  assert.deepEqual(h.controller.getState().draft?.contact?.campaignConsent, allowed.contact?.campaignConsent);
+  assert.equal(h.controller.changeDraft({ name: 'اسم معدل', mobile: '01000000002' }), true);
+  assert.equal(h.controller.getState().draft?.contact?.campaignConsent, undefined, 'new phone is not opted in');
+  const changed = h.controller.getState().draft!;
+  assert.equal(h.controller.changeCampaignConsent('declined', changed), true);
+  assert.equal(h.controller.changeCampaignConsent(null, h.controller.getState().draft!), true);
+  assert.equal(h.controller.getState().draft?.contact?.campaignConsent, undefined);
+  assert.deepEqual(h.calls, [], 'metadata edit has not acquired any capability or sent any message');
+  h.controller.dispose(); assert.equal(h.controller.changeCampaignConsent('allowed', changed), false);
+});
+test('uncertain consent save retains the exact operation and refuses edits until original retry', async () => {
+  const h = harness(); h.createDraft();
+  h.controller.changeCampaignConsent('allowed', h.controller.getState().draft!);
+  h.handlers.commitError = Error('lost reply'); await h.controller.save();
+  const draft = h.controller.getState().draft!;
+  assert.equal(h.controller.changeCampaignConsent('declined', draft), false);
+  const original = h.commands[0]; h.handlers.commitError = null; await h.controller.save();
+  assert.equal(h.commands[1], original); assert.equal(original.contact?.campaignConsent?.status, 'allowed');
+});
+
 test('acknowledged commit with failed refresh retries only reads, never another mutation', async () => {
   const h = harness(); h.createDraft();
   h.handlers.getError = new Error('PRIVATE_REFRESH');

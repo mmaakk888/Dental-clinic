@@ -1,5 +1,9 @@
 import { CloudOperationIntentError, readCloudOperationIntentForCommit,
   markCloudOperationIntentCommitted } from './cloudOperationIntent';
+import { parseCloudOperationIntent } from './cloudOperationIntent';
+import { buildExpenseInventoryProofs, cloudMaterialIdentityV2, cloudSupplierInvoiceIdentityV2,
+  expenseProofId, expenseRatioProof, verifyExpenseRatioProof,
+  type CloudExpenseInventoryProof, type CloudExpenseRatioProof } from './cloudExpenseInventoryProofs';
 
 /** Pure owner-only expenses/inventory contract. Amounts are piastres, physical
  * quantities are thousandths of a unit. No local store, clock, IDs, OCR, Storage
@@ -20,6 +24,8 @@ export interface CloudExpenseData {
 export interface CloudExpenseEditable {
   title: string; date: string; note: string; isFixed: boolean;
   recurringPeriod: CloudExpenseData['recurringPeriod']; expenseType: CloudExpenseData['expenseType'];
+  /** Explicit correction of an unitemized amount, never a cash payment. */
+  totalCents?: number;
 }
 export interface CloudInvoiceImageMetadata {
   sha256: string; byteLength: number; width: number; height: number; contentType: 'image/jpeg';
@@ -28,6 +34,7 @@ export interface CloudExpenseRecord {
   schemaVersion: 1; clinicId: 'main'; recordId: string; revision: number; lastOperationId: string;
   data: CloudExpenseData; paidCents: number; paymentCount: number;
   invoiceKey: string | null; imageId: string | null; image: CloudInvoiceImageMetadata | null;
+  inventoryVersion?: 2;
 }
 interface BaseCommand { operationId: string; createdAt: string }
 export type CloudExpenseCommand =
@@ -41,6 +48,11 @@ export interface CloudMaterialBalance {
   schemaVersion: 1; clinicId: 'main'; recordId: string; revision: number; lastOperationId: string;
   name: string; unit: string; purchasedMilli: number; purchaseCostCents: number;
   usedMilli: number; wasteMilli: number; consumedCostCents: number;
+  identityVersion?: 2;
+}
+export interface CloudMaterialHead {
+  schemaVersion: 2; clinicId: 'main'; recordId: string; base: CloudMaterialBalance | null;
+  pending: null | { operationId: string; indexes: number[]; candidate: CloudMaterialBalance };
 }
 export interface CloudExpensePayment {
   schemaVersion: 1; clinicId: 'main'; recordId: string; expenseId: string; amountCents: number;
@@ -94,6 +106,11 @@ function fields(value: unknown, keys: readonly string[]): Record<string, any> {
     if (!property || !('value' in property) || !property.enumerable) invalid(); result[key] = property.value; }
   return result;
 }
+function optionalFields(value: unknown, required: readonly string[], optional: readonly string[]) {
+  if (!value || typeof value !== 'object') invalid();
+  const extra = optional.filter(key => Object.prototype.hasOwnProperty.call(value, key));
+  return fields(value, [...required, ...extra]);
+}
 const uuid = (value: unknown): value is string => typeof value === 'string' && value.length === 36 && UUID.test(value);
 const hash = (value: unknown): value is string => typeof value === 'string' && value.length === 64 && HASH.test(value);
 const integer = (value: unknown, min = 0, max = MAX): value is number => typeof value === 'number'
@@ -131,9 +148,10 @@ function item(value: unknown): CloudExpenseItem {
   return row as CloudExpenseItem;
 }
 function editable(value: unknown): CloudExpenseEditable {
-  const row = fields(value, ['title', 'date', 'note', 'isFixed', 'recurringPeriod', 'expenseType']);
+  const row = optionalFields(value, ['title', 'date', 'note', 'isFixed', 'recurringPeriod', 'expenseType'], ['totalCents']);
   if (!text(row.title, 200) || !row.title || !day(row.date) || !text(row.note, 4000, true)
-    || typeof row.isFixed !== 'boolean' || !['monthly', 'yearly', 'none'].includes(row.recurringPeriod) || !TYPES.includes(row.expenseType)) invalid();
+    || typeof row.isFixed !== 'boolean' || !['monthly', 'yearly', 'none'].includes(row.recurringPeriod) || !TYPES.includes(row.expenseType)
+    || 'totalCents' in row && !integer(row.totalCents)) invalid();
   return row as CloudExpenseEditable;
 }
 function expenseData(value: unknown): CloudExpenseData {
@@ -183,12 +201,12 @@ export function prepareCloudExpenseCommand(value: unknown): CloudExpenseCommand 
 }
 export function parseCloudExpenseRecord(value: unknown): CloudExpenseRecord {
   try {
-    const row = fields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'data', 'paidCents',
-      'paymentCount', 'invoiceKey', 'imageId', 'image']);
+    const row = optionalFields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'data', 'paidCents',
+      'paymentCount', 'invoiceKey', 'imageId', 'image'], ['inventoryVersion']);
     if (row.schemaVersion !== 1 || row.clinicId !== 'main' || !uuid(row.recordId) || !uuid(row.lastOperationId)
       || !integer(row.revision, 1, REVISION) || !integer(row.paidCents) || !integer(row.paymentCount, 0, REVISION)
       || row.invoiceKey !== null && !hash(row.invoiceKey) || row.imageId !== null && !uuid(row.imageId)
-      || (row.imageId === null) !== (row.image === null)) invalid();
+      || (row.imageId === null) !== (row.image === null) || 'inventoryVersion' in row && row.inventoryVersion !== 2) invalid();
     const data = expenseData(row.data), image = row.image === null ? null : parseCloudInvoiceImageMetadata(row.image);
     if (row.paidCents > data.totalCents || row.paymentCount > row.revision || (row.paidCents === 0) !== (row.paymentCount === 0)
       || (data.invoiceNumber === '') !== (row.invoiceKey === null)) invalid();
@@ -196,13 +214,37 @@ export function parseCloudExpenseRecord(value: unknown): CloudExpenseRecord {
   } catch { return invalid(); }
 }
 export function parseCloudMaterialBalance(value: unknown): CloudMaterialBalance {
-  try { const row = fields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'name', 'unit',
-    'purchasedMilli', 'purchaseCostCents', 'usedMilli', 'wasteMilli', 'consumedCostCents']);
+  try { const row = optionalFields(value, ['schemaVersion', 'clinicId', 'recordId', 'revision', 'lastOperationId', 'name', 'unit',
+    'purchasedMilli', 'purchaseCostCents', 'usedMilli', 'wasteMilli', 'consumedCostCents'], ['identityVersion']);
     if (row.schemaVersion !== 1 || row.clinicId !== 'main' || !hash(row.recordId) || !uuid(row.lastOperationId)
       || !integer(row.revision, 1, REVISION) || !text(row.name, 200) || !row.name || !text(row.unit, 40) || !row.unit
       || !integer(row.purchasedMilli, 1) || !integer(row.purchaseCostCents) || !integer(row.usedMilli) || !integer(row.wasteMilli)
       || !integer(row.consumedCostCents) || row.usedMilli + row.wasteMilli > row.purchasedMilli
-      || row.consumedCostCents > row.purchaseCostCents) invalid(); return row as CloudMaterialBalance;
+      || row.consumedCostCents > row.purchaseCostCents || 'identityVersion' in row && row.identityVersion !== 2) invalid(); return row as CloudMaterialBalance;
+  } catch { return invalid(); }
+}
+export function parseCloudMaterialHead(value: unknown): CloudMaterialHead | CloudMaterialBalance {
+  try {
+    if (Object.getOwnPropertyDescriptor(value, 'schemaVersion')?.value !== 2) return parseCloudMaterialBalance(value);
+    const row = fields(value, ['schemaVersion', 'clinicId', 'recordId', 'base', 'pending']);
+    if (row.clinicId !== 'main' || !hash(row.recordId)) invalid();
+    const base = row.base === null ? null : parseCloudMaterialBalance(row.base);
+    if (base && (base.recordId !== row.recordId || base.identityVersion !== 2)) invalid();
+    const pending = row.pending === null ? null : fields(row.pending, ['operationId', 'indexes', 'candidate']);
+    if (!base && !pending) invalid();
+    if (pending) {
+      const indexes = array(pending.indexes, 20, value => { if (!integer(value, 0, 19)) invalid(); return value; });
+      const candidate = parseCloudMaterialBalance(pending.candidate);
+      if (!uuid(pending.operationId) || !indexes.length || new Set(indexes).size !== indexes.length
+        || candidate.recordId !== row.recordId || candidate.identityVersion !== 2
+        || candidate.revision !== (base?.revision ?? 0) + 1 || candidate.lastOperationId !== pending.operationId
+        || base && (candidate.name !== base.name || candidate.unit !== base.unit || candidate.usedMilli !== base.usedMilli
+          || candidate.wasteMilli !== base.wasteMilli || candidate.consumedCostCents !== base.consumedCostCents
+          || candidate.purchasedMilli <= base.purchasedMilli || candidate.purchaseCostCents < base.purchaseCostCents)
+        || !base && (candidate.usedMilli !== 0 || candidate.wasteMilli !== 0 || candidate.consumedCostCents !== 0)) invalid();
+      return { ...row, base, pending: { ...pending, indexes, candidate } } as CloudMaterialHead;
+    }
+    return { ...row, base, pending: null } as CloudMaterialHead;
   } catch { return invalid(); }
 }
 export function parseCloudExpensePayment(value: unknown): CloudExpensePayment {
@@ -272,6 +314,79 @@ export async function cloudMaterialId(name: string, unit: string, options: Cloud
   try { if (!text(name, 200) || !name || !text(unit, 40) || !unit) invalid();
     const result = await (options.digest ?? (value => sha256Bytes(new TextEncoder().encode(value))))(JSON.stringify(['clinic-material-v1', normalize(name), normalize(unit)]));
     if (!hash(result)) invalid(); return result; } catch (error) { throw safeError(error); }
+}
+export async function cloudMaterialIdV2(name: string, unit: string, options: CloudExpenseOptions = {}): Promise<string> {
+  try { if (!text(name, 200) || !name || !text(unit, 40) || !unit) invalid();
+    const result = await (options.digest ?? (value => sha256Bytes(new TextEncoder().encode(value))))(cloudMaterialIdentityV2(name, unit));
+    if (!hash(result)) invalid(); return result;
+  } catch (error) { throw safeError(error); }
+}
+export interface CloudExpenseOperation {
+  schemaVersion: 1; clinicId: 'main'; operationId: string; recordId: string; actorUid: string;
+  action: CloudExpenseCommand['action']; expectedRevision: number; resultRevision: number; createdAt: string; requestHash: string;
+  inventoryVersion?: 2; usageMath?: CloudExpenseRatioProof | null;
+}
+export function parseCloudExpenseOperation(value: unknown): CloudExpenseOperation {
+  const row = optionalFields(value, ['schemaVersion', 'clinicId', 'operationId', 'recordId', 'actorUid', 'action',
+    'expectedRevision', 'resultRevision', 'createdAt', 'requestHash'], ['inventoryVersion', 'usageMath']);
+  if (row.schemaVersion !== 1 || row.clinicId !== 'main' || !uuid(row.operationId) || !actor(row.actorUid)
+    || !['create', 'edit', 'pay', 'usage', 'attach-image'].includes(row.action)
+    || (row.action === 'usage' ? !hash(row.recordId) : !uuid(row.recordId))
+    || !integer(row.expectedRevision, row.action === 'create' ? 0 : 1, REVISION - 1)
+    || row.resultRevision !== row.expectedRevision + 1 || !timestamp(row.createdAt) || !hash(row.requestHash)
+    || ('inventoryVersion' in row) !== ('usageMath' in row) || 'inventoryVersion' in row && row.inventoryVersion !== 2
+    || row.usageMath !== undefined && row.usageMath !== null && row.action !== 'usage') invalid();
+  if (row.usageMath !== undefined && row.usageMath !== null) {
+    const math = fields(row.usageMath, ['quotient', 'remainder', 'product']);
+    if (!integer(math.quotient) || !integer(math.remainder)) invalid();
+    array(math.product, 5, value => { if (!integer(value, 0, 999999)) invalid(); return value; });
+    if (math.product.length !== 5) invalid();
+  }
+  return row as CloudExpenseOperation;
+}
+/** Private head resolution is usable by the same-readTime snapshot reader.
+ * Its receipt/intent must be fetched at that exact instant, never the latest. */
+export async function resolveCloudMaterialHead(value: unknown, readPrivate: (collection: 'expenseOperations' | 'operationIntents', id: string) => Promise<unknown | null>,
+  options: CloudExpenseOptions = {}, allowPrepared = true): Promise<CloudMaterialBalance | null> {
+  const parsed = parseCloudMaterialHead(value);
+  if (parsed.schemaVersion === 1) {
+    if (await cloudMaterialId(parsed.name, parsed.unit, options) !== parsed.recordId) invalid(); return parsed;
+  }
+  const base = parsed.base;
+  if (base && await cloudMaterialIdV2(base.name, base.unit, options) !== base.recordId) invalid();
+  if (!parsed.pending) return base;
+  const pending = parsed.pending, candidate = pending.candidate;
+  if (await cloudMaterialIdV2(candidate.name, candidate.unit, options) !== candidate.recordId) invalid();
+  const rawIntent = await readPrivate('operationIntents', pending.operationId);
+  if (rawIntent === null) invalid();
+  const intent = parseCloudOperationIntent(rawIntent), command = prepareCloudExpenseCommand(intent.command);
+  if (intent.kind !== 'expense' || intent.operationId !== pending.operationId || command.action !== 'create'
+    || command.operationId !== pending.operationId || command.createdAt !== intent.createdAt) invalid();
+  const digest = options.digest ?? (value => sha256Bytes(new TextEncoder().encode(value)));
+  if (intent.requestHash !== await digest(JSON.stringify(['clinic-operation-intent-v1', intent.actorUid, 'expense', intent.command]))) invalid();
+  const rawReceipt = await readPrivate('expenseOperations', pending.operationId);
+  if (intent.status !== 'committed') {
+    if (rawReceipt !== null) invalid();
+    if (intent.status === 'prepared' && !allowPrepared) conflict();
+    return base;
+  }
+  if (rawReceipt === null) invalid(); const receipt = parseCloudExpenseOperation(rawReceipt);
+  if (receipt.inventoryVersion !== 2 || receipt.operationId !== command.operationId || receipt.actorUid !== intent.actorUid
+    || receipt.recordId !== command.recordId || receipt.action !== 'create' || receipt.expectedRevision !== 0
+    || receipt.createdAt !== command.createdAt || receipt.usageMath !== null
+    || receipt.requestHash !== await digest(JSON.stringify(['clinic-expense-v1', intent.actorUid, command]))) invalid();
+  const costs = allocatedCosts(command.data), indexes: number[] = [];
+  let quantity = 0, cost = 0;
+  for (let index = 0; index < command.data.items.length; index++) {
+    const item = command.data.items[index];
+    if (await cloudMaterialIdV2(item.name, item.unit, options) !== parsed.recordId) continue;
+    if (item.name !== candidate.name || item.unit !== candidate.unit) invalid();
+    indexes.push(index); quantity += item.quantityMilli; cost += costs[index];
+  }
+  if (JSON.stringify([...pending.indexes].sort((a, b) => a - b)) !== JSON.stringify(indexes)
+    || candidate.purchasedMilli !== (base?.purchasedMilli ?? 0) + quantity
+    || candidate.purchaseCostCents !== (base?.purchaseCostCents ?? 0) + cost) invalid();
+  return candidate;
 }
 function allocatedCosts(data: CloudExpenseData): number[] {
   if (!data.items.length) return [];
@@ -411,7 +526,15 @@ export function createCloudExpenseRepository(adapter: CloudExpenseAdapter, optio
             } else {
               if (!current) conflict();
               next = { ...current, revision: receipt.resultRevision, lastOperationId: command.operationId };
-              if (command.action === 'edit') next.data = { ...current.data, ...command.data };
+              if (command.action === 'edit') {
+                if ('totalCents' in command.data) {
+                  if (current.data.items.length) invalid();
+                  if (command.data.totalCents! < current.paidCents) conflict();
+                  const subtotalCents = command.data.totalCents! - current.data.taxCents + current.data.discountCents;
+                  if (!integer(subtotalCents)) invalid();
+                  next.data = { ...current.data, ...command.data, subtotalCents };
+                } else next.data = { ...current.data, ...command.data };
+              }
               if (command.action === 'pay') { if (command.amountCents > current.data.totalCents - current.paidCents) conflict();
                 next.paidCents += command.amountCents; next.paymentCount++; }
               if (command.action === 'attach-image') {

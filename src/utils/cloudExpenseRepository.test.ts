@@ -84,6 +84,26 @@ test('initial actual partial payment creates immutable payment independent of to
   assert.equal(expense?.paidCents, 2500); assert.equal(expense?.paymentCount, 1);
   assert.equal(parseCloudExpensePayment(h.docs.get(path('expensePayments', id(1)))).amountCents, 2500);
 });
+
+test('an explicit unitemized amount correction preserves existing cash and creates no stock or payment', async () => {
+  const h = harness(); await h.commit(create(1, { category: 'fixed', expenseType: 'electricity', items: [], taxCents: 100, totalCents: 10100 }, 2500));
+  const correction = edit(3, 1); if (correction.action !== 'edit') assert.fail();
+  correction.data.totalCents = 8000;
+  await h.commit(correction); const after = await h.repo.get(id(101));
+  assert.equal(after?.data.totalCents, 8000); assert.equal(after?.data.subtotalCents, 7900);
+  assert.equal(after?.paidCents, 2500); assert.equal(after?.paymentCount, 1);
+  assert.equal([...h.docs.keys()].filter(key => key.includes('/expensePayments/')).length, 1);
+  assert.equal([...h.docs.keys()].some(key => key.includes('/materialBalances/')), false);
+  const writes = h.writes(); assert.equal((await h.repo.commit(correction)).status, 'already-committed'); assert.equal(h.writes(), writes);
+});
+test('amount correction cannot reduce below cash already paid or rewrite itemized purchases', async () => {
+  for (const itemized of [false, true]) {
+    const h = harness(); await h.commit(create(1, itemized ? {} : { items: [] }, 2500));
+    const correction = edit(3, 1); if (correction.action !== 'edit') assert.fail(); correction.data.totalCents = itemized ? 8000 : 2000;
+    await h.prepare(correction); const before = structuredClone(h.docs);
+    await assert.rejects(h.repo.commit(correction), code(itemized ? 'invalid' : 'conflict')); assert.deepEqual(h.docs, before);
+  }
+});
 test('pay updates only actual paid/count/revision and preserves charges and stock', async () => {
   const h = harness(); await h.commit(create()); const before = structuredClone(h.docs.get(path('expenseRecords', id(101))));
   const stocks = [...h.docs].filter(([key]) => key.includes('/materialBalances/')); await h.commit(pay());

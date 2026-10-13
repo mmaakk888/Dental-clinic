@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { createCloudPatientWorkspaceController, type CloudPatientWorkspaceController, type CloudPatientWorkspaceCapability } from './cloudPatientWorkspaceController';
-import { CloudPatientError, type CloudPatientCommand, type CloudPatientCommit, type CloudPatientPage,
+import { CloudPatientError, type CloudPatientCommand, type CloudPatientWriteCommand, type CloudPatientCommit, type CloudPatientPage,
   type CloudPatientRecord, type CloudPatientRepository } from './cloudPatientRepository';
 import { createJournaledCloudPatientRepository, type CloudPatientAdapter } from './cloudPatientRepository';
 import { createCloudOperationIntentRepository, prepareCloudIntentCommand, type CloudOperationIntent } from './cloudOperationIntent';
@@ -26,7 +26,7 @@ function deferred<T>() {
 }
 async function tick() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
 function harness() {
-  const calls: string[] = [], commands: CloudPatientCommand[] = [];
+  const calls: string[] = [], commands: CloudPatientWriteCommand[] = [];
   let active = true, ids = [ID, OP], current: CloudPatientRecord | null = record();
   let page: CloudPatientPage = { records: [], nextAfterId: null };
   const handlers: { commitError?: unknown; getError?: unknown; listError?: unknown;
@@ -102,6 +102,17 @@ test('patient workspace is inert, profile-only and empty until an explicit read'
   assert.equal('sessions' in h.controller.getState().draft!.profile, false);
   assert.equal(h.controller.beginCreate(), false);
   assert.equal(h.controller.cancelDraft(), true);
+});
+
+test('patient workspace recovery preserves imported historical fileNo through lost acknowledgement and retry', async () => {
+  const h = harness(), profile = { ...record().data, firstVisit: '' }, command = { operationId: OP, recordId: ID, expectedRevision: 0 as const, action: 'import' as const, fileNo: 450, profile };
+  await h.repository.journal!.prepare('patient-profile', command, NOW);
+  h.handlers.commitError = new CloudPatientError('unavailable');
+  assert.equal(await h.controller.resume(OP), false); const draft = h.controller.getState().draft!;
+  assert.equal(draft.action, 'import'); assert.equal('fileNo' in draft && draft.fileNo, 450); assert.equal(h.commands[0].action, 'import');
+  h.handlers.commitError = undefined; h.handlers.commitResult = { status: 'already-committed', recordId: ID, fileNo: 450, revision: 1 };
+  h.setCurrent({ ...record(), fileNo: 450, data: profile }); await h.controller.save();
+  assert.equal(h.controller.getState().selected?.fileNo, 450); assert.equal(h.commands.length, 2); assert.deepEqual(h.commands[1], h.commands[0]);
 });
 
 test('invalid ID suffix and invalid default dates cannot construct a draft or call a repository', () => {

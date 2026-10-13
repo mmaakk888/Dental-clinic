@@ -1,9 +1,10 @@
 import { CloudPatientError } from './cloudPatientRepository';
 import { createCloudPatientWorkspaceController, type CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 /** Reviewed release boundary, not authorization. No URL, storage or env override. */
 export const CLOUD_PATIENTS_UI_STAGE = Object.freeze({
-  available: false,
+  available: CLOUD_COMPLETE_RELEASE_UI.available,
   reason: 'حفظ ملفات المرضى السحابي غير مفعّل بعد. يلزم ربط الجلسات والتحصيلات والتركيبات وبقية سجلات العيادة واختبار الاسترجاع قبل التشغيل.',
 });
 

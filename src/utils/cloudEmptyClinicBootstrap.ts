@@ -1,7 +1,8 @@
 import { CLOUD_PROJECT_ID } from './cloudIdentity';
 import { parseCloudServiceCatalogRecord, prepareCloudServiceCatalogCommand } from './cloudServiceCatalogRepository';
 import { parseCloudOperationIntent, prepareCloudIntentCommand } from './cloudOperationIntent';
-import { CLOUD_PROSTHETIC_ROUTING_PATH, parseCloudProstheticRouting, prepareCloudClinicSettingsCommand } from './cloudClinicSettingsRepository';
+import { CLOUD_PROSTHETIC_ROUTING_PATH, CLOUD_CLINIC_SETTINGS_PATH, parseCloudProstheticRouting, parseCloudClinicSettingsRecord, prepareCloudClinicSettingsCommand } from './cloudClinicSettingsRepository';
+import { createCloudInitialClinicSettings } from './cloudInitialClinicSettings';
 
 /** Trusted administrative initialisation only. Never imported by an app entry,
  * supplied to a browser data capability or used as a migration/reset action.
@@ -23,7 +24,7 @@ export interface CloudBootstrapAdapter {
   authorizeBootstrap(): Promise<CloudBootstrapAuthority>;
   runTransaction<T>(work: (transaction: CloudBootstrapTransaction) => Promise<T>): Promise<T>;
 }
-export interface CloudBootstrapCommand { operationId: string; routingOperationId: string; createdAt: string }
+export interface CloudBootstrapCommand { operationId: string; routingOperationId: string; settingsOperationId: string; createdAt: string }
 export interface CloudBootstrapResult { status: 'created' | 'already-initialized'; clinicalRecordsCreated: 0 }
 export class CloudBootstrapError extends Error {
   constructor(public readonly code: 'invalid' | 'conflict' | 'unavailable') {
@@ -43,7 +44,7 @@ export const CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS = Object.freeze([
   'catalogServiceIds', 'catalogServiceNames',
   'appointmentRecords', 'appointmentDays', 'appointmentOperations', 'labDefinitions', 'labCases', 'labAccounts',
   'labPayments', 'prostheticOperations', 'expenseRecords', 'expensePayments', 'expenseOperations', 'materialBalances',
-  'materialUsages', 'supplierInvoiceReservations', 'invoiceImages', 'settingsOperations', 'settings', 'counters', 'bootstrap',
+  'materialUsages', 'supplierInvoiceReservations', 'invoiceImages', 'settingsOperations', 'settingsValidationProofs', 'settings', 'counters', 'bootstrap',
 ] as const);
 function invalid(): never { throw new CloudBootstrapError('invalid'); }
 function conflict(): never { throw new CloudBootstrapError('conflict'); }
@@ -72,9 +73,10 @@ function timestamp(value: unknown): value is string {
   return Number.isFinite(time.getTime()) && time.toISOString() === value;
 }
 function command(value: unknown): CloudBootstrapCommand {
-  const item = fields(value, ['operationId', 'routingOperationId', 'createdAt']);
-  if (!uuid(item.operationId) || !uuid(item.routingOperationId) || item.routingOperationId === item.operationId || !timestamp(item.createdAt)) invalid();
-  return { operationId: item.operationId, routingOperationId: item.routingOperationId, createdAt: item.createdAt };
+  const item = fields(value, ['operationId', 'routingOperationId', 'settingsOperationId', 'createdAt']);
+  if (!uuid(item.operationId) || !uuid(item.routingOperationId) || !uuid(item.settingsOperationId)
+    || new Set([item.operationId, item.routingOperationId, item.settingsOperationId]).size !== 3 || !timestamp(item.createdAt)) invalid();
+  return { operationId: item.operationId, routingOperationId: item.routingOperationId, settingsOperationId: item.settingsOperationId, createdAt: item.createdAt };
 }
 function authority(value: unknown): CloudBootstrapAuthority {
   const item = fields(value, ['projectId', 'databaseId', 'location', 'billingEnabled', 'membershipOnlyRules', 'ownerUid',
@@ -124,14 +126,20 @@ export function createCloudEmptyClinicBootstrap(adapter: CloudBootstrapAdapter,
         if (!('data' in catalogCommand)) invalid();
         const routingCommand = prepareCloudClinicSettingsCommand({ target: 'prostheticRouting', recordId: 'prostheticRouting',
           operationId: prepared.routingOperationId, createdAt: prepared.createdAt, expectedRevision: 0, data: { routes: [] } });
+        const settingsCommand = prepareCloudClinicSettingsCommand({ target: 'clinicSettings', recordId: 'clinicSettings',
+          operationId: prepared.settingsOperationId, createdAt: prepared.createdAt, expectedRevision: 0, data: createCloudInitialClinicSettings() });
         const canonical = prepareCloudIntentCommand(catalogCommand);
         const routingCanonical = prepareCloudIntentCommand(routingCommand);
+        const settingsCanonical = prepareCloudIntentCommand(settingsCommand);
         const requestHash = await hash(JSON.stringify(['clinic-service-catalog-v1', first.ownerUid, catalogCommand]));
         const intentHash = await hash(JSON.stringify(['clinic-operation-intent-v1', first.ownerUid, 'catalog', canonical]));
         const routingHash = await hash(JSON.stringify(['clinic-settings-v1', first.ownerUid, routingCommand]));
         const routingIntentHash = await hash(JSON.stringify(['clinic-operation-intent-v1', first.ownerUid, 'settings', routingCanonical]));
+        const settingsHash = await hash(JSON.stringify(['clinic-settings-v1', first.ownerUid, settingsCommand]));
+        const settingsIntentHash = await hash(JSON.stringify(['clinic-operation-intent-v1', first.ownerUid, 'settings', settingsCanonical]));
         const marker = { schemaVersion: 1, clinicId: 'main', recordId: 'initialRelease', operationId: prepared.operationId,
-          routingOperationId: prepared.routingOperationId, actorUid: first.ownerUid, createdAt: prepared.createdAt, examinationCents: 10_000 };
+          routingOperationId: prepared.routingOperationId, settingsOperationId: prepared.settingsOperationId,
+          actorUid: first.ownerUid, createdAt: prepared.createdAt, examinationCents: 10_000 };
         await authorize();
         const result = await adapter.runTransaction<CloudBootstrapResult>(async transaction => {
           await authorize();
@@ -140,6 +148,7 @@ export function createCloudEmptyClinicBootstrap(adapter: CloudBootstrapAdapter,
           const counter = await transaction.get(COUNTER);
           const catalog = await transaction.get(CATALOG);
           const routing = await transaction.get(CLOUD_PROSTHETIC_ROUTING_PATH);
+          const settings = await transaction.get(CLOUD_CLINIC_SETTINGS_PATH);
           if (existing !== null) {
             const stored = fields(existing, Object.keys(marker));
             // An explicit same-command retry may observe normal later work.
@@ -148,6 +157,7 @@ export function createCloudEmptyClinicBootstrap(adapter: CloudBootstrapAdapter,
             checkedCounter(counter);
             parseCloudServiceCatalogRecord(catalog);
             parseCloudProstheticRouting(routing);
+            parseCloudClinicSettingsRecord(settings);
             const receipt = fields(await transaction.get(`clinics/main/catalogOperations/${prepared.operationId}`),
               ['schemaVersion', 'clinicId', 'operationId', 'recordId', 'actorUid', 'expectedRevision', 'resultRevision', 'createdAt', 'requestHash']);
             if (receipt.schemaVersion !== 1 || receipt.clinicId !== 'main' || receipt.operationId !== prepared.operationId
@@ -167,9 +177,19 @@ export function createCloudEmptyClinicBootstrap(adapter: CloudBootstrapAdapter,
             if (routingIntent.actorUid !== first.ownerUid || routingIntent.kind !== 'settings' || routingIntent.status !== 'committed'
               || routingIntent.requestHash !== routingIntentHash || routingIntent.createdAt !== prepared.createdAt
               || JSON.stringify(routingIntent.command) !== JSON.stringify(routingCanonical)) conflict();
+            const settingsReceipt = fields(await transaction.get(`clinics/main/settingsOperations/${prepared.settingsOperationId}`),
+              ['schemaVersion', 'clinicId', 'operationId', 'target', 'recordId', 'actorUid', 'expectedRevision', 'resultRevision', 'createdAt', 'requestHash']);
+            if (settingsReceipt.schemaVersion !== 1 || settingsReceipt.clinicId !== 'main' || settingsReceipt.operationId !== prepared.settingsOperationId
+              || settingsReceipt.target !== 'clinicSettings' || settingsReceipt.recordId !== 'clinicSettings' || settingsReceipt.actorUid !== first.ownerUid
+              || settingsReceipt.expectedRevision !== 0 || settingsReceipt.resultRevision !== 1 || settingsReceipt.createdAt !== prepared.createdAt
+              || settingsReceipt.requestHash !== settingsHash) conflict();
+            const settingsIntent = parseCloudOperationIntent(await transaction.get(`clinics/main/operationIntents/${prepared.settingsOperationId}`));
+            if (settingsIntent.actorUid !== first.ownerUid || settingsIntent.kind !== 'settings' || settingsIntent.status !== 'committed'
+              || settingsIntent.requestHash !== settingsIntentHash || settingsIntent.createdAt !== prepared.createdAt
+              || JSON.stringify(settingsIntent.command) !== JSON.stringify(settingsCanonical)) conflict();
             await authorize(); return { status: 'already-initialized', clinicalRecordsCreated: 0 };
           }
-          if (counter !== null || catalog !== null || routing !== null) conflict();
+          if (counter !== null || catalog !== null || routing !== null || settings !== null) conflict();
           // Bounded parallel server queries share this transaction's snapshot;
           // avoid dozens of sequential cross-region round trips under its lock.
           for (let start = 0; start < CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS.length; start += 4) {
@@ -198,6 +218,14 @@ export function createCloudEmptyClinicBootstrap(adapter: CloudBootstrapAdapter,
           transaction.create(`clinics/main/operationIntents/${prepared.routingOperationId}`, { schemaVersion: 1, clinicId: 'main',
             recordId: prepared.routingOperationId, operationId: prepared.routingOperationId, actorUid: first.ownerUid, kind: 'settings',
             requestHash: routingIntentHash, status: 'committed', revision: 2, createdAt: prepared.createdAt, command: routingCanonical });
+          transaction.create(CLOUD_CLINIC_SETTINGS_PATH, { schemaVersion: 1, clinicId: 'main', recordId: 'clinicSettings',
+            revision: 1, lastOperationId: prepared.settingsOperationId, data: settingsCommand.data });
+          transaction.create(`clinics/main/settingsOperations/${prepared.settingsOperationId}`, { schemaVersion: 1, clinicId: 'main',
+            operationId: prepared.settingsOperationId, target: 'clinicSettings', recordId: 'clinicSettings', actorUid: first.ownerUid,
+            expectedRevision: 0, resultRevision: 1, createdAt: prepared.createdAt, requestHash: settingsHash });
+          transaction.create(`clinics/main/operationIntents/${prepared.settingsOperationId}`, { schemaVersion: 1, clinicId: 'main',
+            recordId: prepared.settingsOperationId, operationId: prepared.settingsOperationId, actorUid: first.ownerUid, kind: 'settings',
+            requestHash: settingsIntentHash, status: 'committed', revision: 2, createdAt: prepared.createdAt, command: settingsCanonical });
           transaction.create(MARKER, marker);
           return { status: 'created', clinicalRecordsCreated: 0 };
         });
