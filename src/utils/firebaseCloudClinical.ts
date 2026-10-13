@@ -21,6 +21,7 @@ const ACCOUNT = new RegExp(`^clinics/main/patientAccounts/${UUID}${END}`);
 const SESSION = new RegExp(`^clinics/main/patientSessions/${UUID}${END}`);
 const RECEIPT = new RegExp(`^clinics/main/patientReceipts/${UUID}${END}`);
 const OPERATION = new RegExp(`^clinics/main/clinicalOperations/${UUID}${END}`);
+const PROOF = new RegExp(`^clinics/main/clinicalSessionProofs/${UUID}-(?:0-(?:[0-9]|[12][0-9]|3[01])|1-[0-7]|2-[01])${END}`);
 const INTENT = new RegExp(`^clinics/main/operationIntents/${UUID}${END}`);
 const filePath = (path: string) => { const match = FILE.exec(path); return !!match && Number(match[1]) <= 2_000_000_000; };
 const clinicalKind = (kind: CloudOperationKind) => { if (kind !== 'clinical') throw new CloudOperationIntentError('invalid'); };
@@ -86,7 +87,7 @@ export async function createFirebaseCloudClinical(auth: Auth, options: FirebaseC
     const reference = (path: string, write = false) => {
       requireRuntime();
       if (typeof path !== 'string' || !(ACCOUNT.test(path) || SESSION.test(path) || RECEIPT.test(path)
-        || OPERATION.test(path) || INTENT.test(path) || !write && (PROFILE.test(path) || filePath(path)))) {
+        || OPERATION.test(path) || PROOF.test(path) || INTENT.test(path) || !write && (PROFILE.test(path) || filePath(path)))) {
         throw new CloudClinicalError('invalid');
       }
       return sdkCall(() => store.doc(database, path));

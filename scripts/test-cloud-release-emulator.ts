@@ -68,7 +68,8 @@ function client(auth: typeof token | null = token) {
   connectFirestoreEmulator(database, '127.0.0.1', 8789, mockUserToken ? { mockUserToken } : undefined);
   return { app, database };
 }
-type Scenario = { name: string; kind: CloudOperationKind; command: any; before: Map<string, any>; after: Map<string, any>; writes: Map<string, any> };
+type Scenario = { name: string; kind: CloudOperationKind; command: any; before: Map<string, any>; after: Map<string, any>; writes: Map<string, any>;
+  preparationBefore?: Map<string, any>; preparations?: Map<string, any> };
 function memory(rows: Map<string, any>) {
   const adapter: any = { authorizeOwner: async () => UID,
     runTransaction: async (work: any) => { const staged = structuredClone(rows); const result = await work({
@@ -87,7 +88,13 @@ async function scenario(name: string, kind: CloudOperationKind, command: any, in
   await domain(kind, adapter).commit(command, image); const after = structuredClone(rows), writes = new Map<string, any>();
   for (const [key, value] of after) if (JSON.stringify(value) !== JSON.stringify(before.get(key))) writes.set(key, value);
   for (const key of before.keys()) if (!after.has(key)) writes.set(key, null);
-  return { name, kind, command, before, after, writes };
+  // Validation proofs are separate durable preparation requests, never a
+  // financial partial commit. Test their real Rules independently before the
+  // final atomic write, exactly as the production repository now does.
+  const preparations = new Map([...writes].filter(([key]) => key.includes('/clinicalSessionProofs/')));
+  const preparationBefore = preparations.size ? structuredClone(before) : undefined;
+  for (const [key, value] of preparations) { before.set(key, value); writes.delete(key); }
+  return { name, kind, command, before, after, writes, preparationBefore, preparations };
 }
 const scenarios: Scenario[] = [];
 async function collect() {
@@ -180,8 +187,31 @@ try {
   await collect(); const selected = process.argv[3] ? scenarios.filter(s => s.kind === process.argv[3] || s.name === process.argv[3]) : scenarios;
   if (!selected.length) throw new Error('Unknown selected DEMO domain/case.');
   for (const s of selected) {
-    await check(`${s.name}:prepared-journal-create`, true, new Map([...s.before].filter(([key]) => key !== path('operationIntents', s.command.operationId))),
+    await check(`${s.name}:prepared-journal-create`, true, new Map([...(s.preparationBefore ?? s.before)].filter(([key]) => key !== path('operationIntents', s.command.operationId))),
       new Map([[path('operationIntents', s.command.operationId), s.before.get(path('operationIntents', s.command.operationId))]]));
+    const preparedState = s.preparationBefore && structuredClone(s.preparationBefore);
+    if (preparedState && s.preparations) for (const [key, value] of s.preparations) {
+      await check(`${s.name}:prepare-service-chunk-${value.level}-${value.index}`, true, preparedState, new Map([[key,value]]));
+      const bad = structuredClone(value); bad.subtotalCents++;
+      await check(`${s.name}:reject-chunk-sum-${value.level}-${value.index}`, false, preparedState, new Map([[key,bad]]));
+      if(value.level>0)for(let child=0;child<4;child++) {
+        const childKey=path('clinicalSessionProofs',`${value.operationId}-${value.level-1}-${value.index*4+child}`);
+        if(preparedState.has(childKey)){const missing=structuredClone(preparedState);missing.delete(childKey);
+          await check(`${s.name}:group-missing-child-${value.level}-${value.index}-${child}`,false,missing,new Map([[key,value]]));}
+      }
+      if(value.level===0 && value.index===0){
+        for(const mutation of ['extra','price','tooth','id','name'] as const){const invalid=structuredClone(value);
+          if(mutation==='extra')invalid.rows[0].extra='bad';if(mutation==='price')invalid.rows[0].priceCents=-1;
+          if(mutation==='tooth')invalid.rows[0].tooth='ur9';if(mutation==='id')invalid.rows[0].id='bad';if(mutation==='name')invalid.rows[0].name='';
+          await check(`${s.name}:leaf-reject-${mutation}`,false,preparedState,new Map([[key,invalid]]));}
+        const cancelled=structuredClone(preparedState);const intent=cancelled.get(path('operationIntents',value.operationId));intent.status='cancelled';intent.revision=2;
+        await check(`${s.name}:cancelled-cannot-prepare-leaf`,false,cancelled,new Map([[key,value]]));
+      }
+      const rootLevel = s.command.data.services.length<=8?0:s.command.data.services.length<=32?1:2;
+      if (value.level===rootLevel) { const incomplete = structuredClone(s.before); incomplete.delete(key);
+        await check(`${s.name}:missing-service-root-${value.level}-${value.index}`, false, incomplete, s.writes); }
+      preparedState.set(key,value);
+    }
     await check(`${s.name}:complete-atomic-commit`, true, s.before, s.writes);
     await check(`${s.name}:anonymous-denied`, false, s.before, s.writes, null);
     const secretary = structuredClone(token); secretary.token.dentalClinicRole = 'secretary';

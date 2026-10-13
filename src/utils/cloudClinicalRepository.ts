@@ -1,8 +1,8 @@
 import { normalizeContactPhone } from './clinicContacts';
 import { parseCloudPatientRecord } from './cloudPatientRepository';
 import { parseCompositeToothId } from './toothUtils';
-import { CloudOperationIntentError, readCloudOperationIntentForCommit,
-  markCloudOperationIntentCommitted } from './cloudOperationIntent';
+import { CloudOperationIntentError, prepareCloudIntentCommand, readCloudOperationIntentForCommit,
+  markCloudOperationIntentCommitted, type CloudIntentJson } from './cloudOperationIntent';
 
 /** Prepared owner-only clinical storage. No SDK, activation, local fallback,
  * historical migration or private supplier data belongs to this module. */
@@ -65,6 +65,12 @@ export class CloudClinicalError extends Error {
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_REVISION = 2_000_000_000;
+/** Compare strict detached JSON without depending on Firestore map-key order. */
+function sameValidationProof(left: unknown, right: object): boolean {
+  const stable = (value: CloudIntentJson): CloudIntentJson => Array.isArray(value) ? value.map(stable)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  return JSON.stringify(stable(prepareCloudIntentCommand(left))) === JSON.stringify(stable(prepareCloudIntentCommand(right)));
+}
 export const MAX_CLOUD_CLINICAL_CENTS = 1_000_000_000_000;
 function invalid(): never { throw new CloudClinicalError('invalid'); }
 function unavailable(): never { throw new CloudClinicalError('unavailable'); }
@@ -317,6 +323,39 @@ export function createCloudClinicalRepository(adapter: CloudClinicalAdapter, opt
           patientId: command.patientId, sessionId: command.sessionId, action: command.action, expectedRevision: command.expectedRevision,
           resultRevision: command.expectedRevision + 1, createdAt: command.createdAt, requestHash };
         await reauthorize(uid);
+        // Validate bounded chunks in independent, immutable preparation writes.
+        // They hold no account, cash or clinical history. A failed/cancelled
+        // preparation may leave private proofs but cannot publish a visit.
+        // The final transaction requires every proof and still commits all
+        // financial/clinical records + journal atomically. Retry reuses them.
+        const proofs: { schemaVersion: number; clinicId: string; operationId: string; patientId: string; sessionId: string;
+          level: number; index: number; serviceIds: string[]; subtotalCents: number; rows?: CloudClinicalService[] }[] = [];
+        if (command.action === 'visit') for (let level = 0, span = 2; level < 3; level++, span *= 4) {
+          const count = Math.ceil(command.data.services.length / span);
+          for (let index = 0; index < count; index++) {
+            const rows = command.data.services.slice(index * span, index * span + span);
+            proofs.push({ schemaVersion: 1, clinicId: 'main', operationId: command.operationId,
+              patientId: command.patientId, sessionId: command.sessionId, level, index,
+              serviceIds: rows.map(row => row.id), subtotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0),
+              ...(level === 0 ? { rows } : {}) });
+          }
+          if (count <= 4) break;
+        }
+        for (const proof of proofs) {
+          const historical = await adapter.runTransaction(async tx => {
+            await reauthorize(uid);
+            const receipt = await tx.get(path('clinicalOperations', command.operationId));
+            const intent = await readCloudOperationIntentForCommit(tx, { actorUid: uid, kind: 'clinical', command }, { digest });
+            if (intent.createdAt !== command.createdAt || intent.status !== (receipt === null ? 'prepared' : 'committed')) conflict();
+            if (receipt !== null) { await reauthorize(uid); return true; }
+            const key = path('clinicalSessionProofs', `${command.operationId}-${proof.level}-${proof.index}`), current = await tx.get(key);
+            if (current !== null && !sameValidationProof(current, proof)) conflict();
+            await reauthorize(uid);
+            if (current === null) tx.set(key, proof);
+            return false;
+          });
+          await reauthorize(uid); if (historical) break;
+        }
         const result = await adapter.runTransaction<CloudClinicalCommit>(async tx => {
           await reauthorize(uid);
           const existingOperation = await tx.get(path('clinicalOperations', command.operationId));

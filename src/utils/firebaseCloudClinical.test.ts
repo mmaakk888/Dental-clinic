@@ -33,7 +33,8 @@ type Options = {
   hostname?: string; projectId?: string; authDomain?: string; appName?: string; emulator?: boolean;
   verified?: boolean; tokenVerified?: boolean; claims?: Record<string, unknown>; provider?: string;
   member?: Record<string, unknown>; missingMember?: boolean; denyRead?: boolean; denyWrite?: boolean;
-  lostReply?: boolean; retryOnce?: boolean; stopAt?: Boundary; swapAt?: Boundary; raw?: boolean;
+  lostReply?: boolean; lostDomainReply?: boolean; retryOnce?: boolean; stopAt?: Boundary; swapAt?: Boundary; raw?: boolean;
+  boundaryTransaction?: number;
 };
 async function harness(options: Options = {}) {
   const output = await compiled(!!options.raw), module = { exports: {} as any }, calls: string[] = [];
@@ -45,8 +46,10 @@ async function harness(options: Options = {}) {
   const rows = new Map<string, any>(), active = { value: true };
   const rawAdapters: { clinical?: any; journal?: any } = {};
   let copy!: (value: unknown) => any;
+  let transactionNo = 0;
   const step = (boundary: Boundary) => {
     calls.push(boundary);
+    if (boundary.startsWith('transaction-') && options.boundaryTransaction !== undefined && options.boundaryTransaction!==transactionNo) return;
     if (options.stopAt === boundary) active.value = false;
     if (options.swapAt === boundary) auth.currentUser = { ...user };
   };
@@ -129,14 +132,16 @@ async function harness(options: Options = {}) {
           })); } };
         },
         runTransaction: async (db: unknown, work: any, settings: any) => {
+          transactionNo++;
           assert.equal(db, 'synthetic-clinical-db'); assert.equal(settings.maxAttempts, 5); step('transaction-start');
+          let domainWrite = false;
           const attempt = async (publish: boolean) => {
             const staged = new Map(rows); let wrote = false;
             const result = await work({
               get: async (key: string) => { assert.equal(wrote, false, 'all reads precede writes'); calls.push(`get:${key}`); step('transaction-read'); return snapshot(key, 'transaction', staged); },
               set: (key: string, value: unknown) => { wrote = true;
                 if (options.denyWrite) throw new Error('PRIVATE_SDK_WRITE_DENIED');
-                calls.push(`set:${key}`); staged.set(key, value); step('transaction-write'); },
+                calls.push(`set:${key}`); staged.set(key, value); if (key.includes('/clinicalOperations/')) domainWrite=true; step('transaction-write'); },
             });
             if (publish) { rows.clear(); for (const [key, value] of staged) rows.set(key, value); }
             return result;
@@ -144,6 +149,7 @@ async function harness(options: Options = {}) {
           if (options.retryOnce) { options.retryOnce = false; await attempt(false); }
           const result = await attempt(true); step('transaction-ack');
           if (options.lostReply) { options.lostReply = false; throw new Error('PRIVATE_SDK_LOST_REPLY'); }
+          if (options.lostDomainReply && domainWrite) { options.lostDomainReply=false; throw new Error('PRIVATE_SDK_LOST_DOMAIN_REPLY'); }
           return result;
         },
       };
@@ -272,7 +278,7 @@ test('clinical recovery queries constrain actor, kind and prepared status and re
 });
 
 test('clinical all-status recovery discovers an accepted lost-ACK operation after a new capability and replays cash once', async () => {
-  const h = await harness(), service = await prepared(h); h.options.lostReply = true;
+  const h = await harness(), service = await prepared(h); h.options.lostDomainReply = true;
   await assert.rejects(service.repository.commit(h.payload), failed);
   const fresh = await capability(h);
   assert.equal((await fresh.journal.listPreparedPage('clinical')).records.length, 0);
@@ -319,7 +325,7 @@ test('clinical SDK read/write denials expose fixed errors without fallback or su
 
 test('lost SDK acknowledgement retries the original prepared intent and original domain operation without duplicate cash', async () => {
   const h = await harness(), service = await prepared(h);
-  h.options.lostReply = true;
+  h.options.lostDomainReply = true;
   await assert.rejects(service.repository.commit(h.payload), failed);
   assert.equal(h.rows.get(path('operationIntents', OP)).status, 'committed');
   const before = h.calls.filter(call => call.startsWith('set:')).length;
@@ -364,10 +370,37 @@ test('clinical query construction/docs/id/data callbacks stop before any subsequ
 
 test('clinical domain transaction checks every read/write/ack boundary without claiming server undo', async () => {
   for (const stopAt of ['transaction-start', 'transaction-read', 'transaction-exists', 'transaction-data', 'transaction-write', 'transaction-ack'] as Boundary[]) {
-    const h = await harness(), service = await prepared(h); h.options.stopAt = stopAt;
+    const h = await harness(), service = await prepared(h); h.options.stopAt = stopAt; h.options.boundaryTransaction=3;
     await assert.rejects(service.repository.commit(h.payload), failed);
     assert.equal(h.rows.has(path('patientAccounts')), stopAt === 'transaction-ack');
     assert.equal(h.rows.get(path('operationIntents', OP)).status, stopAt === 'transaction-ack' ? 'committed' : 'prepared');
+  }
+});
+
+test('preparation revocation never publishes clinical/cash data and a fresh capability resumes the exact journal', async () => {
+  for (const stopAt of ['transaction-start','transaction-read','transaction-exists','transaction-data','transaction-write','transaction-ack'] as Boundary[]) {
+    const h=await harness(),first=await prepared(h);h.options.stopAt=stopAt;h.options.boundaryTransaction=2;
+    await assert.rejects(first.repository.commit(h.payload),failed);
+    assert.equal(h.rows.has(path('patientAccounts')),false);assert.equal(h.rows.has(path('patientReceipts',OP)),false);
+    assert.equal(h.rows.get(path('operationIntents',OP)).status,'prepared');
+    assert.equal(h.rows.has(path('clinicalSessionProofs',`${OP}-0-0`)),stopAt==='transaction-ack');
+    h.active.value=true;h.options.stopAt=undefined;const fresh=await capability(h);
+    const original=await fresh.journal.get(OP);assert.equal((await fresh.repository.commit(original.command)).status,'committed');
+    assert.equal([...h.rows.keys()].filter(key=>key.startsWith(path('patientReceipts',''))).length,1);
+    const before=[...h.calls];await assert.rejects(first.repository.getProfile(ID),failed);assert.deepEqual(h.calls,before);
+  }
+});
+
+test('lost validation-preparation ACK is recoverable but cancellation stays final without money movement', async () => {
+  for(const cancel of [false,true]){const h=await harness(),first=await prepared(h);h.options.lostReply=true;
+    await assert.rejects(first.repository.commit(h.payload),failed);assert.equal(h.rows.get(path('operationIntents',OP)).status,'prepared');
+    assert.equal(h.rows.has(path('patientAccounts')),false);const fresh=await capability(h);
+    if(cancel){await fresh.journal.cancel(OP);const before=[...h.calls].filter(x=>x.startsWith('set:')).length;
+      await assert.rejects(fresh.repository.commit(h.payload));assert.equal(h.calls.filter(x=>x.startsWith('set:')).length,before);
+      assert.equal(h.rows.has(path('patientReceipts',OP)),false);
+    }else{const original=await fresh.journal.get(OP);await fresh.repository.commit(original.command);
+      assert.equal(h.rows.get(path('patientAccounts')).paidCents,10000);
+      assert.equal([...h.rows.keys()].filter(key=>key.startsWith(path('clinicalSessionProofs',''))).length,1);}
   }
 });
 
@@ -447,6 +480,7 @@ test('same-UID replacement during reads/pages/transactions rejects late results 
   for (const swapAt of ['record-doc', 'record', 'record-exists', 'record-data', 'query', 'page-docs', 'page-id', 'page-data',
     'transaction-read', 'transaction-data', 'transaction-write', 'transaction-ack'] as Boundary[]) {
     const h = await harness(), service = await prepared(h); h.options.swapAt = swapAt;
+    if (swapAt.startsWith('transaction-')) h.options.boundaryTransaction=3;
     const operation = swapAt.startsWith('transaction') ? () => service.repository.commit(h.payload)
       : ['query', 'page-docs', 'page-id', 'page-data'].includes(swapAt) ? () => service.journal.listPreparedPage('clinical')
         : () => service.journal.get(OP);

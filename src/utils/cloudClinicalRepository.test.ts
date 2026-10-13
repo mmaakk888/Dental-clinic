@@ -28,7 +28,7 @@ const progress = (changes: Record<string, unknown> = {}): CloudClinicalCommand =
   sessionId: OP, expectedRevision: 1, action: 'progress', createdAt: WHEN,
   changes: { notes: 'متابعة مصطنعة', treatmentStage: 'second', rootCanalStatus: 'working_length', visitStatus: 'follow_up' }, ...changes } as CloudClinicalCommand);
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(accept => { resolve = accept; }); return { resolve, promise }; }
-function harness(options: { lostReply?: boolean; failWrite?: number; retry?: boolean } = {}) {
+function harness(options: { lostReply?: boolean; lostPreparationReply?: boolean; failWrite?: number; retry?: boolean } = {}) {
   const docs = new Map<string, any>([
     [path('patientProfiles'), { schemaVersion: 1, clinicId: 'main', recordId: PATIENT, fileNo: 451, revision: 1, lastOperationId: OP3,
       phoneKey: createHash('sha256').update('patient-phone-v1:201000000001').digest('hex'),
@@ -61,7 +61,10 @@ function harness(options: { lostReply?: boolean; failWrite?: number; retry?: boo
         hooks.started?.resolve(); await hooks.gate?.promise;
         if (options.retry) { options.retry = false; await attempt(false); }
         const result = await attempt(true);
-        if (options.lostReply) { options.lostReply = false; throw new Error('PRIVATE_LOST_ACK'); }
+        if (options.lostPreparationReply && [...docs.keys()].some(key => key.includes('/clinicalSessionProofs/'))) {
+          options.lostPreparationReply = false; throw new Error('PRIVATE_LOST_PREPARATION_ACK');
+        }
+        if (options.lostReply && [...docs.keys()].some(key => key.includes('/clinicalOperations/'))) { options.lostReply = false; throw new Error('PRIVATE_LOST_ACK'); }
         return result;
       } finally { release(); }
     },
@@ -91,7 +94,7 @@ test('visit atomically links patient account, session, actual cash receipt and h
   assert.deepEqual(result, { status: 'committed', patientId: PATIENT, sessionId: OP, fileNo: 451, revision: 1 });
   const account = await h.repo.getAccount(PATIENT), session = await h.repo.getSession(OP);
   assert.equal(account?.totalCents, 40_000); assert.equal(account?.paidCents, 10_000); assert.equal(account?.sessionCount, 1);
-  assert.equal(session?.totalCents, 40_000); assert.equal(session?.paidCents, 10_000); assert.equal(h.writes(), 5);
+  assert.equal(session?.totalCents, 40_000); assert.equal(session?.paidCents, 10_000); assert.equal(h.writes(), 6);
   const cash = (await h.repo.listReceipts({ patientId: PATIENT })).records[0];
   assert.equal(cash.amountCents, 10_000); assert.equal(cash.paymentMethod, 'cash'); assert.equal(cash.actorUid, OWNER);
   assert.doesNotMatch(JSON.stringify(h.docs.get(path('clinicalOperations', OP))), /مصطنع|mobile|notes|services/);
@@ -100,7 +103,7 @@ test('optional examination is a charge, never proof of collection; zero payment 
   for (const fee of [0, 10_000]) {
     const h = harness(); await h.repo.commit(visit({ data: { ...data(), examinationCents: fee }, paidCents: 0 }));
     assert.equal((await h.repo.getAccount(PATIENT))?.totalCents, 30_000 + fee); assert.equal((await h.repo.getAccount(PATIENT))?.paidCents, 0);
-    assert.equal(h.docs.has(path('patientReceipts', OP)), false); assert.equal(h.writes(), 4);
+    assert.equal(h.docs.has(path('patientReceipts', OP)), false); assert.equal(h.writes(), 5);
   }
 });
 test('exam-only visit and explicitly free clinical service do not invent treatment or paid money', async () => {
@@ -113,7 +116,7 @@ test('additional cash payment updates one canonical session and account with one
   const h = harness(); await h.repo.commit(visit()); await h.repo.commit(payment());
   assert.equal((await h.repo.getSession(OP))?.paidCents, 15_000); assert.equal((await h.repo.getAccount(PATIENT))?.paidCents, 15_000);
   assert.equal((await h.repo.getAccount(PATIENT))?.totalCents, 40_000); assert.equal((await h.repo.getAccount(PATIENT))?.sessionCount, 1);
-  assert.equal((await h.repo.listReceipts({ patientId: PATIENT })).records.length, 2); assert.equal(h.writes(), 10);
+  assert.equal((await h.repo.listReceipts({ patientId: PATIENT })).records.length, 2); assert.equal(h.writes(), 11);
 });
 test('treatment progress changes clinical stage without a second charge, collection or session', async () => {
   const h = harness(); await h.repo.commit(visit()); await h.repo.commit(progress());
@@ -126,11 +129,11 @@ test('same operation replay and lost acknowledgement never duplicate a charge or
   const h = harness({ lostReply: true }); await assert.rejects(h.repo.commit(visit()), code('unavailable'));
   const accepted = structuredClone(h.docs); assert.equal((await h.repo.commit(visit())).status, 'already-committed'); assert.deepEqual(h.docs, accepted);
   await h.repo.commit(payment()); const newer = structuredClone(h.docs);
-  assert.equal((await h.repo.commit(visit())).revision, 1); assert.deepEqual(h.docs, newer); assert.equal(h.writes(), 10);
+  assert.equal((await h.repo.commit(visit())).revision, 1); assert.deepEqual(h.docs, newer); assert.equal(h.writes(), 11);
 });
 test('transaction callback retry publishes one canonical set, not duplicate rows', async () => {
   const h = harness({ retry: true }); await h.repo.commit(visit());
-  assert.equal(h.docs.size, 7); assert.equal((await h.repo.getAccount(PATIENT))?.sessionCount, 1);
+  assert.equal(h.docs.size, 8); assert.equal((await h.repo.getAccount(PATIENT))?.sessionCount, 1);
 });
 test('same-ID changed body, expected revision, actor or action fails without overwriting history', async () => {
   const h = harness(); await h.repo.commit(visit()); const baseline = structuredClone(h.docs);
@@ -160,10 +163,12 @@ test('fractional cents, negative amounts, unsafe/oversized integers and zero add
   }
   assert.throws(() => prepareCloudClinicalCommand(payment({ amountCents: 0 })), code('invalid'));
 });
-test('failed intermediate write publishes none of account/session/receipt/operation and exposes no provider details', async () => {
-  for (const n of [1, 2, 3, 4, 5]) {
+test('failed preparation or financial write publishes no account/session/receipt/operation; immutable preparation may remain', async () => {
+  for (const n of [1, 2, 3, 4, 5, 6]) {
     const h = harness({ failWrite: n }), before = structuredClone(h.docs);
-    await assert.rejects(h.repo.commit(visit()), code('unavailable')); assert.deepEqual(h.docs, before);
+    await assert.rejects(h.repo.commit(visit()), code('unavailable'));
+    assert.deepEqual(new Map([...h.docs].filter(([key]) => !key.includes('/clinicalSessionProofs/'))), before);
+    for (const kind of ['patientAccounts','patientSessions','patientReceipts','clinicalOperations']) assert.equal([...h.docs.keys()].some(key=>key.includes(`/${kind}/`)),false);
   }
 });
 test('commands are detached before awaiting authorization; mutation of caller fields cannot change accepted content', async () => {
@@ -240,7 +245,9 @@ test('missing/mismatched profile or immutable file index cannot create clinical 
     if (change === 'wrong-phone') h.docs.get(path('patientProfiles')).phoneKey = '0'.repeat(64);
     if (change === 'missing-index') h.docs.delete(path('patientFiles', 451));
     if (change === 'wrong-index') h.docs.get(path('patientFiles', 451)).recordId = OTHER;
-    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(visit())); assert.deepEqual(h.docs, before); assert.equal(h.writes(), 0);
+    const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(visit()));
+    assert.deepEqual(new Map([...h.docs].filter(([key]) => !key.includes('/clinicalSessionProofs/'))), before);
+    assert.equal(h.docs.has(path('patientAccounts')),false);
   }
 });
 test('account/session/cash collisions and cross-patient or inconsistent stored data fail closed', async () => {
@@ -286,9 +293,46 @@ test('missing read/query methods fail closed rather than returning fabricated em
   await assert.rejects(missing.getAccount(PATIENT), code('unavailable')); await assert.rejects(missing.listSessions({ patientId: PATIENT }), code('unavailable'));
   assert.equal(h.writes(), 0);
 });
-test('identity loss before final transaction authorization cannot publish data', async () => {
+test('identity loss before final transaction authorization cannot publish clinical/financial data; earlier private preparation remains', async () => {
   const h = harness(); let count = 0; h.hooks.auth = () => { if (++count === 6) h.actor('different-synthetic-owner'); };
-  await assert.rejects(h.repo.commit(visit()), code('unavailable')); assert.equal(h.writes(), 0); assert.equal(h.docs.size, 2);
+  await assert.rejects(h.repo.commit(visit()), code('unavailable'));
+  assert.equal(h.writes(), 1); assert.equal(h.docs.size, 3);
+  assert.equal(new Map([...h.docs].filter(([key]) => !key.includes('/clinicalSessionProofs/'))).size,2);
+});
+
+test('all 64 service rows prepare bounded immutable proofs then publish one session/account/receipt exactly once', async () => {
+  for (const count of [1,2,3,8,9,16,32,33,64]) {
+    const h=harness(), command=visit({ data:{...data(),services:Array.from({length:count},(_,n)=>({
+      ...data().services[0],id:`30000000-0000-4000-8000-${String(n+1).padStart(12,'0')}` }))} });
+    await h.repo.commit(command);
+    assert.equal((await h.repo.getAccount(PATIENT))?.sessionCount,1);
+    assert.equal((await h.repo.getSession(OP))?.totalCents,count*30000+10000);
+    const proofs=[...h.docs].filter(([key])=>key.includes('/clinicalSessionProofs/'));
+    let expected=0;for(let span=2,level=0;level<3;span*=4,level++){const size=Math.ceil(count/span);expected+=size;if(size<=4)break;}
+    assert.equal(proofs.length,expected);
+    for(const [key,proof] of proofs){assert.ok(key.endsWith(`${OP}-${proof.level}-${proof.index}`));
+      if(proof.level===0)assert.ok(proof.rows.length>=1&&proof.rows.length<=2);
+      assert.ok(proof.serviceIds.length<=32);}
+    const before=structuredClone(h.docs),writes=h.writes();
+    assert.equal((await h.repo.commit(command)).status,'already-committed');assert.equal(h.writes(),writes);assert.deepEqual(h.docs,before);
+  }
+});
+
+test('lost proof acknowledgement resumes the same preparation without premature cash or a replacement operation', async () => {
+  const h=harness({lostPreparationReply:true});await assert.rejects(h.repo.commit(visit()),code('unavailable'));
+  assert.equal(h.docs.has(path('patientAccounts')),false);assert.equal(h.docs.has(path('clinicalOperations',OP)),false);
+  assert.equal([...h.docs.keys()].filter(key=>key.includes('/clinicalSessionProofs/')).length,1);
+  assert.equal((await h.repo.commit(visit())).status,'committed');assert.equal(h.writes(),6);
+  assert.equal((await h.repo.listReceipts({patientId:PATIENT})).records.length,1);
+});
+
+test('stored proof corruption, extra properties and getter payloads cannot be overwritten or publish financial records', async () => {
+  for(const change of ['sum','extra','getter'] as const){const h=harness({lostPreparationReply:true});
+    await assert.rejects(h.repo.commit(visit()));const key=path('clinicalSessionProofs',`${OP}-0-0`),proof=h.docs.get(key);
+    if(change==='sum')proof.subtotalCents++;if(change==='extra')proof.extra='invalid';
+    if(change==='getter')Object.defineProperty(proof,'subtotalCents',{enumerable:true,get(){throw new Error('PRIVATE_GETTER');}});
+    await assert.rejects(h.repo.commit(visit()));assert.equal(h.docs.has(path('patientAccounts')),false);
+  }
 });
 test('unavailable/hostile adapter errors never escape as provider payloads or raw text', async () => {
   const h = harness(), broken = createCloudClinicalRepository({ ...h.adapter, readRecord: async () => { throw new Error('PRIVATE_PROVIDER_DETAIL'); } }, { digest });

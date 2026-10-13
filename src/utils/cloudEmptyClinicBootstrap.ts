@@ -39,7 +39,7 @@ const MARKER = 'clinics/main/bootstrap/initialRelease';
  * must extend this inventory before their adapters can be activated. */
 export const CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS = Object.freeze([
   'patientProfiles', 'patientFiles', 'patientOperations', 'patientAccounts', 'patientSessions', 'patientReceipts',
-  'clinicalOperations', 'contactRecords', 'contactPhones', 'contactOperations', 'operationIntents', 'catalogOperations',
+  'clinicalOperations', 'clinicalSessionProofs', 'contactRecords', 'contactPhones', 'contactOperations', 'operationIntents', 'catalogOperations',
   'catalogServiceIds', 'catalogServiceNames',
   'appointmentRecords', 'appointmentDays', 'appointmentOperations', 'labDefinitions', 'labCases', 'labAccounts',
   'labPayments', 'prostheticOperations', 'expenseRecords', 'expensePayments', 'expenseOperations', 'materialBalances',

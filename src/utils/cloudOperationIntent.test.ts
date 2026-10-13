@@ -117,7 +117,7 @@ test('clinical commit atomically closes its intent with the session, account, ca
   const h = harness(); await h.journal.prepare('clinical', visit(), WHEN);
   await h.clinical.commit(visit()); assert.equal((await h.journal.get(OP))!.status, 'committed');
   assert.equal((await h.journal.get(OP))!.revision, 2); assert.equal(h.docs.has(path('clinicalOperations')), true);
-  assert.equal(h.docs.has(path('patientReceipts')), true); assert.equal(h.writes(), 6);
+  assert.equal(h.docs.has(path('patientReceipts')), true); assert.equal(h.writes(), 7);
   assert.deepEqual((await h.journal.listPreparedPage('clinical')).records, []);
   const before = structuredClone(h.docs); assert.equal((await h.clinical.commit(visit())).status, 'already-committed');
   assert.equal((await h.journal.prepare('clinical', visit(), WHEN)).status, 'committed'); assert.deepEqual(h.docs, before);
@@ -185,17 +185,18 @@ test('history snapshots bounds before authorization and rejects malformed, forei
   }
 });
 test('failure at any clinical write leaves intent prepared and no partially published finance', async () => {
-  for (const failAt of [1, 2, 3, 4, 5]) {
+  for (const failAt of [1, 2, 3, 4, 5, 6]) {
     const h = harness(); await h.journal.prepare('clinical', visit(), WHEN); const before = structuredClone(h.docs);
     h.resetWrites(); h.faults.failAt = failAt;
-    await assert.rejects(h.clinical.commit(visit()), clinical('unavailable')); assert.deepEqual(h.docs, before);
+    await assert.rejects(h.clinical.commit(visit()), clinical('unavailable'));
+    assert.deepEqual(new Map([...h.docs].filter(([key])=>!key.includes('/clinicalSessionProofs/'))), before);
     assert.equal((await h.journal.get(OP))!.status, 'prepared');
   }
 });
 test('transaction callback retries never duplicate preparation or the clinical operation', async () => {
   const h = harness(); h.faults.retryTransaction = true; await h.journal.prepare('clinical', visit(), WHEN);
   h.faults.retryTransaction = true; await h.clinical.commit(visit());
-  assert.equal(h.docs.size, 7); assert.equal((await h.journal.get(OP))!.status, 'committed');
+  assert.equal(h.docs.size, 8); assert.equal((await h.journal.get(OP))!.status, 'committed');
   assert.equal(h.docs.get(path('patientAccounts', PATIENT)).sessionCount, 1);
 });
 test('cancellation checks absence of the domain receipt atomically and permanently rejects later commit', async () => {
