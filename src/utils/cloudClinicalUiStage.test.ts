@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { CLOUD_CLINICAL_UI_STAGE, createCloudClinicalUiPreview } from './cloudClinicalUiStage';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 const ID = '10000000-0000-4000-8000-000000000001';
-test('clinical readiness is immutable, false and source-only, not authorization', () => {
-  assert.equal(CLOUD_CLINICAL_UI_STAGE.available, false); assert.equal(Object.isFrozen(CLOUD_CLINICAL_UI_STAGE), true);
-  assert.throws(() => { (CLOUD_CLINICAL_UI_STAGE as { available: boolean }).available = true; });
-  assert.match(CLOUD_CLINICAL_UI_STAGE.reason, /غير مفعّل/); assert.match(CLOUD_CLINICAL_UI_STAGE.reason, /القواعد/);
+test('clinical readiness follows the immutable central source flag, not authorization', () => {
+  assert.equal(CLOUD_CLINICAL_UI_STAGE.available, CLOUD_COMPLETE_RELEASE_UI.available); assert.equal(Object.isFrozen(CLOUD_CLINICAL_UI_STAGE), true);
+  assert.throws(() => { (CLOUD_CLINICAL_UI_STAGE as { available: boolean }).available = !CLOUD_CLINICAL_UI_STAGE.available; });
 });
 test('clinical file/history preview remains empty and every retained action is inert', async () => {
   let alive = true; const preview = createCloudClinicalUiPreview(() => alive), file = { ...preview.file }, history = { ...preview.recovery };

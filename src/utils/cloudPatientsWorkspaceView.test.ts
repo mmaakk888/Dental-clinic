@@ -23,7 +23,7 @@ const record = (changes: Partial<CloudPatientRecord> = {}): CloudPatientRecord =
   fileNo: 401, revision: 1, lastOperationId: OP, phoneKey: createHash('sha256').update('patient-phone-v1:201000000001').digest('hex'),
   data: { name: 'أحمد اختبار مصطنع', mobile: '٠١٠٠٠٠٠٠٠٠١', age: 30, gender: 'ذكر', firstVisit: '2026-10-10', notes: 'ملاحظة مصطنعة', allergy: 'معلومة اختيارية مصطنعة' }, ...changes });
 const state = (changes: Partial<CloudPatientWorkspaceState> = {}): CloudPatientWorkspaceState => ({ records: [], nextAfterId: null,
-  loaded: false, loading: false, recoveryLoading: false, saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, query: { kind: 'all' }, error: '', notice: '', closed: false, ...changes });
+  loaded: false, loading: false, recoveryLoading: false, saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, registrationCheck: null, query: { kind: 'all' }, error: '', notice: '', closed: false, ...changes });
 function viewProps(changes: Partial<CloudPatientsWorkspaceViewProps> = {}) {
   const calls: string[] = [];
   const props: CloudPatientsWorkspaceViewProps = { state: state(), loadedQuery: '', fileQuery: '', phoneQuery: '', ageQuery: null,
@@ -349,4 +349,28 @@ test('patient view history panel fresh guard masks supplied data and rejects ret
   assert.equal(panel.props.canAct(), false); panel.props.onResume(OP);
   invoke(CloudPatientsWorkspaceView, { ...h.props, previewOnly: true }, undefined, refs);
   assert.equal(panel.props.canAct(), false); panel.props.onResume(OP); assert.deepEqual(h.calls, ['resume']);
+});
+test('fresh duplicate review distinguishes existing file numbers from contacts and requires a separate explicit create confirmation', () => {
+  const data = record(), draft = { action: 'create' as const, recordId: ID, expectedRevision: 0, profile: data.data };
+  const check = Object.freeze({ draft, readTime: '2026-10-14T00:00:00.000Z', matchCount: 2, matches: [
+    { source: 'patient' as const, recordId: ID, name: 'اسم ملف مصطنع', mobile: '01000000001', fileNo: 401, reason: 'phone' as const },
+    { source: 'contact' as const, recordId: OP, name: 'جهة اتصال مصطنعة', mobile: '01000000001', fileNo: null, reason: 'phone' as const }] });
+  const h = viewProps({ state: state({ draft, registrationCheck: check }), onConfirmSeparate: () => h.calls.push('confirm-separate') }), view = rendered(h.props);
+  assert.match(h.html(), /له ملف #٤٠١/); assert.match(h.html(), /موجود بجهات الاتصال/); assert.match(h.html(), /لن ندمج البيانات/);
+  assert.equal(view.button('راجع التشابه وأكّد الاختيار').props.disabled, true);
+  view.button('راجعت التشابه — إنشاء ملف منفصل').props.onClick(); assert.deepEqual(h.calls, ['confirm-separate']);
+  assert.doesNotMatch(h.html(), /10000000-0000-4000|رصيد|المتبقي|حجز رقم ملف/);
+});
+test('preview masks duplicate names and a retained confirmation cannot approve a changed draft or disabled view', () => {
+  const data = record(), draft = { action: 'create' as const, recordId: ID, expectedRevision: 0, profile: data.data };
+  const check = { draft, readTime: '2026-10-14T00:00:00.000Z', matchCount: 1, matches: [{ source: 'patient' as const, recordId: ID,
+    name: 'PRIVATE_DUPLICATE', mobile: '01000000001', fileNo: 401, reason: 'name' as const }] };
+  const h = viewProps({ state: state({ draft, registrationCheck: check }), onConfirmSeparate: () => h.calls.push('confirm') });
+  assert.doesNotMatch(viewProps({ ...h.props, previewOnly: true }).html(), /PRIVATE_DUPLICATE|مراجعة التشابه/);
+  for (const changes of [{ closing: true }, { previewOnly: true }, { state: state({ draft: { ...draft }, registrationCheck: null }) }]) {
+    const refs: Array<{ current: any }> = [], first = invoke(CloudPatientsWorkspaceView, h.props, undefined, refs);
+    const button = all(first).find(row => row.type === 'button' && text(row) === 'راجعت التشابه — إنشاء ملف منفصل')!;
+    invoke(CloudPatientsWorkspaceView, { ...h.props, ...changes }, undefined, refs); button.props.onClick();
+  }
+  assert.deepEqual(h.calls, []);
 });

@@ -1,12 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import CloudOperatingPage from '../components/auth/CloudOperatingPage';
+import type CloudOperatingPage from '../components/auth/CloudOperatingPage';
+import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { runInThisContext } from 'node:vm';
 import type { CloudOperatingPageController } from './cloudOperatingPageController';
 import type { CloudCatalogWorkspaceController } from './cloudCatalogWorkspaceController';
 
 // Synthetic hook/state contracts only: no browser visual QA, real account,
 // Firebase, local clinic storage, patient data or multi-device acceptance.
+
+/** Historical preparation UI in an explicit TEST-ONLY closed source build.
+ * Evaluate in this test's realm so inert preview arrays keep normal prototypes.
+ * This never changes the real release flag, runtime or application props. */
+const closedPageOutput = await build({ entryPoints: ['src/components/auth/CloudOperatingPage.tsx'], bundle: true,
+  write: false, platform: 'node', format: 'cjs', logLevel: 'silent', supported: { 'dynamic-import': false },
+  external: ['react', 'react/jsx-runtime', 'lucide-react', 'firebase/*'],
+  plugins: [{ name: 'historical-closed-preparation-only', setup(builder) {
+    builder.onLoad({ filter: /cloudReleaseReadiness\.ts$/ }, () => ({
+      contents: 'export const CLOUD_COMPLETE_RELEASE_UI = Object.freeze({ available: false, reason: "Synthetic historical preparation" });', loader: 'ts',
+    }));
+    builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }));
+  } }] });
+const closedPageModule = { exports: {} as { default: typeof CloudOperatingPage } };
+const closedPageRequire = createRequire(import.meta.url);
+runInThisContext('(function(module, exports, require) {' + closedPageOutput.outputFiles[0].text + '\n})')(
+  closedPageModule, closedPageModule.exports, (name: string) => {
+    assert.ok(['react', 'react/jsx-runtime', 'lucide-react'].includes(name), 'Preparation render must not import SDK/native/provider modules: ' + name);
+    return closedPageRequire(name);
+  });
+assert.match(closedPageOutput.outputFiles[0].text, /Synthetic historical preparation/);
+const ClosedOperatingPage = closedPageModule.exports.default;
+
 type Element = { type: unknown; props: Record<string, any> };
 const children = (node: any): any[] => node == null ? [] : Array.isArray(node) ? node.flatMap(children) : [node];
 const all = (node: any): Element[] => children(node).flatMap(item => item && typeof item === 'object' && item.props
@@ -40,7 +66,7 @@ function hookHarness() {
       useRef(initial: unknown) { const at = cursor++; if (!slots[at]) slots[at] = { current: initial }; return slots[at]; },
       useEffect(effect: () => void | (() => void)) { const at = cursor++; if (!slots[at]) { slots[at] = {}; effects.push(effect); } },
     };
-    try { tree = CloudOperatingPage(); return tree; } finally { internals.H = previous; }
+    try { tree = ClosedOperatingPage(); return tree; } finally { internals.H = previous; }
   }
   const elements = () => all(tree);
   const button = (label: string) => { const result = elements().find(item => item.type === 'button' && text(item) === label);

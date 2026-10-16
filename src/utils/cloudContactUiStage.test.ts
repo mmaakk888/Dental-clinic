@@ -2,13 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { CLOUD_CONTACTS_UI_STAGE, createCloudContactUiPreview } from './cloudContactUiStage';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 test('cloud contacts stage cannot be enabled by mutable UI flags or ambient browser settings', () => {
-  assert.equal(CLOUD_CONTACTS_UI_STAGE.available, false);
+  assert.equal(CLOUD_CONTACTS_UI_STAGE.available, CLOUD_COMPLETE_RELEASE_UI.available);
   assert.equal(Object.isFrozen(CLOUD_CONTACTS_UI_STAGE), true);
-  assert.throws(() => { (CLOUD_CONTACTS_UI_STAGE as { available: boolean }).available = true; });
-  assert.match(CLOUD_CONTACTS_UI_STAGE.reason, /غير مفعّل/u);
-  assert.match(CLOUD_CONTACTS_UI_STAGE.reason, /ملفات المرضى/u);
+  assert.throws(() => { (CLOUD_CONTACTS_UI_STAGE as { available: boolean }).available = !CLOUD_CONTACTS_UI_STAGE.available; });
 });
 
 test('empty design preview initializes no SDK, has no records, and cannot obtain a data adapter', async () => {

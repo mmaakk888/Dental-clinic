@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { CLOUD_CATALOG_UI_STAGE, createCloudCatalogUiPreview } from './cloudCatalogUiStage';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
-test('catalog readiness stays frozen false and has no runtime opt-in', async () => {
-  assert.equal(CLOUD_CATALOG_UI_STAGE.available, false); assert.equal(Object.isFrozen(CLOUD_CATALOG_UI_STAGE), true);
-  assert.match(CLOUD_CATALOG_UI_STAGE.reason, /غير مفعّل/);
+test('catalog readiness follows the frozen central source flag and has no runtime opt-in', async () => {
+  assert.equal(CLOUD_CATALOG_UI_STAGE.available, CLOUD_COMPLETE_RELEASE_UI.available); assert.equal(Object.isFrozen(CLOUD_CATALOG_UI_STAGE), true);
+  assert.throws(() => { (CLOUD_CATALOG_UI_STAGE as { available: boolean }).available = !CLOUD_CATALOG_UI_STAGE.available; });
   const source = await readFile('src/utils/cloudCatalogUiStage.ts', 'utf8');
   assert.doesNotMatch(source, /import\.meta|process\.env|URLSearchParams|localStorage|sessionStorage/);
 });

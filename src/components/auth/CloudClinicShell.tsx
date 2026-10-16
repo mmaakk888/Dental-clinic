@@ -6,7 +6,7 @@ import { splitMobileNavigation } from '../../utils/dockAppearance';
 import './CloudClinicShell.css';
 
 export type CloudShellSection = 'home' | CloudNavigationSection;
-export interface CloudShellBranding { identity: CloudClinicIdentity; theme: CloudClinicTheme; content: CloudClinicContent; readTime: string }
+export interface CloudShellBranding { identity: CloudClinicIdentity; theme: CloudClinicTheme; content: CloudClinicContent; readTime: string; logo?: string | null }
 export interface CloudClinicShellProps {
   branding: CloudShellBranding | null; section: CloudShellSection; accountEmail: string; disabled?: boolean;
   checking?: boolean; error?: string; patientDisplayActive: boolean; patientDisplay?: React.ReactNode;
@@ -50,7 +50,7 @@ export function CloudClinicShell(props: CloudClinicShellProps) {
     onClick={()=>navigate(key)}><Icon aria-hidden="true"/><span>{label(key)}</span></button>;};
   return <main dir="rtl" className="cloud-clinic-shell" style={style} data-mobile-size={mobile?.size || 'comfortable'}
     data-desktop-size={desktop?.size || 'comfortable'} data-mobile-labels={mobile?.showLabels ?? true} data-desktop-labels={desktop?.showLabels ?? true}>
-    <header className="cloud-clinic-header"><div className="cloud-clinic-brand"><ClinicLogo layout="icon-only" size="header" showText={false}/><div><strong>{title}</strong>
+    <header className="cloud-clinic-header"><div className="cloud-clinic-brand">{brand?.logo ? <img src={brand.logo} alt="شعار العيادة" width={48} height={48} className="h-12 w-12 shrink-0 object-contain"/> : <ClinicLogo layout="icon-only" size="header" showText={false}/>}<div><strong>{title}</strong>
       {brand?.identity.doctorName && <small>{brand.identity.doctorName}</small>}</div></div>
       <div className="cloud-header-actions"><button type="button" className="cloud-shell-button" aria-pressed={props.patientDisplayActive}
         onClick={()=>{const current=latest.current;if(!current.disabled && !current.checking)current.onPatientDisplay();}} disabled={props.disabled || props.checking}>

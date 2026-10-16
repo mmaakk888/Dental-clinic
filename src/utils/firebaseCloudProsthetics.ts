@@ -2,7 +2,7 @@ import type { Auth } from 'firebase/auth';
 import type { DocumentSnapshot, QueryConstraint, Transaction } from 'firebase/firestore/lite';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID } from './cloudIdentity';
 import { assessCloudOwnerMembership } from './cloudMembership';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 import { CloudProstheticError, createCloudProstheticRepository, prepareCloudProstheticCommand,
   type CloudProstheticRepository, type CloudProstheticTransaction } from './cloudProstheticRepository';
 import { CloudOperationIntentError, createCloudOperationIntentRepository, parseCloudOperationIntent, prepareCloudIntentCommand,
@@ -19,6 +19,7 @@ const LAB_CASE = new RegExp(`^clinics/main/labCases/${UUID}${END}`);
 const LAB_ACCOUNT = new RegExp(`^clinics/main/labAccounts/${UUID}${END}`);
 const LAB_PAYMENT = new RegExp(`^clinics/main/labPayments/${UUID}${END}`);
 const OPERATION = new RegExp(`^clinics/main/prostheticOperations/${UUID}${END}`);
+const PAYMENT_PROOF = new RegExp(`^clinics/main/prostheticPaymentProofs/${UUID}-[0-2]${END}`);
 const INTENT = new RegExp(`^clinics/main/operationIntents/${UUID}${END}`);
 const DEFINITION = new RegExp(`^clinics/main/labDefinitions/${UUID}${END}`);
 const PROFILE = new RegExp(`^clinics/main/patientProfiles/${UUID}${END}`);
@@ -38,7 +39,7 @@ export async function createFirebaseCloudProsthetics(auth: Auth, options: Fireba
   const requireRuntime = () => {
     try {
       if (revoked || !options || typeof options.isActive !== 'function' || options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || auth.app.options.projectId !== CLOUD_PROJECT_ID || auth.app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`
         || !APP.test(auth.app.name) || auth.emulatorConfig) throw new Error();
@@ -74,7 +75,7 @@ export async function createFirebaseCloudProsthetics(auth: Auth, options: Fireba
       sdkCall(() => assessCloudOwnerMembership(identity, sdkCall(() => snapshot.data()), authTime));
       requireRuntime(); return identity.uid;
     };
-    const writable = (path: string) => LAB_CASE.test(path) || LAB_ACCOUNT.test(path) || LAB_PAYMENT.test(path) || OPERATION.test(path)
+    const writable = (path: string) => LAB_CASE.test(path) || LAB_ACCOUNT.test(path) || LAB_PAYMENT.test(path) || OPERATION.test(path) || PAYMENT_PROOF.test(path)
       || INTENT.test(path) || PATIENT_ACCOUNT.test(path) || SESSION.test(path) || CASH.test(path);
     const reference = (path: string, write = false) => {
       requireRuntime();

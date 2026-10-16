@@ -1,6 +1,9 @@
-import { CloudOperationIntentError, readCloudOperationIntentForCommit,
+import { CloudOperationIntentError, prepareCloudIntentCommand, parseCloudOperationIntent, readCloudOperationIntentForCommit,
   markCloudOperationIntentCommitted } from './cloudOperationIntent';
 import { parseCloudServiceCatalogRecord } from './cloudServiceCatalogRepository';
+import { buildCloudSettingsValidationProofs, cloudSettingsProofPath,
+  type CloudSettingsProofContext, type CloudSettingsReferenceRevisions } from './cloudSettingsValidationProofs';
+import { selectCloudSettingsReusableProofs, type CloudSettingsReuseSource } from './cloudSettingsProofReuse';
 
 /** Protected clinic configuration only. No local defaults, credentials, SDK,
  * clock, generated IDs, patient prices or financial aggregates live here.
@@ -356,10 +359,59 @@ async function sha256(value: string) {
   const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
 }
+const sameProof = (a: unknown, b: object): boolean => {
+  const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : v && typeof v === 'object'
+    ? Object.fromEntries(Object.keys(v).sort().map(key => [key, stable(v[key])])) : v;
+  return JSON.stringify(stable(prepareCloudIntentCommand(a))) === JSON.stringify(stable(prepareCloudIntentCommand(b)));
+};
+function referenceRevisions(value: unknown, command: CloudClinicSettingsCommand): CloudSettingsReferenceRevisions | null {
+  if (command.target !== 'lab' && (command.target !== 'prostheticRouting' || !command.data.routes.length)) {
+    if (value !== null) invalid(); return null;
+  }
+  const v = fields(value, ['catalogRevision', 'labs', 'routingRevision', 'routingRouteCount']);
+  let previous = '';
+  const labs = list(v.labs, 6, raw => {
+    const row = fields(raw, ['labId', 'revision']);
+    if (!uuid(row.labId) || row.labId <= previous || !integer(row.revision, 1, MAX_REVISION)) invalid(); previous = row.labId;
+    return { labId: row.labId, revision: row.revision };
+  });
+  if (command.target === 'lab') {
+    if (v.catalogRevision !== null || labs.length || !integer(v.routingRevision, 1, MAX_REVISION)
+      || !integer(v.routingRouteCount, 0, MAX_CLOUD_PROSTHETIC_ROUTES)) invalid();
+  } else if (!integer(v.catalogRevision, 1, MAX_REVISION) || v.routingRevision !== null || v.routingRouteCount !== null
+    || JSON.stringify(labs.map(row => row.labId)) !== JSON.stringify([...new Set(command.data.routes.map(row => row.labId))].sort())) invalid();
+  return { catalogRevision: v.catalogRevision as number | null, labs, routingRevision: v.routingRevision as number | null,
+    routingRouteCount: v.routingRouteCount as number | null };
+}
 export function createCloudClinicSettingsRepository(adapter: CloudClinicSettingsAdapter, options: CloudClinicSettingsOptions = {}) {
   const digest = options.digest ?? sha256;
   const authorize = async () => { const uid = await adapter.authorizeOwner(); if (!actor(uid)) invalid(); return uid; };
   const reauthorize = async (uid: string) => { if (await authorize() !== uid) unavailable(); };
+  const dependencies = async (command: CloudClinicSettingsCommand, tx: CloudClinicSettingsTransaction): Promise<CloudSettingsProofContext> => {
+    if (command.target === 'lab') {
+      const raw = await tx.get(CLOUD_PROSTHETIC_ROUTING_PATH); if (raw === null) invalid();
+      const routing = parseCloudProstheticRouting(raw);
+      for (const route of routing.data.routes.filter(row => row.labId === command.recordId)) {
+        const cost = command.data.costs.find(row => row.materialId === route.materialId);
+        if (!command.data.active || !cost || !cost.active) conflict();
+      }
+      return { routing };
+    }
+    if (command.target === 'prostheticRouting' && command.data.routes.length) {
+      const raw = await tx.get(CATALOG); if (raw === null) invalid(); const catalog = parseCloudServiceCatalogRecord(raw);
+      const labs: CloudLabDefinitionRecord[] = [];
+      for (const id of [...new Set(command.data.routes.map(row => row.labId))].sort()) {
+        const labRaw = await tx.get(cloudLabDefinitionPath(id)); if (labRaw === null) invalid(); labs.push(parseCloudLabDefinition(labRaw, id));
+      }
+      for (const route of command.data.routes) {
+        const service = catalog.data.services.find(row => row.serviceId === route.serviceId), lab = labs.find(row => row.recordId === route.labId)!;
+        const cost = lab.data.costs.find(row => row.materialId === route.materialId);
+        if (!service || !service.active || service.kind !== 'prosthetic' || !lab.data.active || !cost || !cost.active) invalid();
+      }
+      return { catalog, labs };
+    }
+    return {};
+  };
   const read = async <T extends CloudSettingsRecord>(target: CloudSettingsTarget, recordId: string): Promise<T | null> => {
     try {
       const path = cloudClinicSettingsPath(target, recordId), uid = await authorize(); if (!adapter.readRecord) unavailable();
@@ -394,43 +446,98 @@ export function createCloudClinicSettingsRepository(adapter: CloudClinicSettings
         const receipt = { schemaVersion: 1, clinicId: 'main', operationId: command.operationId, target: command.target, recordId: command.recordId,
           actorUid: uid, expectedRevision: command.expectedRevision, resultRevision: command.expectedRevision + 1, createdAt: command.createdAt, requestHash };
         await reauthorize(uid);
+        const acknowledge = (raw: unknown): CloudClinicSettingsCommit => {
+          const modern = !!raw && typeof raw === 'object' && Object.hasOwn(raw, 'validationVersion');
+          const old = fields(raw, [...Object.keys(receipt), ...(modern ? ['validationVersion', 'referenceRevisions', 'templateBytes'] : [])]);
+          if (Object.keys(receipt).some(key => old[key] !== receipt[key as keyof typeof receipt])) conflict();
+          if (modern) { if (old.validationVersion !== 2 || !integer(old.templateBytes, 0, MAX_CLOUD_CLINIC_SETTINGS_BYTES)
+            || old.templateBytes !== (command.target === 'clinicSettings' ? command.data.whatsapp.templates.reduce((sum, row) => sum
+              + new TextEncoder().encode(JSON.stringify(row)).byteLength, 0) : 0)) invalid(); referenceRevisions(old.referenceRevisions, command); }
+          return { status: 'already-committed', target: command.target, recordId: command.recordId, revision: receipt.resultRevision };
+        };
+        const preparation = await adapter.runTransaction(async tx => {
+          await reauthorize(uid); const old = await tx.get(receiptPath);
+          const intent = await readCloudOperationIntentForCommit(tx, { actorUid: uid, kind: 'settings', command }, { digest });
+          if (intent.createdAt !== command.createdAt || intent.status !== (old === null ? 'prepared' : 'committed')) conflict();
+          if (old !== null) { const ack = acknowledge(old); await reauthorize(uid); return { ack, context: {}, reuse: null }; }
+          const raw = await tx.get(path), current = raw === null ? null : record(command.target, raw, command.recordId);
+          if ((current?.revision ?? 0) !== command.expectedRevision) conflict();
+          if (command.target === 'clinicSettings' && command.data.identity.logoRecordId !== null) {
+            const logo = await tx.get(CLOUD_CLINIC_LOGO_PATH);
+            if (logo === null || parseCloudClinicLogoRecord(logo).data === null) invalid();
+          }
+          if (command.target === 'clinicLogo' && command.data === null) {
+            const settings = await tx.get(CLOUD_CLINIC_SETTINGS_PATH);
+            if (settings !== null && parseCloudClinicSettingsRecord(settings).data.identity.logoRecordId !== null) conflict();
+          }
+          const context = await dependencies(command, tx);
+          let reuse: CloudSettingsReuseSource | null = null;
+          if (current) {
+            const oldIntentRaw = await tx.get(`clinics/main/operationIntents/${current.lastOperationId}`);
+            const oldReceiptRaw = await tx.get(`clinics/main/settingsOperations/${current.lastOperationId}`);
+            // Trusted bootstrap/legacy records need not have materialized proof
+            // forests. They remain readable, but never become reusable evidence.
+            if (oldIntentRaw !== null && oldReceiptRaw !== null) {
+              const oldIntent = parseCloudOperationIntent(oldIntentRaw);
+              const oldCommand = prepareCloudClinicSettingsCommand(oldIntent.command);
+              const modern = typeof oldReceiptRaw === 'object' && Object.hasOwn(oldReceiptRaw, 'validationVersion');
+              if (modern && oldIntent.status === 'committed' && oldIntent.kind === 'settings' && oldIntent.actorUid === uid
+                && oldCommand.target === command.target && oldCommand.recordId === command.recordId
+                && oldCommand.operationId === current.lastOperationId && oldCommand.expectedRevision + 1 === current.revision
+                && sameProof({ operationId: oldCommand.operationId, data: oldCommand.data },
+                  { operationId: oldCommand.operationId, data: current.data })) {
+                await readCloudOperationIntentForCommit(tx, { actorUid: uid, kind: 'settings', command: oldCommand }, { digest });
+                const oldReceipt = fields(oldReceiptRaw, [...Object.keys(receipt), 'validationVersion', 'referenceRevisions', 'templateBytes']);
+                const oldHash = await digest(JSON.stringify(['clinic-settings-v1', uid, oldCommand]));
+                if (oldReceipt.schemaVersion !== 1 || oldReceipt.clinicId !== 'main' || oldReceipt.actorUid !== uid
+                  || oldReceipt.operationId !== oldCommand.operationId || oldReceipt.target !== oldCommand.target
+                  || oldReceipt.recordId !== oldCommand.recordId || oldReceipt.expectedRevision !== oldCommand.expectedRevision
+                  || oldReceipt.resultRevision !== current.revision || oldReceipt.createdAt !== oldCommand.createdAt
+                  || oldIntent.createdAt !== oldCommand.createdAt || oldReceipt.requestHash !== oldHash || oldReceipt.validationVersion !== 2
+                  || oldReceipt.templateBytes !== (oldCommand.target === 'clinicSettings' ? oldCommand.data.whatsapp.templates.reduce((sum, row) => sum
+                    + new TextEncoder().encode(JSON.stringify(row)).byteLength, 0) : 0)) conflict();
+                reuse = { command: oldCommand, referenceRevisions: referenceRevisions(oldReceipt.referenceRevisions, oldCommand) };
+              }
+            }
+          }
+          await reauthorize(uid); return { ack: null, context, reuse };
+        });
+        fields(preparation, ['ack', 'context', 'reuse']);
+        await reauthorize(uid); if (preparation.ack) return preparation.ack;
+        let plan: ReturnType<typeof buildCloudSettingsValidationProofs>;
+        try { plan = buildCloudSettingsValidationProofs(command, preparation.context); } catch { invalid(); }
+        if (preparation.reuse) plan = await selectCloudSettingsReusableProofs(command, plan, preparation.reuse, proofPath =>
+          adapter.runTransaction(async tx => { await reauthorize(uid); const value = await tx.get(proofPath); await reauthorize(uid); return value; }));
+        for (const proof of plan.proofs) {
+          const historical = await adapter.runTransaction(async tx => {
+            await reauthorize(uid); const old = await tx.get(receiptPath);
+            const intent = await readCloudOperationIntentForCommit(tx, { actorUid: uid, kind: 'settings', command }, { digest });
+            if (intent.createdAt !== command.createdAt || intent.status !== (old === null ? 'prepared' : 'committed')) conflict();
+            if (old !== null) { acknowledge(old); await reauthorize(uid); return true; }
+            const proofPath = cloudSettingsProofPath(command.operationId, proof.kind, proof.level, proof.index), current = await tx.get(proofPath);
+            if (current !== null && !sameProof(current, proof)) conflict(); await reauthorize(uid);
+            if (current === null) tx.set(proofPath, proof); return false;
+          });
+          await reauthorize(uid); if (historical) break;
+        }
         const result = await adapter.runTransaction<CloudClinicSettingsCommit>(async transaction => {
           await reauthorize(uid);
           const oldReceipt = await transaction.get(receiptPath);
           const intent = await readCloudOperationIntentForCommit(transaction, { actorUid: uid, kind: 'settings', command }, { digest });
           if (intent.createdAt !== command.createdAt || intent.status !== (oldReceipt === null ? 'prepared' : 'committed')) conflict();
           if (oldReceipt !== null) {
-            const old = fields(oldReceipt, Object.keys(receipt));
-            if (Object.keys(receipt).some(key => old[key] !== receipt[key as keyof typeof receipt])) conflict();
             await reauthorize(uid);
             // Original receipt is historical evidence, never today's settings/lab or permission to restore it.
-            return { status: 'already-committed', target: command.target, recordId: command.recordId, revision: receipt.resultRevision };
+            return acknowledge(oldReceipt);
           }
           const raw = await transaction.get(path), current = raw === null ? null : record(command.target, raw, command.recordId);
           if ((current?.revision ?? 0) !== command.expectedRevision) conflict();
-          if (command.target === 'prostheticRouting' && command.data.routes.length) {
-            const catalogRaw = await transaction.get(CATALOG); if (catalogRaw === null) invalid();
-            const catalog = parseCloudServiceCatalogRecord(catalogRaw);
-            const labs = new Map<string, CloudLabDefinitionRecord>();
-            for (const id of new Set(command.data.routes.map(route => route.labId))) {
-              const labRaw = await transaction.get(cloudLabDefinitionPath(id)); if (labRaw === null) invalid();
-              labs.set(id, parseCloudLabDefinition(labRaw, id));
-            }
-            for (const route of command.data.routes) {
-              const service = catalog.data.services.find(service => service.serviceId === route.serviceId);
-              const lab = labs.get(route.labId)!, material = lab.data.costs.find(cost => cost.materialId === route.materialId);
-              if (!service || !service.active || service.kind !== 'prosthetic' || !lab.data.active || !material || !material.active) invalid();
-            }
-          }
-          if (command.target === 'lab') {
-            const routingRaw = await transaction.get(CLOUD_PROSTHETIC_ROUTING_PATH);
-            // Bootstrap must explicitly create empty routing; absence is unknown, not an inferred empty list.
-            if (routingRaw === null) invalid();
-            const routing = parseCloudProstheticRouting(routingRaw);
-            for (const route of routing.data.routes.filter(route => route.labId === command.recordId)) {
-              const material = command.data.costs.find(cost => cost.materialId === route.materialId);
-              if (!command.data.active || !material || !material.active) conflict();
-            }
+          const freshPlan = buildCloudSettingsValidationProofs(command, await dependencies(command, transaction));
+          if (JSON.stringify(freshPlan.referenceRevisions) !== JSON.stringify(plan.referenceRevisions)) conflict();
+          for (const root of plan.roots) for (let index = 0; index < root.count; index++) {
+            const rawRoot = await transaction.get(cloudSettingsProofPath(command.operationId, root.kind, root.level, index));
+            const expectedRoot = plan.proofs.find(proof => proof.kind === root.kind && proof.level === root.level && proof.index === index)!;
+            if (rawRoot === null || !sameProof(rawRoot, expectedRoot)) conflict();
           }
           if (command.target === 'clinicSettings' && command.data.identity.logoRecordId !== null) {
             const logoRaw = await transaction.get(CLOUD_CLINIC_LOGO_PATH);
@@ -443,7 +550,10 @@ export function createCloudClinicSettingsRepository(adapter: CloudClinicSettings
           const next = record(command.target, { schemaVersion: 1, clinicId: 'main', recordId: command.recordId,
             revision: receipt.resultRevision, lastOperationId: command.operationId, data: command.data }, command.recordId);
           await reauthorize(uid); // Every transaction read occurs before any write.
-          transaction.set(path, next); transaction.set(receiptPath, receipt); markCloudOperationIntentCommitted(transaction, intent);
+          const templateBytes = plan.roots.filter(root => root.kind === 'templates').reduce((sum, root) => sum
+            + plan.proofs.filter(proof => proof.kind === root.kind && proof.level === root.level).reduce((total, proof) => total + proof.byteSize, 0), 0);
+          transaction.set(path, next); transaction.set(receiptPath, { ...receipt, validationVersion: 2, referenceRevisions: plan.referenceRevisions, templateBytes });
+          markCloudOperationIntentCommitted(transaction, intent);
           return { status: 'committed', target: command.target, recordId: command.recordId, revision: next.revision };
         });
         await reauthorize(uid);

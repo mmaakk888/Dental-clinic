@@ -10,7 +10,8 @@ import { makeClinicSnapshotFixture, SNAPSHOT_OWNER, SNAPSHOT_TIME, snapshotId, s
 const compiled = build({ entryPoints: ['src/utils/firebaseCloudClinicSnapshot.ts'], bundle: true, write: false, metafile: true,
   platform: 'node', format: 'cjs', supported: { 'dynamic-import': false }, external: ['firebase/*'], logLevel: 'silent' });
 type Options = { full?: boolean; hostname?: string; appName?: string; projectId?: string; emulator?: boolean; provider?: string; verified?: boolean;
-  member?: object; claims?: object; stopAt?: string; swapAt?: string; status?: number; tooLarge?: boolean; badUtf8?: boolean; badJson?: boolean; drift?: boolean; redirect?: boolean };
+  member?: object; claims?: object; stopAt?: string; swapAt?: string; status?: number; tooLarge?: boolean; badUtf8?: boolean; badJson?: boolean; drift?: boolean; redirect?: boolean;
+  privateFault?: 'foreign' | 'time' | 'extra' | 'duplicate' };
 async function harness(options: Options = {}) {
   const output = await compiled, fixture = await makeClinicSnapshotFixture(options.full ?? false), module = { exports: {} as any };
   const calls: string[] = [], requests: { url: string; init: any; body: any }[] = [];
@@ -35,15 +36,28 @@ async function harness(options: Options = {}) {
     },
     fetch: async (url: string, init: any) => {
       step('fetch'); const body = JSON.parse(init.body); requests.push({ url, init, body });
-      assert.equal(url, 'https://firestore.googleapis.com/v1/projects/dental-clinic-mmaakk888/databases/(default)/documents/clinics/main:runQuery');
+      const privateRead = Array.isArray(body.documents);
+      assert.equal(url, privateRead ? 'https://firestore.googleapis.com/v1/projects/dental-clinic-mmaakk888/databases/(default)/documents:batchGet'
+        : 'https://firestore.googleapis.com/v1/projects/dental-clinic-mmaakk888/databases/(default)/documents/clinics/main:runQuery');
       assert.equal(init.method, 'POST'); assert.equal(init.cache, 'no-store'); assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'error'); assert.equal(init.referrerPolicy, 'no-referrer');
-      const query = body.structuredQuery, collection = query.from[0].collectionId, documentId = query.where?.fieldFilter.value.referenceValue.split('/').at(-1), afterId = query.startAt?.values[0].referenceValue.split('/').at(-1);
-      assert.equal(query.orderBy[0].field.fieldPath, '__name__'); assert.equal(query.orderBy[0].direction, 'ASCENDING'); assert.ok(query.limit >= 1 && query.limit <= 50);
-      assert.ok(!['invoiceImages', 'operationIntents', 'members', 'settingsOperations'].includes(collection));
+      const query = body.structuredQuery, collection = privateRead ? body.documents[0].split('/').at(-2) : query.from[0].collectionId,
+        documentId = privateRead ? body.documents[0].split('/').at(-1) : query.where?.fieldFilter.value.referenceValue.split('/').at(-1),
+        afterId = query?.startAt?.values[0].referenceValue.split('/').at(-1);
+      if (privateRead) { assert.equal(body.documents.length, 1); assert.ok(['expenseOperations', 'operationIntents'].includes(collection)); assert.equal(body.readTime, SNAPSHOT_TIME); }
+      else { assert.equal(query.orderBy[0].field.fieldPath, '__name__'); assert.equal(query.orderBy[0].direction, 'ASCENDING'); assert.ok(query.limit >= 1 && query.limit <= 50);
+        assert.ok(!['invoiceImages', 'operationIntents', 'members', 'settingsOperations'].includes(collection)); }
       const values = [...fixture.docs].filter(([key]) => key.startsWith(`clinics/main/${collection}/`) && (!documentId || key.endsWith(`/${documentId}`))
-        && (!afterId || key.split('/').at(-1)! > afterId)).sort(([a], [b]) => a.localeCompare(b)).slice(0, query.limit);
+        && (!afterId || key.split('/').at(-1)! > afterId)).sort(([a], [b]) => a.localeCompare(b)).slice(0, privateRead ? 1 : query.limit);
       const stamp = options.drift && body.readTime ? '2026-10-13T00:00:00.999999Z' : SNAPSHOT_TIME;
-      const response = values.length ? values.map(([key, value]) => ({ readTime: stamp, document: snapshotRestDocument(collection, key.split('/').at(-1)!, value) })) : [{ readTime: stamp }];
+      const response: any[] = values.length ? values.map(([key, value]) => ({ readTime: stamp, [privateRead ? 'found' : 'document']: snapshotRestDocument(collection, key.split('/').at(-1)!, value) }))
+        : [privateRead ? { readTime: stamp, missing: body.documents[0] } : { readTime: stamp }];
+      if (privateRead && options.privateFault) {
+        const row: any = response[0];
+        if (options.privateFault === 'foreign') row.found.name = row.found.name.replace('dental-clinic-mmaakk888', 'foreign-project');
+        if (options.privateFault === 'time') row.readTime = '2026-10-13T00:00:00.999999Z';
+        if (options.privateFault === 'extra') row.transaction = 'PRIVATE_UNEXPECTED';
+        if (options.privateFault === 'duplicate') response.push(response[0]);
+      }
       const encoded = options.badUtf8 ? Uint8Array.from([255, 255]) : new TextEncoder().encode(options.badJson ? 'PRIVATE_BAD_JSON' : JSON.stringify(response));
       let done = false;
       return { get ok() { step('response-ok'); return (options.status ?? 200) === 200; }, get status() { step('response-status'); return options.status ?? 200; },
@@ -59,7 +73,7 @@ async function harness(options: Options = {}) {
 }
 test('snapshot SDK factory binds named operating app but performs no authorization/read/fetch until explicit readFull', async () => {
   const h = await harness(), capability = await h.factory(); assert.equal(h.requests.length, 0); assert.equal(h.calls.includes('token'), false); assert.equal(h.calls.includes('member'), false);
-  assert.deepEqual(Object.keys(capability), ['readFull']); assert.ok(Object.isFrozen(capability));
+  assert.deepEqual(Object.keys(capability), ['readFull', 'readDirectory']); assert.ok(Object.isFrozen(capability));
   const snapshot = await capability.readFull(); assert.equal(snapshot.readTime, SNAPSHOT_TIME); assert.equal(snapshot.patients.length, 0);
 });
 test('SDK probes exact catalog once then sends every allowlisted page/singleton at exactly one captured readTime', async () => {
@@ -67,9 +81,53 @@ test('SDK probes exact catalog once then sends every allowlisted page/singleton 
   assert.equal(h.requests[0].body.readTime, undefined); const probe = h.requests[0].body.structuredQuery;
   assert.equal(probe.from[0].collectionId, 'settings'); assert.equal(probe.where.fieldFilter.value.referenceValue.split('/').at(-1), 'serviceCatalog');
   assert.ok(h.requests.slice(1).every(request => request.body.readTime === SNAPSHOT_TIME));
+  const singletons = h.requests.slice(1).filter(request => request.body.structuredQuery?.from[0].collectionId === 'settings');
+  assert.deepEqual(singletons.map(request => request.body.structuredQuery.where.fieldFilter.value.referenceValue.split('/').at(-1)).sort(),
+    ['clinicSettings','prostheticRouting','serviceCatalog']);
+  assert.ok(singletons.every(request => request.body.structuredQuery.limit === 1 && request.body.structuredQuery.where.fieldFilter.op === 'EQUAL'
+    && request.body.structuredQuery.where.fieldFilter.field.fieldPath === '__name__'));
   assert.equal(h.calls.filter(call => call === 'member').length, h.requests.length * 2); assert.equal(h.calls.filter(call => call === 'token').length, h.requests.length * 2);
   assert.ok(!JSON.stringify(result).includes('SYNTHETIC_ID_TOKEN'));
 });
+
+test('SDK registration-only directory preserves authorization fences and fetches no financial/private collection', async () => {
+  const h = await harness({ full: true }), capability = await h.factory();
+  assert.equal(h.requests.length, 0);
+  const result = await capability.readDirectory();
+  assert.equal(result.patientProfiles.length, 1); assert.equal(result.readTime, SNAPSHOT_TIME);
+  assert.equal(h.requests[0].body.structuredQuery.from[0].collectionId, 'settings');
+  assert.ok(h.requests.slice(1).every(request => !request.body.documents
+    && ['patientProfiles', 'contactRecords'].includes(request.body.structuredQuery.from[0].collectionId)
+    && request.body.readTime === SNAPSHOT_TIME));
+  assert.equal(h.calls.filter(call => call === 'member').length, h.requests.length * 2);
+  h.active(false); const requests = h.requests.length;
+  await assert.rejects(capability.readDirectory()); h.active(true);
+  await assert.rejects(capability.readDirectory()); assert.equal(h.requests.length, requests);
+});
+test('SDK resolves pending material via exact private batchGet names with the same captured readTime, no private scans or output', async () => {
+  const h = await harness({ full: true }), key = [...h.fixture.docs.keys()].find(key => key.includes('/materialBalances/'))!;
+  const current = h.fixture.docs.get(key).base;
+  h.fixture.docs.set(key, { schemaVersion: 2, clinicId: 'main', recordId: current.recordId, base: null,
+    pending: { operationId: snapshotId(14), indexes: [0], lastProofRank: 0,
+      candidate: { ...current, revision: 1, lastOperationId: snapshotId(14), usedMilli: 0, wasteMilli: 0, consumedCostCents: 0 } } });
+  h.fixture.docs.delete(`clinics/main/materialUsages/${snapshotId(17)}`);
+  const cap = await h.factory(), result = await cap.readFull(), privateReads = h.requests.filter(request => request.body.documents);
+  assert.equal(privateReads.length, 2); assert.ok(privateReads.every(request => request.body.documents.length === 1 && request.body.readTime === SNAPSHOT_TIME));
+  assert.ok(privateReads.some(request => request.body.documents[0].endsWith(`/operationIntents/${snapshotId(14)}`)));
+  assert.ok(privateReads.some(request => request.body.documents[0].endsWith(`/expenseOperations/${snapshotId(14)}`)));
+  assert.equal(result.records.materialBalances[0].purchasedMilli, 2000); assert.doesNotMatch(JSON.stringify(result.records.materialBalances), /pending|requestHash/);
+});
+for (const privateFault of ['foreign', 'time', 'extra', 'duplicate'] as const) {
+  test(`SDK private material resolution rejects altered batchGet framing without a partial export: ${privateFault}`, async () => {
+    const h = await harness({ full: true, privateFault }), key = [...h.fixture.docs.keys()].find(key => key.includes('/materialBalances/'))!;
+    const current = h.fixture.docs.get(key).base;
+    h.fixture.docs.set(key, { schemaVersion: 2, clinicId: 'main', recordId: current.recordId, base: null,
+      pending: { operationId: snapshotId(14), indexes: [0], lastProofRank: 0,
+        candidate: { ...current, revision: 1, lastOperationId: snapshotId(14), usedMilli: 0, wasteMilli: 0, consumedCostCents: 0 } } });
+    h.fixture.docs.delete(`clinics/main/materialUsages/${snapshotId(17)}`);
+    const cap = await h.factory(); await assert.rejects(cap.readFull());
+  });
+}
 for (const options of [{ hostname: 'clinic.example.invalid' }, { appName: '[DEFAULT]' }, { appName: 'firebase-setup-test' }, { projectId: 'foreign-project' }, { emulator: true }]) {
   test(`SDK denies alternate runtime/app/project/emulator before reads: ${JSON.stringify(options)}`, async () => { const h = await harness(options); await assert.rejects(h.factory()); assert.equal(h.requests.length, 0); });
 }

@@ -191,3 +191,26 @@ test('raw create conversion is side-effect free and separates item/overall adjus
   const reviewed = buildCloudExpenseCreate({ ...source, tax: '10', discount: '5', paid: '0' }, [id(800)]);
   assert.equal(reviewed.data.totalCents, 10_500); assert.equal(reviewed.paidCents, 0); assert.equal(h.ids(), ids); assert.equal(h.times(), times);
 });
+test('unitemized correction preserves raw amount, rejects below paid before ID creation and recovers original lost ACK', async () => {
+  const h = harness(); await h.controller.beginCreate(); const initial = h.controller.getState().draft!;
+  if (initial.action !== 'create') assert.fail();
+  h.controller.updateDraft({ ...initial, header: { ...initial.header, title: 'كهرباء', category: 'fixed', expenseType: 'electricity' }, subtotal: '500', paid: '100' }, initial);
+  assert.equal(await h.controller.save(h.controller.getState().draft!), true);
+  assert.equal(h.controller.beginEdit(h.controller.getState().snapshot!.selection!), true);
+  let value = h.controller.getState().draft!; if (value.action !== 'edit') assert.fail(); assert.equal(value.amount, '500');
+  h.controller.updateDraft({ ...value, amount: '99' }, value); const ids = h.ids();
+  assert.equal(await h.controller.save(h.controller.getState().draft!), false); assert.equal(h.ids(), ids);
+  value = h.controller.getState().draft!; h.controller.updateDraft({ ...value, amount: '400.25' }, value); h.faults.lostCommit = true;
+  assert.equal(await h.controller.save(h.controller.getState().draft!), false); assert.equal(h.controller.getState().pendingOperationId, id(2));
+  h.controller.dispose(); const fresh = h.fresh(); assert.equal(await fresh.resume(id(2)), true);
+  const selection = fresh.getState().snapshot!.selection!; if (selection.kind !== 'expense') assert.fail();
+  assert.equal(selection.record.data.totalCents, 40025); assert.equal(selection.record.paidCents, 10000);
+  assert.equal(selection.payments.length, 1); assert.deepEqual(fresh.getState().snapshot!.materials, []);
+});
+test('itemized edit exposes no amount correction and injected amount cannot alter purchases or consume an ID', async () => {
+  const h = harness(); await saved(h); h.controller.beginEdit(h.controller.getState().snapshot!.selection!);
+  const value = h.controller.getState().draft!; if (value.action !== 'edit') assert.fail(); assert.equal('amount' in value, false);
+  h.controller.updateDraft({ ...value, amount: '30' }, value); const ids = h.ids();
+  assert.equal(await h.controller.save(h.controller.getState().draft!), false); assert.equal(h.ids(), ids);
+  assert.equal(h.controller.getState().snapshot!.materials[0].purchaseCostCents, 10000);
+});

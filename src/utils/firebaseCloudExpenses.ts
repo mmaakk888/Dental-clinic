@@ -2,8 +2,8 @@ import type { Auth } from 'firebase/auth';
 import type { DocumentSnapshot, QueryConstraint, Transaction } from 'firebase/firestore/lite';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID } from './cloudIdentity';
 import { assessCloudOwnerMembership } from './cloudMembership';
-import { isLocalClinicHost } from './localRuntime';
-import { CloudExpenseError, createCloudExpenseRepository, prepareCloudExpenseCommand,
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
+import { CloudExpenseError, createCloudExpenseRepository, prepareCloudExpenseCommand, parseCloudInvoiceImage,
   type CloudExpenseCollection, type CloudExpenseRepository, type CloudExpenseTransaction } from './cloudExpenseRepository';
 import { CloudOperationIntentError, createCloudOperationIntentRepository, parseCloudOperationIntent, prepareCloudIntentCommand,
   type CloudOperationIntent, type CloudOperationIntentRepository, type CloudOperationKind } from './cloudOperationIntent';
@@ -28,6 +28,7 @@ const IMAGE = new RegExp(`^clinics/main/invoiceImages/${UUID}${END}`);
 const MATERIAL = /^clinics\/main\/materialBalances\/[0-9a-f]{64}(?![\s\S])/;
 const RESERVATION = /^clinics\/main\/supplierInvoiceReservations\/[0-9a-f]{64}(?![\s\S])/;
 const OPERATION = new RegExp(`^clinics/main/expenseOperations/${UUID}${END}`);
+const PROOF = new RegExp(`^clinics/main/expenseInventoryProofs/${UUID}-(?:usage|edit|complete|header-[01]|math-(?:item|allocation|usage)-(?:[0-9]|1[0-9])-[0-3]|item-(?:[0-9]|1[0-9])|[0-5]-(?:[0-9]|1[0-9]))${END}`);
 const INTENT = new RegExp(`^clinics/main/operationIntents/${UUID}${END}`);
 const expenseKind = (kind: CloudOperationKind) => {
   if (kind !== 'expense') throw new CloudOperationIntentError('invalid');
@@ -42,7 +43,7 @@ export async function createFirebaseCloudExpenses(auth: Auth,
   const requireRuntime = () => {
     try {
       if (revoked || !options || typeof options.isActive !== 'function' || options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || auth.app.options.projectId !== CLOUD_PROJECT_ID
         || auth.app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`
@@ -96,7 +97,7 @@ export async function createFirebaseCloudExpenses(auth: Auth,
     const reference = (path: string) => {
       requireRuntime();
       if (typeof path !== 'string' || !(RECORD.test(path) || PAYMENT.test(path) || USAGE.test(path) || MATERIAL.test(path)
-        || IMAGE.test(path) || RESERVATION.test(path) || OPERATION.test(path) || INTENT.test(path))) throw new CloudExpenseError('invalid');
+        || IMAGE.test(path) || RESERVATION.test(path) || OPERATION.test(path) || INTENT.test(path) || PROOF.test(path))) throw new CloudExpenseError('invalid');
       return sdkCall(() => store.doc(database, path));
     };
     const readSnapshot = (path: string, snapshot: DocumentSnapshot) => {
@@ -104,11 +105,20 @@ export async function createFirebaseCloudExpenses(auth: Auth,
       // Validate the complete expense command inside the transaction read,
       // BEFORE generic journal cancellation is allowed to stage any write.
       if (value !== null && INTENT.test(path)) return checkedIntent(value, path);
+      if (value !== null && IMAGE.test(path)) {
+        const keys = ['schemaVersion', 'clinicId', 'recordId', 'expenseId', 'actorUid', 'createdAt', 'sha256', 'byteLength', 'width', 'height', 'contentType', 'bytes'];
+        if (Reflect.ownKeys(value).length !== keys.length || keys.some(key => !Object.prototype.hasOwnProperty.call(value, key))) throw new CloudExpenseError('invalid');
+        const bytes = sdkCall(() => value.bytes);
+        if (!sdkCall(() => bytes instanceof store.Bytes)) throw new CloudExpenseError('invalid');
+        const base64 = sdkCall(() => bytes.toBase64());
+        const { bytes: ignored, ...metadata } = value;
+        return sdkCall(() => parseCloudInvoiceImage({ ...metadata, base64 }));
+      }
       requireRuntime(); return value;
     };
     const readRecord = async (path: string) => {
       requireRuntime();
-      if (typeof path !== 'string' || !(RECORD.test(path) || MATERIAL.test(path) || IMAGE.test(path) || INTENT.test(path))) {
+      if (typeof path !== 'string' || !(RECORD.test(path) || MATERIAL.test(path) || IMAGE.test(path) || INTENT.test(path) || OPERATION.test(path))) {
         throw new CloudExpenseError('invalid');
       }
       return readSnapshot(path, await sdkAwait(() => store.getDoc(reference(path))));
@@ -121,7 +131,11 @@ export async function createFirebaseCloudExpenses(auth: Auth,
           set: (path, value) => {
             const target = reference(path);
             if (INTENT.test(path)) checkedIntent(value, path);
-            sdkCall(() => transaction.set(target, value));
+            if (IMAGE.test(path)) {
+              const image = sdkCall(() => parseCloudInvoiceImage(value)), { base64, ...metadata } = image;
+              const bytes = sdkCall(() => store.Bytes.fromBase64String(base64));
+              sdkCall(() => transaction.set(target, { ...metadata, bytes }));
+            } else sdkCall(() => transaction.set(target, value));
           },
         });
         requireRuntime(); return result;
@@ -168,7 +182,7 @@ export async function createFirebaseCloudExpenses(auth: Auth,
     };
     const repository = createCloudExpenseRepository({ authorizeOwner, runTransaction,
       readRecord: target => {
-        if (typeof target !== 'string' || !(RECORD.test(target) || MATERIAL.test(target) || IMAGE.test(target))) throw new CloudExpenseError('invalid');
+        if (typeof target !== 'string' || !(RECORD.test(target) || MATERIAL.test(target) || IMAGE.test(target) || OPERATION.test(target) || INTENT.test(target))) throw new CloudExpenseError('invalid');
         return readRecord(target);
       }, listPage,
     });

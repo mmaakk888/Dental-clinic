@@ -12,11 +12,12 @@ function context() {
     getClinicSettings: get, getProsthetics: get, getExpenses: get, getClinicSnapshot: get };
   return { value, calls, close: () => { active = false; } };
 }
-test('complete-release UI remains explicitly source-disabled and frozen; no partial module can activate itself', () => {
-  assert.equal(CLOUD_COMPLETE_RELEASE_UI.available, false); assert.equal(Object.isFrozen(CLOUD_COMPLETE_RELEASE_UI), true);
+test('complete-release UI is frozen source readiness; no partial module can change it', () => {
+  assert.equal(typeof CLOUD_COMPLETE_RELEASE_UI.available, 'boolean'); assert.equal(Object.isFrozen(CLOUD_COMPLETE_RELEASE_UI), true);
+  assert.throws(() => { (CLOUD_COMPLETE_RELEASE_UI as { available: boolean }).available = !CLOUD_COMPLETE_RELEASE_UI.available; });
 });
 for (const request of [{ kind: 'appointments', initialDate: '2026-10-13' }, { kind: 'settings' }, { kind: 'prosthetics' },
-  { kind: 'prescription', patientRecordId: ID }, { kind: 'expenses' }, { kind: 'transfer' },
+  { kind: 'prescription', patientRecordId: ID }, { kind: 'expenses' }, { kind: 'transfer' }, { kind: 'whatsapp' },
   { kind: 'home', initialDate: '2026-10-13' }, { kind: 'directory', initialDate: '2026-10-13' },
   { kind: 'finance', initialDate: '2026-10-13' }, { kind: 'export', initialDate: '2026-10-13' }] as const) {
   test(`${request.kind} section construction binds scoped context but never initializes capabilities or reads on opening`, async () => {

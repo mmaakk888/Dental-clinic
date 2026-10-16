@@ -6,6 +6,10 @@ import { CloudPatientError, parseCloudPatientRecord, prepareCloudPatientCommand,
 import { CloudOperationIntentError, parseCloudOperationIntent, prepareCloudIntentCommand,
   type CloudOperationIntentRepository } from './cloudOperationIntent';
 import { createCloudProfileContactRecoveryController } from './cloudProfileContactRecoveryController';
+import { parseCloudContactRecord, type CloudContactRecord } from './cloudContactRepository';
+import { parseCloudSnapshotReadTime } from './cloudClinicSnapshot';
+import { createPatientRegistrationIndex, findPatientRegistrationMatches, registrationNamesSimilar } from './patientRegistration';
+import { normalizeDirectoryName } from './patientDirectory';
 
 export type CloudPatientWorkspaceCapability = CloudPatientRepository & { readonly journal?: CloudOperationIntentRepository };
 
@@ -23,11 +27,20 @@ export type CloudPatientWorkspaceDraft = Readonly<{
 }> | Readonly<{ action: 'import'; recordId: string; expectedRevision: 0; fileNo: number; profile: Readonly<CloudPatientProfile> }>;
 export type CloudPatientWorkspaceQuery = Readonly<{ kind: 'all' }
   | { kind: 'phone'; mobile: string } | { kind: 'file'; fileNo: number }>;
+export interface CloudPatientRegistrationDirectory {
+  readTime: string; patientProfiles: readonly CloudPatientRecord[]; contactRecords: readonly CloudContactRecord[];
+}
+export interface CloudPatientRegistrationCheck {
+  draft: CloudPatientWorkspaceDraft; readTime: string; matchCount: number;
+  matches: readonly Readonly<{ source: 'patient' | 'contact'; recordId: string; name: string; mobile: string;
+    fileNo: number | null; reason: 'phone' | 'name' | 'phone-and-name' }>[];
+}
 export type CloudPatientWorkspaceState = Readonly<{
   records: readonly CloudPatientRecord[]; nextAfterId: string | null;
   loaded: boolean; loading: boolean; recoveryLoading: boolean;
   saveStatus: 'idle' | 'preparing' | 'saving' | 'retry-required' | 'refresh-required'; pendingOperationId: string | null;
   selected: CloudPatientRecord | null; draft: CloudPatientWorkspaceDraft | null;
+  registrationCheck: Readonly<CloudPatientRegistrationCheck> | null;
   query: CloudPatientWorkspaceQuery; error: string; notice: string; closed: boolean;
 }>;
 
@@ -99,13 +112,16 @@ function validTime(value: unknown): value is string {
  * the same owner session performs its temporary authorization check. */
 export function createCloudPatientWorkspaceController(options: {
   getRepository: () => Promise<CloudPatientWorkspaceCapability>;
+  /** Runtime always supplies the protected COMPLETE directory subset. Optional
+   * only for legacy domain-only harnesses; never substitute loaded pages. */
+  getDirectory?: () => Promise<CloudPatientRegistrationDirectory>;
   isActive: () => boolean;
   newId?: () => string;
   today?: () => string;
   now?: () => string;
 }) {
   let state: CloudPatientWorkspaceState = Object.freeze({ records: Object.freeze([]), nextAfterId: null,
-    loaded: false, loading: false, recoveryLoading: false, saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null,
+    loaded: false, loading: false, recoveryLoading: false, saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, registrationCheck: null,
     query: Object.freeze({ kind: 'all' }), error: '', notice: '', closed: false });
   let epoch = 0, closed = false, checkingActive = false, capturing = false;
   let repository: CloudPatientWorkspaceCapability | null = null;
@@ -114,6 +130,7 @@ export function createCloudPatientWorkspaceController(options: {
   let acknowledgedFileNo: number | null = null;
   let originalFileNo: number | null = null;
   let queryLimit = PAGE_SIZE;
+  let confirmedRegistration: Readonly<CloudPatientRegistrationCheck> | null = null;
   const listeners = new Set<(value: CloudPatientWorkspaceState) => void>();
 
   function publish(value: CloudPatientWorkspaceState) {
@@ -125,10 +142,10 @@ export function createCloudPatientWorkspaceController(options: {
   function dispose() {
     if (closed) return;
     closed = true; ++epoch; repository = null; command = null;
-    acknowledgedFileNo = null; originalFileNo = null; createdAt = null; actorUid = null; intentHash = null;
+    acknowledgedFileNo = null; originalFileNo = null; createdAt = null; actorUid = null; intentHash = null; confirmedRegistration = null;
     recovery.dispose();
     publish({ records: Object.freeze([]), nextAfterId: null, loaded: false, loading: false, recoveryLoading: false,
-      saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, query: Object.freeze({ kind: 'all' }),
+      saveStatus: 'idle', pendingOperationId: null, selected: null, draft: null, registrationCheck: null, query: Object.freeze({ kind: 'all' }),
       error: '', notice: '', closed: true });
     listeners.clear();
   }
@@ -264,10 +281,10 @@ export function createCloudPatientWorkspaceController(options: {
       const firstVisit = (options.today ?? localDay)();
       if (!validId(recordId) || !validDay(firstVisit)) throw new CloudPatientError('invalid');
       if (!active(ticket) || !canRead()) return false;
-      originalFileNo = null;
+      originalFileNo = null; confirmedRegistration = null;
       publish({ ...state, draft: Object.freeze({ action: 'create', recordId, expectedRevision: 0,
         profile: Object.freeze({ name: '', mobile: '', age: 0, gender: '', firstVisit, notes: '', allergy: '' }) }),
-        error: '', notice: '' });
+        registrationCheck: null, error: '', notice: '' });
       return true;
     } catch {
       if (active(ticket)) publish({ ...state, error: 'تعذر فتح مسودة ملف صالحة. أعد المحاولة.' });
@@ -280,9 +297,9 @@ export function createCloudPatientWorkspaceController(options: {
     try {
       const current = frozenRecord(record);
       if (!active(ticket) || !canRead() || state.selected !== record) return false;
-      originalFileNo = current.fileNo;
+      originalFileNo = current.fileNo; confirmedRegistration = null;
       publish({ ...state, draft: Object.freeze({ action: 'update', recordId: current.recordId,
-        expectedRevision: current.revision, profile: Object.freeze({ ...current.data }) }), error: '', notice: '' });
+        expectedRevision: current.revision, profile: Object.freeze({ ...current.data }) }), registrationCheck: null, error: '', notice: '' });
       return true;
     } catch {
       if (active(ticket)) publish({ ...state, error: 'تعذر فتح مسودة التعديل. اقرأ أحدث ملف ثم حاول من جديد.' });
@@ -300,12 +317,57 @@ export function createCloudPatientWorkspaceController(options: {
           : typeof value !== 'string' || value.length > limits[key]) return false;
       }
       if (!active(ticket) || state.draft !== draft) return false;
-      publish({ ...state, draft: Object.freeze({ ...draft, profile: Object.freeze({ ...draft.profile, ...values }) as CloudPatientProfile }), error: '' });
+      confirmedRegistration = null;
+      publish({ ...state, draft: Object.freeze({ ...draft, profile: Object.freeze({ ...draft.profile, ...values }) as CloudPatientProfile }), registrationCheck: null, error: '' });
       return true;
     } catch { return false; }
   }
   async function save(): Promise<void> {
     if (!active() || capturing || busy() || !state.draft) return;
+    let ownsDirectoryRead = false;
+    if (!command && state.draft.action === 'create' && options.getDirectory) {
+      const draft = state.draft;
+      if (state.registrationCheck) {
+        if (confirmedRegistration !== state.registrationCheck || state.registrationCheck.draft !== draft) return;
+        confirmedRegistration = null; // Consume the exact explicit review once.
+      } else {
+        const ticket = ++epoch;
+        publish({ ...state, loading: true, registrationCheck: null, error: '', notice: 'جارٍ مراجعة الاسم والهاتف في دليل الملفات والأرقام الكامل، قبل أي حفظ.' });
+        try {
+          // Validate the draft without generating an operation or allocating a
+          // file. The existing retained record UUID is only a pure parser input.
+          prepareCloudPatientCommand({ ...draft, operationId: draft.recordId });
+          const raw = ownFields(await call(ticket, options, 'getDirectory'), ['readTime','patientProfiles','contactRecords'], ['readTime','patientProfiles','contactRecords']);
+          const readTime = parseCloudSnapshotReadTime(raw.readTime);
+          const rows = (value: unknown) => {
+            if (!Array.isArray(value) || value.length > 20_000 || Reflect.ownKeys(value).length !== value.length + 1) throw new CloudPatientError('unavailable');
+            return Array.from({ length: value.length }, (_, n) => { const d = Object.getOwnPropertyDescriptor(value, String(n));
+              if (!d || !('value' in d) || !d.enumerable) throw new CloudPatientError('unavailable'); return d.value; });
+          };
+          const profiles = rows(raw.patientProfiles).map(frozenRecord), contacts = rows(raw.contactRecords).map(parseCloudContactRecord);
+          if (new Set(profiles.map(row => row.recordId)).size !== profiles.length || new Set(profiles.map(row => row.fileNo)).size !== profiles.length
+            || new Set(contacts.map(row => row.recordId)).size !== contacts.length) throw new CloudPatientError('unavailable');
+          const files = new Map(profiles.map(row => [row.recordId,row.fileNo]));
+          const index = createPatientRegistrationIndex(profiles.map(row => ({ id: row.recordId, name: row.data.name, mobile: row.data.mobile })),
+            contacts.flatMap(row => !row.deleted && row.data ? [{ id: row.recordId, name: row.data.name, mobile: row.data.mobile }] : []));
+          const name = normalizeDirectoryName(draft.profile.name), phone = normalizeContactPhone(draft.profile.mobile);
+          const matchCount = index.filter(row => Boolean(phone && phone === row.phone) || registrationNamesSimilar(name, row.normalizedName)).length;
+          const matches = findPatientRegistrationMatches(index, draft.profile, { limit: 50 }).map(row => Object.freeze({ source: row.source,
+            recordId: row.id, name: row.name, mobile: row.mobile, fileNo: row.source === 'patient' ? files.get(row.id)! : null, reason: row.reason }));
+          assertActive(ticket); if (state.draft !== draft || command) throw new CloudPatientError('unavailable');
+          if (matchCount) {
+            const check = Object.freeze({ draft, readTime, matchCount, matches: Object.freeze(matches) });
+            publish({ ...state, loading: false, registrationCheck: check, notice: 'وجدنا تشابهًا. راجع النتائج قبل اختيار إنشاء ملف منفصل؛ لا دمج تلقائي.' }); return;
+          }
+          // Keep the read lock through operation capture, so a synchronous
+          // subscriber cannot edit the draft between checking and journalling.
+          ownsDirectoryRead = true;
+        } catch {
+          if (active(ticket)) publish({ ...state, loading: false, registrationCheck: null, error: 'تعذر تأكيد مراجعة الدليل أو بيانات الملف. لم نحفظ ملفًا أو نحجز رقمًا؛ راجع البيانات وأعد المحاولة.' });
+          return;
+        }
+      }
+    }
     if (!command) {
       const before = epoch, draft = state.draft;
       try {
@@ -317,17 +379,17 @@ export function createCloudPatientWorkspaceController(options: {
           prepared = prepareCloudPatientCommand({ ...draft, operationId });
           if (!validTime(time)) throw new CloudPatientError('invalid');
         } finally { capturing = false; }
-        if (!active(before) || state.draft !== draft || busy() || command) return;
+        if (!active(before) || state.draft !== draft || busy() && !(ownsDirectoryRead && state.loading && !state.recoveryLoading && state.saveStatus === 'idle') || command) return;
         command = Object.freeze({ ...prepared, profile: Object.freeze(prepared.profile) });
         createdAt = time; intentHash = null; acknowledgedFileNo = null;
       } catch {
-        if (active(before)) publish({ ...state, error: 'راجع الاسم ورقم الموبايل والعمر وتاريخ أول زيارة قبل الحفظ.' });
+        if (active(before)) publish({ ...state, loading: false, error: 'راجع الاسم ورقم الموبايل والعمر وتاريخ أول زيارة قبل الحفظ.' });
         return;
       }
     }
     const submitted = command, ticket = ++epoch;
     publish({ ...state, saveStatus: acknowledgedFileNo === null ? 'preparing' : 'refresh-required',
-      loading: acknowledgedFileNo !== null, pendingOperationId: submitted.operationId, error: '', notice: '' });
+      loading: acknowledgedFileNo !== null, registrationCheck: null, pendingOperationId: submitted.operationId, error: '', notice: '' });
     await execute(ticket);
   }
   async function execute(ticket: number): Promise<void> {
@@ -451,8 +513,12 @@ export function createCloudPatientWorkspaceController(options: {
     beginCreate, beginEdit, updateProfile,
     cancelDraft: (): boolean => {
       if (!active() || capturing || busy() || command) return false;
-      originalFileNo = null;
-      publish({ ...state, draft: null, error: '', notice: '' }); return true;
+      originalFileNo = null; confirmedRegistration = null;
+      publish({ ...state, draft: null, registrationCheck: null, error: '', notice: '' }); return true;
+    },
+    async confirmSeparateFile(expected: Readonly<CloudPatientRegistrationCheck>): Promise<void> {
+      if (!active() || capturing || busy() || command || state.registrationCheck !== expected || state.draft !== expected.draft || expected.draft.action !== 'create') return;
+      confirmedRegistration = expected; await save();
     },
     save, cancelPending, resume, recovery, dispose,
   };

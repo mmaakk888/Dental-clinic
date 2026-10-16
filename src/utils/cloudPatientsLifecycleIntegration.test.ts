@@ -21,6 +21,16 @@ function deferred() {
   const promise = new Promise<void>(accept => { resolve = accept; });
   return { promise, resolve };
 }
+async function waitForStage(started: ReturnType<typeof deferred>, action: Promise<unknown>, label: string, context: () => unknown) {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    await Promise.race([
+      started.promise,
+      action.then(() => assert.fail(`${label} was not reached before the action completed: ${JSON.stringify(context())}`)),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out: ${JSON.stringify(context())}`)), 30_000); }),
+    ]);
+  } finally { clearTimeout(timer!); }
+}
 function member(): Awaited<ReturnType<CloudOperatingAuthAdapter['readOwner']>> {
   return { identity: { uid: UID, email: EMAIL, status: 'owner-confirmed' },
     membership: { schemaVersion: 1, clinicId: 'main', uid: UID, role: 'owner', status: 'active',
@@ -87,7 +97,20 @@ function fixture() {
     } };
   const journal = createCloudOperationIntentRepository(journalAdapter, { digest });
   const repository = { ...createJournaledCloudPatientRepository(adapter, { digest }), journal };
-  const session = { ...auth, getPatients: async () => { calls.push('capability:patients'); await auth.authorizeOwner(); return repository; } };
+  const session = { ...auth, getPatients: async () => { calls.push('capability:patients'); await auth.authorizeOwner(); return repository; },
+    getClinicSnapshot: async () => {
+      calls.push('capability:directory'); await auth.authorizeOwner();
+      return { readFull: async () => { throw new Error('Patient registration must not request a financial snapshot.'); }, readDirectory: async () => {
+        // Fresh COMPLETE metadata from the same fabricated atomic server,
+        // never an empty fallback or the workspace's loaded patient page.
+        await auth.authorizeOwner(); calls.push('data:directory');
+        const patientProfiles = profileRows().map(row => row.data);
+        const contactRecords = [...rows].filter(([path]) => path.startsWith(`${ROOT}contactRecords/`))
+          .sort(([a], [b]) => a < b ? -1 : 1).map(([, data]) => structuredClone(data));
+        await auth.authorizeOwner();
+        return { readTime: '2026-10-12T12:00:00.000Z', patientProfiles, contactRecords };
+      } };
+    } };
   const page = createCloudOperatingPageController(async () => session, () => true);
   const independentCore = createJournaledCloudPatientRepository({ ...adapter, authorizeOwner: async () => UID }, { digest });
   const independentJournal = createCloudOperationIntentRepository({ ...journalAdapter, authorizeOwner: async () => UID }, { digest });
@@ -112,10 +135,23 @@ test('patient Auth/page/workspace opens inertly and only an explicit save alloca
   assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 1); await h.page.dispose();
 });
 
+test('patient lifecycle registration preflight freshly sees prior files and requires explicit separate-file confirmation', async () => {
+  const h = fixture(), workspace = await h.open(); h.draft(workspace); await workspace.save();
+  assert.equal(h.writes(), 6); h.draft(workspace); await workspace.save();
+  const check = workspace.getState().registrationCheck;
+  assert.ok(check, workspace.getState().error || 'Fresh directory must warn about the existing same-phone file');
+  assert.equal(check.matchCount, 1); assert.equal(check.matches[0].fileNo, 1);
+  assert.equal(h.writes(), 6, 'review alone creates no journal or file');
+  assert.equal(h.calls.filter(call => call === 'data:directory').length, 2);
+  await workspace.confirmSeparateFile(check);
+  assert.equal(workspace.getState().selected?.fileNo, 2); assert.equal(h.writes(), 12);
+  await h.page.dispose();
+});
+
 test('patient workspace retains draft across fresh Auth checking but clears it synchronously on actual logout', async () => {
   const h = fixture(), workspace = await h.open(); h.draft(workspace); const draft = workspace.getState().draft;
   h.hooks.ownerGate = deferred(); h.hooks.ownerStarted = deferred();
-  const checking = h.page.refresh(); await h.hooks.ownerStarted.promise;
+  const checking = h.page.refresh(); await waitForStage(h.hooks.ownerStarted, checking, 'owner recheck', () => h.page.getState());
   assert.equal(h.auth.getState().phase, 'checking'); assert.equal(h.page.getPatientsWorkspace(), workspace);
   assert.equal(workspace.getState().draft, draft); h.hooks.ownerGate.resolve(); await checking;
   assert.equal(h.page.closePatients(), false); const logout = h.page.signOut();
@@ -166,13 +202,13 @@ test('patient lookup returns every shared family file and opens exact numeric-fi
 test('late patient read after logout cannot repopulate rows or selected details', async () => {
   const h = fixture(), workspace = await h.open(); h.draft(workspace); await workspace.save(); const id = workspace.getState().selected!.recordId;
   h.hooks.readGate = deferred(); h.hooks.readStarted = deferred(); const selecting = workspace.select(id);
-  await h.hooks.readStarted.promise; const logout = h.page.signOut(); h.hooks.readGate.resolve(); await selecting; await logout;
+  await waitForStage(h.hooks.readStarted, selecting, 'patient detail read', () => workspace.getState()); const logout = h.page.signOut(); h.hooks.readGate.resolve(); await selecting; await logout;
   assert.equal(workspace.getState().closed, true); assert.equal(workspace.getState().selected, null); assert.deepEqual(workspace.getState().records, []); await h.page.dispose();
 });
 
 test('accepted patient write after logout is not represented as server rollback or late UI success', async () => {
   const h = fixture(), workspace = await h.open(); h.draft(workspace); h.hooks.accepted = deferred(); h.hooks.replyGate = deferred();
-  const saving = workspace.save(); await h.hooks.accepted.promise; assert.equal(h.writes(), 6);
+  const saving = workspace.save(); await waitForStage(h.hooks.accepted, saving, 'accepted patient write', () => workspace.getState()); assert.equal(h.writes(), 6);
   const logout = h.page.signOut(); h.hooks.replyGate.resolve(); await saving; await logout;
   assert.equal(workspace.getState().closed, true); assert.equal(workspace.getState().selected, null);
   assert.equal(workspace.getState().notice, ''); assert.equal(h.rows.get(`${ROOT}counters/patientFiles`).lastFileNo, 1); await h.page.dispose();
@@ -182,7 +218,7 @@ test('patient history read blocks page close and new drafts then clears late out
   const h = fixture(), workspace = await h.open();
   assert.equal(h.calls.includes('data:history'), false);
   h.hooks.historyGate = deferred(); h.hooks.historyStarted = deferred();
-  const reading = workspace.recovery.loadFirst(); await h.hooks.historyStarted.promise;
+  const reading = workspace.recovery.loadFirst(); await waitForStage(h.hooks.historyStarted, reading, 'patient history read', () => workspace.getState());
   assert.equal(h.page.closePatients(), false); assert.equal(workspace.beginCreate(), false);
   assert.equal(h.page.getPatientsWorkspace(), workspace);
   const logout = h.page.signOut(); h.hooks.historyGate.resolve(); await reading; await logout;

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
+import { buildCloudSettingsValidationProofs } from './cloudSettingsValidationProofs';
 import { CLOUD_CLINIC_SETTINGS_PATH, CLOUD_PROSTHETIC_ROUTING_PATH, CLOUD_CLINIC_LOGO_PATH,
   MAX_CLOUD_CLINIC_SETTINGS_BYTES, MAX_CLOUD_CLINIC_LOGO_BYTES, CloudClinicSettingsError,
   createCloudClinicSettingsRepository, parseCloudClinicSettingsData, parseCloudLabDefinitionData,
@@ -67,7 +68,9 @@ function harness() {
     runTransaction: async work => {
       const previous = tail; let release!: () => void; tail = new Promise<void>(accept => { release = accept; }); await previous;
       const attempt = async (publish: boolean) => {
-        const staged = structuredClone(docs); let wrote = false, domain = false;
+        // Stored values are immutable during an attempt; get and set detach
+        // every boundary. Copy the map, not the growing proof forest payload.
+        const staged = new Map(docs); let wrote = false, domain = false;
         const result = await work({
           get: async path => { assert.equal(wrote, false, 'every read precedes all writes'); calls.push(`get:${path}`); hooks.read?.(path); return structuredClone(staged.get(path) ?? null); },
           set: (path, value) => { wrote = true; calls.push(`set:${path}`); if (++writes === faults.failAt) throw new Error('PRIVATE_WRITE');
@@ -99,10 +102,43 @@ test('settings construction is inert and all missing protected records remain un
 test('settings save couples one version, immutable receipt and committed durable intent without patient prices', async () => {
   const h = harness(), value = command(); await h.prepare(value); const before = h.writes();
   assert.deepEqual(await h.repo.commit(value), { status: 'committed', target: 'clinicSettings', recordId: 'clinicSettings', revision: 1 });
-  assert.equal(h.writes() - before, 3); assert.deepEqual((await h.repo.get())?.data, settings());
+  assert.equal(h.writes() - before, 3 + buildCloudSettingsValidationProofs(value).proofs.length);
+  assert.deepEqual((await h.repo.get())?.data, settings());
   assert.equal(h.docs.get(intent(1)).status, 'committed'); assert.equal(h.docs.get(op(1)).resultRevision, 1);
   assert.doesNotMatch(JSON.stringify(h.docs.get(op(1))), /عيادة|medications|templates|unitCostCents/);
   assert.equal(h.docs.has('clinics/main/settings/serviceCatalog'), false);
+});
+
+test('normal edit of a full medication/template catalog reuses immutable evidence with bounded reads and requests', async () => {
+  const h=harness(),first=command();if(first.target!=='clinicSettings')throw new Error();
+  first.data.medications=Array.from({length:300},(_,n)=>({medicationId:materialId(1000+n),name:`دواء ${n}`,category:'',defaultDosage:'',defaultDuration:'',active:true}));
+  first.data.whatsapp.templates=Array.from({length:60},(_,n)=>({templateId:materialId(2000+n),key:'custom',title:`قالب ${n}`,text:'نص'}));
+  // The actual engine runner executes the full1254-step initial forest. This
+  // focused core test starts from its fabricated committed immutable result,
+  // avoiding a quadratic test fixture while exercising the real edit path.
+  await h.prepare(first);const firstIntent=h.docs.get(intent(1));firstIntent.status='committed';firstIntent.revision=2;
+  const initialPlan=buildCloudSettingsValidationProofs(first);
+  for(const proof of initialPlan.proofs)h.docs.set(`clinics/main/settingsValidationProofs/${proof.operationId}-${proof.kind}-${proof.level}-${proof.index}`,structuredClone(proof));
+  h.docs.set(CLOUD_CLINIC_SETTINGS_PATH,{schemaVersion:1,clinicId:'main',recordId:'clinicSettings',revision:1,lastOperationId:first.operationId,data:structuredClone(first.data)});
+  h.docs.set(op(1),{schemaVersion:1,clinicId:'main',operationId:first.operationId,target:'clinicSettings',recordId:'clinicSettings',actorUid:OWNER,
+    expectedRevision:0,resultRevision:1,createdAt:WHEN,requestHash:await digest(JSON.stringify(['clinic-settings-v1',OWNER,prepareCloudClinicSettingsCommand(first)])),
+    validationVersion:2,referenceRevisions:null,templateBytes:first.data.whatsapp.templates.reduce((n,row)=>n+Buffer.byteLength(JSON.stringify(row)),0)});
+  const next=structuredClone(first);next.operationId=id(2);next.expectedRevision=1;next.data.medications[299].defaultDosage='قرص مساء';
+  await h.prepare(next);const start=h.calls.length,writes=h.writes();
+  assert.equal((await h.repo.commit(next)).status,'committed');
+  const proofWrites=h.calls.slice(start).filter(p=>p.startsWith('set:clinics/main/settingsValidationProofs/'));
+  assert.ok(proofWrites.length<=64,`proof writes=${proofWrites.length}`);assert.equal(h.writes()-writes,proofWrites.length+3);
+  assert.ok(h.calls.slice(start).filter(p=>p.startsWith('get:')).length<260);
+  assert.equal((await h.repo.get())?.data.medications[299].defaultDosage,'قرص مساء');
+  const retryStart=h.calls.length;assert.equal((await h.repo.commit(next)).status,'already-committed');
+  assert.equal(h.calls.slice(retryStart).some(p=>p.includes('/settingsValidationProofs/')),false,'historical replay never reads or restages proofs');
+});
+
+test('proof reuse reads bind the original actor, receipt and exact committed settings instead of trusting lastOperationId',async()=>{
+  const h=harness(),first=command();await h.prepare(first);await h.repo.commit(first);
+  h.docs.get(op(1)).requestHash='0'.repeat(64);
+  const next=command(2,1);await h.prepare(next);const writes=h.writes();
+  await assert.rejects(h.repo.commit(next),code('conflict'));assert.equal(h.writes(),writes);
 });
 test('independent mobile and desktop content order/size/labels round trip without inheritance or permission fields', () => {
   const value = parseCloudClinicSettingsData(settings()); assert.notDeepEqual(value.content.mobile.order, value.content.desktop.order);
@@ -199,10 +235,15 @@ test('concurrent settings clients retain CAS and never rebase or overwrite each 
 });
 test('transaction retries produce one revision while failure at any companion write leaves no partial state', async () => {
   const h = harness(), value = command(); await h.prepare(value); h.faults.retry = true; await h.repo.commit(value);
-  assert.equal(h.docs.get(CLOUD_CLINIC_SETTINGS_PATH).revision, 1); assert.equal(h.docs.size, 3);
-  for (const index of [1, 2, 3]) {
+  const proofCount = buildCloudSettingsValidationProofs(value).proofs.length;
+  assert.equal(h.docs.get(CLOUD_CLINIC_SETTINGS_PATH).revision, 1); assert.equal(h.docs.size, 3 + proofCount);
+  for (const index of [1, 2, 3, proofCount + 1, proofCount + 2, proofCount + 3]) {
     const x = harness(); await x.prepare(value); const before = structuredClone(x.docs); x.faults.failAt = x.writes() + index;
-    await assert.rejects(x.repo.commit(value), code('unavailable')); assert.deepEqual(x.docs, before);
+    await assert.rejects(x.repo.commit(value), code('unavailable'));
+    // Private immutable preparation may survive, but never a partial setting,
+    // receipt or committed intent. Exact-ID retry reuses it.
+    assert.deepEqual(new Map([...x.docs].filter(([key]) => !key.includes('/settingsValidationProofs/'))), before);
+    x.faults.failAt = 0; assert.equal((await x.repo.commit(value)).status, 'committed');
   }
 });
 test('identity loss before write rejects it; after server acceptance hides acknowledgement but never claims rollback', async () => {
@@ -379,4 +420,29 @@ test('malformed adapter acknowledgements never report a successful settings muta
     { status: 'committed', target: 'clinicSettings', recordId: 'clinicSettings', revision: 1, token: 'PRIVATE' }]) {
     const h = harness(); h.adapter.runTransaction = async () => raw as any; await assert.rejects(h.repo.commit(command()), code('invalid')); assert.equal(h.docs.size, 0);
   }
+});
+
+test('legacy settings receipt ACK stays read-only before new-write name guards or proof preparation', async () => {
+  const h=harness(),value=command();(value.data as CloudClinicSettingsData).medications[0].name='Café';
+  await h.prepare(value);const saved=h.docs.get(intent(1));saved.status='committed';saved.revision=2;
+  h.docs.set(op(1),{schemaVersion:1,clinicId:'main',operationId:value.operationId,target:value.target,recordId:value.recordId,
+    actorUid:OWNER,expectedRevision:0,resultRevision:1,createdAt:WHEN,requestHash:await digest(JSON.stringify(['clinic-settings-v1',OWNER,value]))});
+  const before=structuredClone(h.docs),calls=h.calls.length;
+  assert.equal((await h.repo.commit(value)).status,'already-committed');assert.deepEqual(h.docs,before);
+  assert.equal(h.calls.slice(calls).some(call=>call.startsWith('set:')||call.includes('/settingsValidationProofs/')),false);
+});
+test('cancelled interrupted proof preparation cannot publish settings or replace the retained operation', async()=>{
+  const h=harness(),value=command();await h.prepare(value);h.faults.failAt=h.writes()+3;
+  await assert.rejects(h.repo.commit(value),code('unavailable'));
+  assert.ok([...h.docs.keys()].some(key=>key.includes('/settingsValidationProofs/')));
+  assert.equal(h.docs.has(CLOUD_CLINIC_SETTINGS_PATH),false);assert.equal(h.docs.has(op(1)),false);
+  await h.journal.cancel(value.operationId);const before=structuredClone(h.docs);
+  await assert.rejects(h.repo.commit(value),code('conflict'));assert.deepEqual(h.docs,before);
+});
+test('altered immutable private proof fails exact-ID recovery rather than overwriting it', async()=>{
+  const h=harness(),value=command();await h.prepare(value);h.faults.failAt=h.writes()+3;
+  await assert.rejects(h.repo.commit(value),code('unavailable'));
+  const key=[...h.docs.keys()].find(key=>key.includes('/settingsValidationProofs/'))!;h.docs.get(key).byteSize++;
+  h.faults.failAt=0;const before=structuredClone(h.docs);
+  await assert.rejects(h.repo.commit(value),code('conflict'));assert.deepEqual(h.docs,before);
 });

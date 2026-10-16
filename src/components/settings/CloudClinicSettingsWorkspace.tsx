@@ -54,7 +54,7 @@ export function buildCloudSettingsEditorData(draft: CloudClinicSettingsWorkspace
   } catch { return undefined; }
 }
 export interface CloudClinicSettingsWorkspaceViewProps {
-  state: CloudClinicSettingsWorkspaceState; section: CloudClinicSettingsSection; previewOnly?: boolean;
+  state: CloudClinicSettingsWorkspaceState; section: CloudClinicSettingsSection; previewOnly?: boolean; disabled?: boolean;
   onSection(section: CloudClinicSettingsSection): void; onClose(): void; onLoad(): void; onBegin(): void;
   onUpdate(value: unknown, expected: CloudClinicSettingsWorkspaceDraft): void; onSave(expected: CloudClinicSettingsWorkspaceDraft): void;
   onCancel(expected: CloudClinicSettingsWorkspaceDraft): void; onRetry(): void; onCancelPending(): void;
@@ -69,8 +69,8 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
   const { state, section } = props, hidden = props.previewOnly || state.closed;
   const draft = hidden ? null : state.draft, source = hidden ? null : draft ? draft.data : state.snapshot?.data;
   const data = record(source), clinic = state.selection.target === 'clinicSettings' ? data : {};
-  const disabled = hidden || busy(state) || state.saveStatus !== 'idle', editing = !!draft && !disabled;
-  const common = () => { const current = latest.current; return !current.previewOnly && !current.state.closed && !busy(current.state); };
+  const disabled = props.disabled === true || hidden || busy(state) || state.saveStatus !== 'idle', editing = !!draft && !disabled;
+  const common = () => { const current = latest.current; return !current.disabled && !current.previewOnly && !current.state.closed && !busy(current.state); };
   const edit = (work: (current: CloudClinicSettingsWorkspaceViewProps, expected: CloudClinicSettingsWorkspaceDraft) => void) => {
     const current = latest.current; if (common() && current.state.saveStatus === 'idle' && draft && current.state.draft === draft) work(current, draft);
   };
@@ -92,8 +92,8 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
   if (!hidden && state.selection.target === 'clinicLogo') { try { logo = parseCloudClinicLogoData(source); } catch { /* Incomplete draft is not an image. */ } }
   return <section className="cloud-catalog-workspace cloud-clinic-settings" dir="rtl" aria-labelledby={`${prefix}-title`}>
     <header className="ccat-surface ccat-header"><div className="ccat-heading"><span className="ccat-heading-icon"><Settings2 aria-hidden="true" /></span><div><h2 id={`${prefix}-title`}>إعدادات العيادة</h2><p>إعدادات مترابطة ومحمية للمالك، دون أسعار أو حسابات من المتصفح.</p></div></div>
-      <button type="button" className="ccat-button ccat-secondary" disabled={!hidden && (busy(state) || !!draft || !!state.pendingOperationId)} onClick={() => { const current = latest.current;
-        if (current.previewOnly || current.state.closed || common() && !current.state.draft && !current.state.pendingOperationId) current.onClose(); }}><ArrowRight size={18} />إلغاء وإغلاق</button></header>
+      <button type="button" className="ccat-button ccat-secondary" disabled={props.disabled || !hidden && (busy(state) || !!draft || !!state.pendingOperationId)} onClick={() => { const current = latest.current;
+        if (!current.disabled && (current.previewOnly || current.state.closed || common() && !current.state.draft && !current.state.pendingOperationId)) current.onClose(); }}><ArrowRight size={18} />إلغاء وإغلاق</button></header>
     <nav className="csettings-navigation" aria-label="أقسام إعدادات العيادة">{sections.map(([key, label]) => <button type="button" key={key} className={`ccat-button ${section === key ? 'ccat-primary' : 'ccat-secondary'}`}
       aria-pressed={section === key} disabled={hidden || busy(state) || state.saveStatus !== 'idle' || !!draft && targetFor(key) !== state.selection.target}
       onClick={() => { if (common() && latest.current.state.saveStatus === 'idle' && (!latest.current.state.draft || targetFor(key) === latest.current.state.selection.target)) latest.current.onSection(key); }}>{label}</button>)}</nav>
@@ -187,28 +187,29 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
 }
 
 /** Root supplies the exact owner/view lease controller and owns its disposal. */
-export default function CloudClinicSettingsWorkspace({ controller, onClose, previewOnly = false }: {
-  controller: CloudClinicSettingsWorkspaceController; onClose(): void; previewOnly?: boolean;
+export default function CloudClinicSettingsWorkspace({ controller, onClose, previewOnly = false, disabled = false }: {
+  controller: CloudClinicSettingsWorkspaceController; onClose(): void; previewOnly?: boolean; disabled?: boolean;
 }) {
   const state = useSyncExternalStore(useCallback(notify => controller.subscribe(notify), [controller]), controller.getState, controller.getState);
   const [section, setSection] = useState<CloudClinicSettingsSection>('identity'), [uploadError, setUploadError] = useState('');
-  const latest = useRef({ controller, previewOnly, onClose, section }); latest.current = { controller, previewOnly, onClose, section };
+  const latest = useRef({ controller, previewOnly, disabled, onClose, section }); latest.current = { controller, previewOnly, disabled, onClose, section };
   const permitted = (expected?: CloudClinicSettingsWorkspaceDraft) => { const current = latest.current, state = current.controller.getState();
-    return current.controller === controller && !current.previewOnly && !state.closed && !busy(state) && state.saveStatus === 'idle'
+    return latest.current === current && current.controller === controller && !current.disabled && !current.previewOnly && !state.closed && !busy(state) && state.saveStatus === 'idle'
       && (expected === undefined || state.draft === expected); };
   const update = (data: unknown, expected: CloudClinicSettingsWorkspaceDraft) => { if (permitted(expected)) controller.updateDraft(data, expected); };
-  return <>{uploadError && !previewOnly && !state.closed && <p role="alert" className="ccat-message ccat-error">{uploadError}</p>}<CloudClinicSettingsWorkspaceView state={state} section={section} previewOnly={previewOnly}
+  return <>{uploadError && !previewOnly && !state.closed && <p role="alert" className="ccat-message ccat-error">{uploadError}</p>}<CloudClinicSettingsWorkspaceView state={state} section={section} previewOnly={previewOnly} disabled={disabled}
     onSection={next => { if (!permitted()) return; const current = controller.getState(), target = targetFor(next); if (current.draft && target !== current.selection.target) return;
       setSection(next); setUploadError(''); if (target !== current.selection.target && target !== 'lab') void controller.load(target); }}
-    onClose={() => { if (latest.current.controller !== controller) return; if (latest.current.previewOnly || controller.canClose()) latest.current.onClose(); }}
+    onClose={() => { const lease = latest.current; if (lease.disabled || lease.controller !== controller) return;
+      const allowed = lease.previewOnly || controller.canClose(); if (latest.current === lease && allowed) lease.onClose(); }}
     onLoad={() => { if (!permitted() || controller.getState().draft || latest.current.section !== section) return; const target = targetFor(section); if (target === 'lab') void controller.loadLabs(); else void controller.load(target); }}
     onBegin={() => { if (!permitted() || latest.current.section !== section || targetFor(section) !== controller.getState().selection.target || !controller.beginEdit()) return; const draft = controller.getState().draft!;
       if (draft.data === null && draft.target !== 'clinicLogo') update(draft.target === 'clinicSettings' ? emptyCloudClinicSettingsEditor() : draft.target === 'lab' ? emptyLab() : { routes: [] }, draft); }}
     onUpdate={update} onSave={expected => { if (!permitted(expected)) return; const data = buildCloudSettingsEditorData(expected); if (data === undefined) return;
       if (controller.updateDraft(data, expected)) void controller.save(controller.getState().draft); }}
     onCancel={expected => { if (permitted(expected)) controller.cancelDraft(expected); }}
-    onRetry={() => { const current = controller.getState(); if (!latest.current.previewOnly && latest.current.controller === controller && !current.closed && !busy(current) && ['retry-required', 'refresh-required'].includes(current.saveStatus)) void controller.retry(); }}
-    onCancelPending={() => { const current = controller.getState(); if (!latest.current.previewOnly && latest.current.controller === controller && !current.closed && !busy(current) && current.saveStatus === 'retry-required') void controller.cancelPending(); }}
+    onRetry={() => { const current = controller.getState(); if (!latest.current.disabled && !latest.current.previewOnly && latest.current.controller === controller && !current.closed && !busy(current) && ['retry-required', 'refresh-required'].includes(current.saveStatus)) void controller.retry(); }}
+    onCancelPending={() => { const current = controller.getState(); if (!latest.current.disabled && !latest.current.previewOnly && latest.current.controller === controller && !current.closed && !busy(current) && current.saveStatus === 'retry-required') void controller.cancelPending(); }}
     onHistory={more => { if (permitted() && !controller.getState().draft) void (more ? controller.loadMoreHistory() : controller.loadHistory()); }}
     onResume={intent => { if (permitted() && !controller.getState().draft && controller.getState().history.includes(intent) && intent.status !== 'cancelled') void controller.resume(intent.operationId); }}
     onLabs={more => { if (permitted() && !controller.getState().draft) void (more ? controller.loadMoreLabs() : controller.loadLabs()); }}

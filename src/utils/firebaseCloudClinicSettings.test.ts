@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
+import { buildCloudSettingsValidationProofs } from './cloudSettingsValidationProofs';
+import { prepareCloudClinicSettingsCommand } from './cloudClinicSettingsRepository';
 
 // Synthetic SDK composition only, not live Auth/Rules/visual/device acceptance.
 const UUID = '10000000-0000-4000-8000-000000000001', OP = '20000000-0000-4000-8000-000000000001';
@@ -18,7 +20,7 @@ function compiled(raw = false) {
     : output ??= build({ ...options, external: ['firebase/*'] });
 }
 interface Options {
-  hostname?: string; appName?: string; projectId?: string; authDomain?: string; emulator?: boolean; missingUser?: boolean;
+  hostname?: string; protocol?: string; appName?: string; projectId?: string; authDomain?: string; emulator?: boolean; missingUser?: boolean;
   verified?: boolean; tokenVerified?: boolean; provider?: string; member?: Record<string, unknown>; missingMember?: boolean;
   claims?: Record<string, unknown>; lostReply?: boolean; retry?: boolean; denied?: 'read' | 'write'; raw?: boolean;
   lossAt?: string; swapAt?: string; tokenGate?: Promise<void>;
@@ -29,7 +31,7 @@ async function harness(options: Options = {}) {
   const auth = { app: { name: options.appName ?? `clinic-operating-${UUID}`, options: { projectId: options.projectId ?? PROJECT,
     authDomain: options.authDomain ?? `${PROJECT}.firebaseapp.com` } }, emulatorConfig: options.emulator ? {} : null,
     currentUser: options.missingUser ? null : user as typeof user | null };
-  const active = { value: true }, location = { hostname: options.hostname ?? '127.0.0.1' }, rawAdapters = { settings: undefined as any, journal: undefined as any };
+  const active = { value: true }, location = { hostname: options.hostname ?? '127.0.0.1', protocol: options.protocol }, rawAdapters = { settings: undefined as any, journal: undefined as any };
   let copy!: (value: unknown) => any;
   const step = (name: string) => { calls.push(name); if (options.lossAt === name) active.value = false; if (options.swapAt === name) auth.currentUser = { ...user }; };
   const snapshot = (key: string, kind: 'record' | 'transaction', source = docs) => ({
@@ -90,16 +92,18 @@ async function harness(options: Options = {}) {
         },
         runTransaction: async (db: unknown, work: any, settings: any) => {
           assert.equal(db, 'synthetic-settings-db'); assert.equal(settings.maxAttempts, 5); step('transaction-start');
+          let domainWritten = false;
           const attempt = async (publish: boolean) => {
             const staged = new Map(docs); let wrote = false;
             const result = await work({ get: async (key: string) => { assert.equal(wrote, false); step('transaction-read'); calls.push(`get:${key}`); return snapshot(key, 'transaction', staged); },
               set: (key: string, value: unknown) => { wrote = true; step('transaction-write'); if (options.denied === 'write') throw new Error('PRIVATE_DENIED_WRITE');
-                calls.push(`set:${key}`); staged.set(key, value); } });
+                calls.push(`set:${key}`); staged.set(key, value);
+                if (publish && (key.startsWith('clinics/main/settings/') || key.startsWith('clinics/main/labDefinitions/'))) domainWritten = true; } });
             if (publish) { docs.clear(); for (const [key, value] of staged) docs.set(key, value); } return result;
           };
           if (options.retry) { options.retry = false; await attempt(false); }
           const result = await attempt(true); step('transaction-ack');
-          if (options.lostReply) { options.lostReply = false; throw new Error('PRIVATE_LOST_REPLY'); } return result;
+          if (options.lostReply && domainWritten) { options.lostReply = false; throw new Error('PRIVATE_LOST_REPLY'); } return result;
         },
       };
       throw new Error('PRIVATE_UNEXPECTED_IMPORT');
@@ -123,7 +127,10 @@ test('settings SDK import and capability construction never authenticate, read r
   const inputs = Object.keys(h.bundled.metafile!.inputs); assert.equal(inputs.some(path => /storage|initialData|firebaseService|App\.tsx/.test(path)), false);
 });
 test('factory rejects external host wrong/default/setup app emulator absent user and mismatched project before SDK imports', async () => {
-  for (const options of [{ hostname: 'dental-clinic-mmaakk888.web.app' }, { hostname: '127.0.0.1.evil.invalid' }, { appName: '[DEFAULT]' },
+  // HTTP and missing protocol are never approved production runtimes, even
+  // after the central release gate permits the exact HTTPS hostname.
+  for (const options of [{ hostname: 'dental-clinic-mmaakk888.web.app', protocol: 'http:' },
+    { hostname: 'dental-clinic-mmaakk888.web.app' }, { hostname: '127.0.0.1.evil.invalid' }, { appName: '[DEFAULT]' },
     { appName: `clinic-setup-${UUID}` }, { appName: `clinic-operating-${UUID}\n` }, { projectId: 'wrong-project' },
     { authDomain: 'wrong.invalid' }, { emulator: true }, { missingUser: true }]) {
     const h = await harness(options); await assert.rejects(h.capability(), safe); assert.deepEqual(h.calls, []);
@@ -150,11 +157,11 @@ test('lost SDK reply retains accepted command for history+same-ID replay without
   h.options.lostReply = true; await assert.rejects(capability.repository.commit(h.payload), safe); assert.equal(h.docs.get(ROUTING).revision, 1);
   const history = await capability.journal.listHistoryPage('settings'); assert.equal(history.records[0].status, 'committed');
   const second = await h.capability(); assert.equal((await second.repository.commit(history.records[0].command)).status, 'already-committed');
-  assert.equal(h.docs.get(ROUTING).revision, 1); assert.equal(h.docs.size, 3);
+  assert.equal(h.docs.get(ROUTING).revision, 1); assert.equal(h.docs.size, 3 + buildCloudSettingsValidationProofs(prepareCloudClinicSettingsCommand(JSON.parse(JSON.stringify(h.payload)))).proofs.length);
 });
 test('SDK callback retries and write denial never publish duplicate revisions or partial companions', async () => {
   const h = await harness(), capability = await h.capability(); await capability.journal.prepare('settings', h.payload, WHEN);
-  h.options.retry = true; await capability.repository.commit(h.payload); assert.equal(h.docs.size, 3); assert.equal(h.docs.get(ROUTING).revision, 1);
+  h.options.retry = true; await capability.repository.commit(h.payload); assert.equal(h.docs.size, 3 + buildCloudSettingsValidationProofs(prepareCloudClinicSettingsCommand(JSON.parse(JSON.stringify(h.payload)))).proofs.length); assert.equal(h.docs.get(ROUTING).revision, 1);
   const x = await harness(), second = await x.capability(); await second.journal.prepare('settings', x.payload, WHEN); x.options.denied = 'write';
   await assert.rejects(second.repository.commit(x.payload), safe); assert.equal(x.docs.has(ROUTING), false); assert.equal(x.docs.get(INTENT).status, 'prepared');
 });
@@ -185,10 +192,22 @@ test('domain kind full command time target and unsupported settings secrets fail
     () => capability.journal.prepare('settings', h.copy({ ...h.payload, target: 'patient-profile' }), WHEN)]) await assert.rejects(action(), safe);
   assert.equal(h.docs.size, 0); assert.equal(h.calls.some(call => call.startsWith('set:')), false);
 });
+
+test('private settings witnesses are transaction-only and exact bounded paths cannot reach other domains',async()=>{
+  const h=await harness({raw:true});await h.capability();const adapter=h.rawAdapters.settings;
+  const proof=`clinics/main/settingsValidationProofs/${OP}-medications-shape-0-299`;
+  await adapter.runTransaction(async(tx:any)=>assert.equal(await tx.get(proof),null));
+  await adapter.runTransaction(async(tx:any)=>assert.equal(await tx.get(`clinics/main/settingsValidationProofs/${OP}-medications-4-0`),null));
+  for(const suffix of ['routes-shape-0-99','costs-unique-ids-0-0','costs-unique-names-0-0'])
+    await adapter.runTransaction(async(tx:any)=>assert.equal(await tx.get(`clinics/main/settingsValidationProofs/${OP}-${suffix}`),null));
+  await assert.rejects(async()=>adapter.readRecord(proof),safe);
+  for(const suffix of ['medications-shape-0-300','medications-shape-5-0','scalar-text-0-0','scalar-shape-0-01','owner-0-0','scalar-0-0\n','scalar-0-0/extra'])
+    await assert.rejects(adapter.runTransaction((tx:any)=>tx.get(`clinics/main/settingsValidationProofs/${OP}-${suffix}`)),safe);
+});
 test('journal cancellation validates entire stored settings command before it can stage any hidden mutation', async () => {
   const h = await harness(), capability = await h.capability(); await capability.journal.prepare('settings', h.payload, WHEN);
   const value = h.docs.get(INTENT); value.command.data.routes.push(h.copy({ serviceId: 'bad', labId: LAB, materialId: MATERIAL }));
-  value.requestHash = createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', UID, 'settings', WHEN, value.command])).digest('hex');
+  value.requestHash = createHash('sha256').update(JSON.stringify(['clinic-operation-intent-v1', UID, 'settings', value.command])).digest('hex');
   const before = h.calls.length; await assert.rejects(capability.journal.cancel(OP), safe);
   assert.equal(h.calls.slice(before).some(call => call.startsWith('set:')), false); assert.equal(h.docs.get(INTENT).status, 'prepared');
 });

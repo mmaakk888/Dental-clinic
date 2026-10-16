@@ -4,7 +4,7 @@ import { normalizeContactPhone } from '../../utils/clinicContacts';
 import { normalizeDirectoryDigits, normalizeDirectoryName } from '../../utils/patientDirectory';
 import { getWhatsAppUrl } from '../../utils/whatsappUtils';
 import type { CloudPatientProfile, CloudPatientRecord } from '../../utils/cloudPatientRepository';
-import type { CloudPatientWorkspaceController, CloudPatientWorkspaceDraft, CloudPatientWorkspaceState } from '../../utils/cloudPatientWorkspaceController';
+import type { CloudPatientRegistrationCheck, CloudPatientWorkspaceController, CloudPatientWorkspaceDraft, CloudPatientWorkspaceState } from '../../utils/cloudPatientWorkspaceController';
 import type { CloudProfileContactRecoveryController } from '../../utils/cloudProfileContactRecoveryController';
 import CloudProfileContactRecoveryPanel from '../shared/CloudProfileContactRecoveryPanel';
 import './CloudPatientsWorkspace.css';
@@ -38,6 +38,7 @@ export interface CloudPatientsWorkspaceViewProps {
   onOpenClinical?: (record: CloudPatientRecord) => void;
   onChangeDraft: (patch: Partial<CloudPatientProfile>, expected: CloudPatientWorkspaceDraft) => void;
   onSave: (expected: CloudPatientWorkspaceDraft) => void;
+  onConfirmSeparate?: (check: Readonly<CloudPatientRegistrationCheck>, expected: CloudPatientWorkspaceDraft) => void;
   onCancel: (expected: CloudPatientWorkspaceDraft) => void;
   onRefresh: () => void;
   onLoadMore: () => void;
@@ -57,6 +58,7 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
   const isLocked = locked(state) || closing;
   const disabled = unavailable || isLocked;
   const draft = unavailable ? null : state.draft;
+  const registration = draft?.action === 'create' && state.registrationCheck?.draft === draft ? state.registrationCheck : null;
   const selected = unavailable || draft ? null : state.selected;
   const closeBlocked = closing || !previewOnly && !state.closed && (isLocked || Boolean(draft));
   const listDisabled = disabled || Boolean(draft);
@@ -170,7 +172,16 @@ export function CloudPatientsWorkspaceView(props: CloudPatientsWorkspaceViewProp
             <div><label htmlFor={`${prefix}-notes`}>ملاحظات الملف <span>— اختياري</span></label><textarea id={`${prefix}-notes`} className="cpw-input" rows={3} maxLength={4000} value={draft.profile.notes} onChange={event => guard(() => props.onChangeDraft({ notes: event.target.value }, draft))} /></div>
             <details className="cpw-optional"><summary>معلومة صحية إضافية — اختياري</summary><div><label htmlFor={`${prefix}-allergy`}>الحساسية أو ملاحظة صحية</label><textarea id={`${prefix}-allergy`} className="cpw-input" rows={2} maxLength={1000} value={draft.profile.allergy} onChange={event => guard(() => props.onChangeDraft({ allergy: event.target.value }, draft))} /></div></details>
           </fieldset>
-          <div className="cpw-editor-actions"><button type="submit" className={primaryClass} disabled={unavailable || closing || state.loading || state.recoveryLoading || ['saving', 'preparing'].includes(state.saveStatus) || invalidAge}>{refresh ? <RefreshCw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}{state.saveStatus === 'preparing' ? 'جارٍ تحضير العملية…' : state.saveStatus === 'saving' ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : 'حفظ بيانات الملف'}</button>
+          {registration && <aside className="cpw-registration" aria-label="مراجعة التشابه قبل إنشاء ملف" role="status"><h4>الاسم أو الهاتف موجود من قبل — راجع النتائج</h4><p>قد يكون الرقم لأفراد الأسرة أو الاسم متشابهًا. لن ندمج البيانات أو نستخدم ملفًا قديمًا تلقائيًا.</p>
+            <ul>{registration.matches.map(match => <li key={`${match.source}:${match.recordId}`}><strong>{match.name}</strong><span>{match.fileNo !== null ? `له ملف #${fileNumber(match.fileNo)}` : 'موجود بجهات الاتصال — بدون اختيار ملف'}</span><small>{match.reason === 'phone-and-name' ? 'نفس الهاتف واسم مشابه' : match.reason === 'phone' ? 'نفس الهاتف الكامل' : 'اسم مشابه'}{match.mobile && <> · <bdi dir="ltr">{match.mobile}</bdi></>}</small></li>)}</ul>
+            {registration.matchCount > registration.matches.length && <p>نعرض أول {registration.matches.length} من {registration.matchCount} مطابقة؛ راجع الدليل لكل النتائج.</p>}
+            <small>المراجعة من قراءة الخادم: <bdi dir="ltr">{registration.readTime}</bdi></small><p>لو هو نفس المريض، ألغِ المسودة وافتح رقم الملف الموجود. لو شخص مختلف، أكّد إنشاء ملف منفصل.</p>
+            <button type="button" className={primaryClass} disabled={disabled || invalidAge || !props.onConfirmSeparate} onClick={() => {
+              const current = latest.current;
+              if (!current.previewOnly && !current.closing && !current.state.closed && !locked(current.state)
+                && current.state.draft === draft && current.state.registrationCheck === registration && !invalidAge) current.onConfirmSeparate?.(registration, draft);
+            }}>راجعت التشابه — إنشاء ملف منفصل</button></aside>}
+          <div className="cpw-editor-actions"><button type="submit" className={primaryClass} disabled={unavailable || closing || state.loading || state.recoveryLoading || ['saving', 'preparing'].includes(state.saveStatus) || invalidAge || Boolean(registration)}>{refresh ? <RefreshCw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}{state.saveStatus === 'preparing' ? 'جارٍ تحضير العملية…' : state.saveStatus === 'saving' ? 'جارٍ التحقق…' : refresh ? 'إعادة التحقق من النتيجة' : retry ? 'إعادة نفس المحاولة' : registration ? 'راجع التشابه وأكّد الاختيار' : 'حفظ بيانات الملف'}</button>
             {state.pendingOperationId ? <button type="button" className={secondaryClass} disabled={unavailable || closing || state.loading || state.recoveryLoading || state.saveStatus !== 'retry-required' || !props.onCancelPending}
               onClick={() => { const current = latest.current; if (!current.previewOnly && !current.closing && !current.state.closed
                 && !current.state.loading && !current.state.recoveryLoading && current.state.saveStatus === 'retry-required'
@@ -234,6 +245,8 @@ export default function CloudPatientsWorkspace({ controller, onClose, onOpenClin
     } : undefined}
     onChangeDraft={(patch, expected) => { if (sameDraft(expected)) controller.updateProfile(patch); }}
     onSave={expected => { const digits = ageQueryRef.current === null ? null : normalizeDirectoryDigits(ageQueryRef.current); if (sameDraft(expected, true) && (digits === null || /^[0-9]{1,3}$/.test(digits) && Number(digits) <= 120)) void controller.save(); }}
+    onConfirmSeparate={(check, expected) => { const digits = ageQueryRef.current === null ? null : normalizeDirectoryDigits(ageQueryRef.current);
+      if (sameDraft(expected) && controller.getState().registrationCheck === check && (digits === null || /^[0-9]{1,3}$/.test(digits) && Number(digits) <= 120)) void controller.confirmSeparateFile(check); }}
     onCancel={expected => { if (sameDraft(expected) && controller.cancelDraft()) { ageQueryRef.current = null; setAgeQuery(null); } }}
     onCancelPending={expected => { const value = live() ? controller.getState() : null;
       if (live() && value && !value.closed && !value.loading && !value.recoveryLoading && value.saveStatus === 'retry-required' && value.draft === expected && value.pendingOperationId) void controller.cancelPending(); }}

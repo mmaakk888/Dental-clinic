@@ -1,4 +1,5 @@
 import type { CloudClinicSnapshot } from './cloudClinicSnapshot';
+import { parseCloudClinicSettingsRecord, parseCloudClinicLogoRecord } from './cloudClinicSettingsRepository';
 import { CloudClinicOverviewError, filterCloudOverviewDirectory, packageCloudOverviewExport, projectCloudClinicOverview,
   validateCloudOverviewDay, validateCloudOverviewRange, type CloudClinicOverviewProjection, type CloudOverviewDirectoryFilter,
   type CloudOverviewExportFormat, type CloudOverviewRange } from './cloudClinicOverviewProjection';
@@ -7,13 +8,14 @@ export type CloudClinicOverviewTab = 'home' | 'directory' | 'finance' | 'export'
 export interface CloudClinicOverviewState {
   tab: CloudClinicOverviewTab; range: Readonly<CloudOverviewRange>; directoryQuery: string; directoryFilter: CloudOverviewDirectoryFilter;
   directoryLimit: number; cashLimit: number; snapshot: CloudClinicSnapshot | null; projection: CloudClinicOverviewProjection | null;
-  loading: boolean; exporting: boolean; error: string; notice: string; closed: boolean;
+  logo: string | null; loading: boolean; exporting: boolean; error: string; notice: string; closed: boolean;
 }
 export interface CloudClinicOverviewExportTicket {
   readonly filename: string; readonly mime: string; readonly text: string; readonly readTime: string;
 }
 export interface CloudClinicOverviewOptions {
   getSnapshot(): Promise<{ readFull(): Promise<CloudClinicSnapshot> }>;
+  getSettings?(): Promise<{ repository: { get(): Promise<unknown>; getLogo(): Promise<unknown> } }>;
   isActive(): boolean;
   initialDate: string;
 }
@@ -24,13 +26,13 @@ export function createCloudClinicOverviewController(options: CloudClinicOverview
   let disposed = false, checkingLifetime = false, sequence = 0, viewVersion = 0;
   let state: Readonly<CloudClinicOverviewState> = Object.freeze({ tab: 'home', range: Object.freeze({ from: day, to: day }),
     directoryQuery: '', directoryFilter: 'all', directoryLimit: 50, cashLimit: 50, snapshot: null, projection: null,
-    loading: false, exporting: false, error: '', notice: '', closed: false });
+    logo: null, loading: false, exporting: false, error: '', notice: '', closed: false });
   const subscribers = new Set<(value: Readonly<CloudClinicOverviewState>) => void>();
   let exportTicket: { value: Readonly<CloudClinicOverviewExportTicket>; snapshot: CloudClinicSnapshot; viewVersion: number } | null = null;
   function dispose() {
     if (disposed) return;
     disposed = true; sequence++; invalidateTicket();
-    publish({ snapshot: null, projection: null, loading: false, exporting: false, error: '', notice: '', closed: true }); subscribers.clear();
+    publish({ snapshot: null, projection: null, logo: null, loading: false, exporting: false, error: '', notice: '', closed: true }); subscribers.clear();
   }
   const active = () => { if (disposed || checkingLifetime) return false;
     checkingLifetime = true;
@@ -65,7 +67,23 @@ export function createCloudClinicOverviewController(options: CloudClinicOverview
         const snapshot = await capability.readFull(); assert();
         if (ticket !== sequence) throw new CloudClinicOverviewError();
         const projection = projectCloudClinicOverview(snapshot, state.range); assert();
-        publish({ snapshot, projection, loading: false, directoryLimit: 50, cashLimit: 50,
+        let logo: string | null = null;
+        if (options.getSettings) {
+          const settings = await options.getSettings(); assert();
+          const raw = await settings.repository.get(); assert();
+          if (!raw || JSON.stringify(parseCloudClinicSettingsRecord(raw)) !== JSON.stringify(snapshot.settings.clinicSettings)) throw new CloudClinicOverviewError();
+          if (snapshot.settings.clinicSettings.data.identity.logoRecordId !== null) {
+            const rawLogo = await settings.repository.getLogo(); assert();
+            const record = parseCloudClinicLogoRecord(rawLogo); if (!record.data) throw new CloudClinicOverviewError();
+            const finalRaw = await settings.repository.get(); assert();
+            const finalLogo = await settings.repository.getLogo(); assert();
+            if (!finalRaw || JSON.stringify(parseCloudClinicSettingsRecord(finalRaw)) !== JSON.stringify(snapshot.settings.clinicSettings)
+              || JSON.stringify(parseCloudClinicLogoRecord(finalLogo)) !== JSON.stringify(record)) throw new CloudClinicOverviewError();
+            logo = `data:${record.data.mimeType};base64,${record.data.base64}`;
+          }
+        }
+        if (ticket !== sequence) throw new CloudClinicOverviewError();
+        publish({ snapshot, projection, logo, loading: false, directoryLimit: 50, cashLimit: 50,
           notice: 'تم تحميل نسخة كاملة ومتسقة. لا تتغير هذه الأرقام تلقائيًا؛ استخدم تحديث البيانات لقراءة أحدث نسخة.' });
         return active() && state.snapshot === snapshot;
       } catch {

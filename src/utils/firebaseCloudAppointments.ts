@@ -2,7 +2,7 @@ import type { Auth } from 'firebase/auth';
 import type { DocumentSnapshot, QueryConstraint, Transaction } from 'firebase/firestore/lite';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID } from './cloudIdentity';
 import { assessCloudOwnerMembership } from './cloudMembership';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 import { CloudAppointmentError, createCloudAppointmentRepository, prepareCloudAppointmentCommand,
   type CloudAppointmentRepository, type CloudAppointmentTransaction } from './cloudAppointmentRepository';
 import { CloudOperationIntentError, createCloudOperationIntentRepository, parseCloudOperationIntent, prepareCloudIntentCommand,
@@ -44,7 +44,7 @@ export async function createFirebaseCloudAppointments(auth: Auth,
   const requireRuntime = () => {
     try {
       if (revoked || !options || typeof options.isActive !== 'function' || options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || auth.app.options.projectId !== CLOUD_PROJECT_ID
         || auth.app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`

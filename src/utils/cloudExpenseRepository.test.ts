@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createCloudOperationIntentRepository, type CloudIntentAdapter } from './cloudOperationIntent';
-import { CloudExpenseError, createCloudExpenseRepository, prepareCloudExpenseCommand, cloudMaterialId,
+import { CloudExpenseError, createCloudExpenseRepository, prepareCloudExpenseCommand, cloudMaterialId, cloudMaterialIdV2,
   parseCloudExpenseRecord, parseCloudMaterialBalance, parseCloudExpensePayment, parseCloudMaterialUsage,
   parseCloudInvoiceImageMetadata, parseCloudInvoiceImage, prepareCloudExpensePageInput,
   type CloudExpenseAdapter, type CloudExpenseCommand, type CloudExpenseData, type CloudExpenseItem } from './cloudExpenseRepository';
@@ -75,7 +75,7 @@ test('explicit charge is not cash; unpaid supplier invoice and line purchases co
   const h = harness(); assert.deepEqual(await h.commit(create()), { status: 'committed', recordId: id(101), revision: 1 });
   const expense = await h.repo.get(id(101)); assert.equal(expense?.data.totalCents, 10000); assert.equal(expense?.paidCents, 0);
   assert.equal(expense?.paymentCount, 0); assert.equal([...h.docs.keys()].some(key => key.includes('/expensePayments/')), false);
-  const material = await h.repo.getMaterial(await cloudMaterialId(item().name, item().unit, { digest }));
+  const material = await h.repo.getMaterial(await cloudMaterialIdV2(item().name, item().unit, { digest }));
   assert.equal(material?.purchasedMilli, 2000); assert.equal(material?.purchaseCostCents, 10000);
   assert.equal(h.docs.get(path('operationIntents', id(1))).status, 'committed');
 });
@@ -137,9 +137,9 @@ test('two concurrent invoice writers cannot spend same expense balance', async (
   const result = await Promise.allSettled([h.repo.commit(a), h.repo.commit(b)]);
   assert.equal(result.filter(value => value.status === 'fulfilled').length, 1); assert.equal((await h.repo.get(id(101)))?.paidCents, 8000);
 });
-test('same supplier normalized invoice number reservation prevents duplicate charge/inventory', async () => {
+test('same exact supplier and invoice reservation prevents duplicate charge/inventory without silent v1 normalization', async () => {
   const h = harness(); await h.commit(create(1, { invoiceNumber: 'INV  ١', supplierName: 'مورد' }));
-  const duplicate = create(2, { invoiceNumber: 'inv  ١', supplierName: 'مورد' }, 0, id(102)); await h.prepare(duplicate);
+  const duplicate = create(2, { invoiceNumber: 'INV  ١', supplierName: 'مورد' }, 0, id(102)); await h.prepare(duplicate);
   const before = structuredClone(h.docs); await assert.rejects(h.repo.commit(duplicate), code('conflict')); assert.deepEqual(h.docs, before);
 });
 test('different suppliers may use same invoice number; blank numbers reserve nothing', async () => {
@@ -161,27 +161,27 @@ test('invoice tax/discount allocation conserves every cent across line stock', a
 test('usage/waste capture cost and preserve exact residual cents when depleted', async () => {
   const h = harness(); await h.commit(create(1, { items: [item({ quantityMilli: 3000, unitPriceCents: 1, totalCents: 3 })],
     subtotalCents: 3, taxCents: 0, discountCents: 1, totalCents: 2 }));
-  const materialId = await cloudMaterialId(item().name, item().unit, { digest });
+  const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest });
   await h.commit(usage(materialId, 2, 1, 1000)); await h.commit(usage(materialId, 3, 2, 2000, 'waste'));
   const balance = await h.repo.getMaterial(materialId); assert.equal(balance?.usedMilli, 1000); assert.equal(balance?.wasteMilli, 2000);
   assert.equal(balance?.consumedCostCents, 2); assert.equal((await h.repo.listUsagesPage(materialId)).records.reduce((sum, row) => sum + row.costCents, 0), 2);
 });
 test('insufficient stock/stale stock CAS cannot make negative inventory', async () => {
-  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialId(item().name, item().unit, { digest });
+  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest });
   const excessive = usage(materialId, 2, 1, 2001); await h.prepare(excessive); const before = structuredClone(h.docs);
   await assert.rejects(h.repo.commit(excessive), code('conflict')); assert.deepEqual(h.docs, before);
   await h.commit(usage(materialId, 3)); const stale = usage(materialId, 4); await h.prepare(stale);
   await assert.rejects(h.repo.commit(stale), code('conflict')); assert.equal((await h.repo.getMaterial(materialId))?.usedMilli, 1000);
 });
 test('additional purchase preserves all consumption and adds real quantity/cost', async () => {
-  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialId(item().name, item().unit, { digest });
+  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest });
   await h.commit(usage(materialId)); await h.commit(create(3, {}, 0, id(102)));
   const balance = await h.repo.getMaterial(materialId); assert.equal(balance?.purchasedMilli, 4000); assert.equal(balance?.usedMilli, 1000);
   assert.equal(balance?.purchaseCostCents, 20000); assert.equal(balance?.consumedCostCents, 5000);
 });
 test('same-ID historical create/pay/usage replays read receipt+intent only, never newer state', async () => {
   const h = harness(); const original = create(); await h.commit(original); await h.commit(pay());
-  const materialId = await cloudMaterialId(item().name, item().unit, { digest }), u = usage(materialId, 3); await h.commit(u);
+  const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest }), u = usage(materialId, 3); await h.commit(u);
   const before = structuredClone(h.docs); h.calls.length = 0;
   for (const command of [original, pay(), u]) assert.equal((await h.repo.commit(command)).status, 'already-committed');
   assert.deepEqual(h.docs, before); assert.equal(h.calls.filter(value => value.startsWith('get:')).length, 6);
@@ -268,8 +268,8 @@ test('unknown read/list capability unavailable, invalid paths rejected before pr
   await assert.rejects(h.repo.listPaymentsPage(null as any), code('invalid')); await assert.rejects(h.repo.listUsagesPage(null as any), code('invalid'));
 });
 test('material reads/pages reject otherwise valid balances whose hash names another material', async () => {
-  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialId(item().name, item().unit, { digest });
-  h.docs.get(path('materialBalances', materialId)).name = 'اسم مزور';
+  const h = harness(); await h.commit(create()); const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest });
+  h.docs.get(path('materialBalances', materialId)).pending.candidate.name = 'اسم مزور';
   await assert.rejects(h.repo.getMaterial(materialId), code('invalid')); await assert.rejects(h.repo.listMaterialsPage(), code('invalid'));
 });
 test('mutable commands are snapshotted before authorization awaits', async () => {
@@ -285,7 +285,9 @@ test('owner loss during read/accepted commit rejects late results without claimi
 });
 test('partial write failure rolls back stock/expense/receipt/intent transaction', async () => {
   const h = harness(); await h.prepare(create()); const before = structuredClone(h.docs); h.faults.failWrite = h.writes() + 2;
-  await assert.rejects(h.repo.commit(create()), code('unavailable')); assert.deepEqual(h.docs, before);
+  await assert.rejects(h.repo.commit(create()), code('unavailable'));
+  const publicRows = (rows: Map<string, any>) => new Map([...rows].filter(([key]) => !key.includes('/expenseInventoryProofs/')));
+  assert.deepEqual(publicRows(h.docs), publicRows(before));
 });
 test('provider/hostile errors never disclose raw details', async () => {
   const h = harness(); h.adapter.readRecord = async () => { throw new Error('PRIVATE_PROVIDER_TOKEN'); };
@@ -309,4 +311,64 @@ test('stored parsers enforce exact schemas/counts/stock/linked images/currency a
   assert.throws(() => parseCloudMaterialUsage({}), code('invalid')); assert.throws(() => parseCloudInvoiceImage({}), code('invalid'));
   assert.throws(() => parseCloudInvoiceImageMetadata({ ...(attach() as any).image, byteLength: 153601 }), code('invalid'));
   assert.deepEqual(prepareCloudExpensePageInput({}), { afterId: null, limit: 25 });
+});
+
+test('interrupted private preparation has no expense, cash or purchase until the original final commit', async () => {
+  const h = harness(), command = create(1, { items: [item(), item({ itemId: id(502), name: 'خامة ثانية' })], subtotalCents: 20000, totalCents: 20000 }, 1000);
+  await h.prepare(command); h.faults.failWrite = h.writes() + 14;
+  await assert.rejects(h.repo.commit(command), code('unavailable'));
+  assert.equal(h.docs.has(path('expenseRecords', id(101))), false); assert.equal(h.docs.has(path('expensePayments', id(1))), false);
+  assert.equal(await h.repo.getMaterial(await cloudMaterialIdV2(item().name, item().unit, { digest })), null);
+  assert.deepEqual((await h.repo.listMaterialsPage()).records, []);
+  assert.equal(h.docs.get(path('operationIntents', id(1))).status, 'prepared');
+  await h.repo.commit(command); assert.equal((await h.repo.listMaterialsPage()).records.length, 2);
+  assert.equal((await h.repo.get(id(101)))?.paidCents, 1000);
+});
+test('cancelling an interrupted purchase resolves its private head to unchanged base and fences concurrent stock writes', async () => {
+  const h = harness(); await h.commit(create());
+  const materialId = await cloudMaterialIdV2(item().name, item().unit, { digest });
+  const command = create(2, { items: [item(), item({ itemId: id(502), name: 'خامة ثانية' })], subtotalCents: 20000, totalCents: 20000 }, 0, id(102));
+  await h.prepare(command); h.faults.failWrite = h.writes() + 14; await assert.rejects(h.repo.commit(command), code('unavailable'));
+  assert.equal((await h.repo.getMaterial(materialId))?.purchasedMilli, 2000);
+  const use = usage(materialId, 3); await h.prepare(use); await assert.rejects(h.repo.commit(use), code('conflict'));
+  await h.journal.cancel(id(2)); await assert.rejects(h.repo.commit(command), code('conflict'));
+  assert.equal((await h.repo.getMaterial(materialId))?.purchasedMilli, 2000);
+  await h.repo.commit(use); assert.equal((await h.repo.getMaterial(materialId))?.usedMilli, 1000);
+  await h.commit(create(4, {}, 0, id(104))); assert.equal((await h.repo.getMaterial(materialId))?.purchasedMilli, 4000);
+  assert.equal(h.docs.has(path('expenseRecords', id(102))), false);
+});
+test('Firestore map-key reordering cannot break exact-ID proof recovery, but altered proof content does', async () => {
+  const reorder = (value: any): any => Array.isArray(value) ? value.map(reorder) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorder(item)])) : value;
+  for (const tamper of [false, true]) {
+    const h = harness(), command = create(1, { items: [item(), item({ itemId: id(502), name: 'ثانية' })], subtotalCents: 20000, totalCents: 20000 });
+    await h.prepare(command); h.faults.failWrite = h.writes() + 14; await assert.rejects(h.repo.commit(command));
+    const key = [...h.docs.keys()].find(key => key.includes('/expenseInventoryProofs/') && h.docs.get(key).summary)!;
+    h.docs.set(key, reorder(h.docs.get(key))); if (tamper) h.docs.get(key).summary.costCents++;
+    if (tamper) await assert.rejects(h.repo.commit(command), code('invalid'));
+    else { await h.repo.commit(command); assert.equal((await h.repo.get(id(101)))?.data.totalCents, 20000); }
+  }
+});
+test('20-row maximum allocation and zero-cost rows preserve complete immutable forests without leaking private preparations', async () => {
+  for (const zero of [false, true]) {
+    const h = harness(), items = Array.from({ length: 20 }, (_, index) => item({ itemId: id(600 + index), name: `خامة ${index}`,
+      quantityMilli: 1000, unitPriceCents: zero ? 0 : 100, totalCents: zero ? 0 : 100 }));
+    await h.commit(create(1, { items, subtotalCents: zero ? 0 : 2000, taxCents: zero ? 0 : 1, totalCents: zero ? 0 : 2001 }));
+    const materials = (await h.repo.listMaterialsPage()).records;
+    assert.equal(materials.length, 20); assert.equal(materials.reduce((sum, row) => sum + row.purchaseCostCents, 0), zero ? 0 : 2001);
+    assert.equal([...h.docs.keys()].filter(key => key.includes('/expenseInventoryProofs/')).length, 224);
+    assert.ok(materials.every(row => !('pending' in row) && !('base' in row)));
+  }
+});
+test('new exact v2 material identity is explicit; legacy hash parsing is retained but never silently merged', async () => {
+  const h = harness(); assert.notEqual(await cloudMaterialId('X', 'علبة', { digest }), await cloudMaterialIdV2('X', 'علبة', { digest }));
+  await h.commit(create(1, { items: [item({ name: 'X' })] }));
+  await h.commit(create(2, { items: [item({ name: 'x' })] }, 0, id(102)));
+  assert.equal((await h.repo.listMaterialsPage()).records.length, 2);
+});
+test('legacy immutable receipt acknowledgement remains readonly before any newer head or proof lookup', async () => {
+  const h = harness(), command = create(); await h.commit(command);
+  const receipt = h.docs.get(path('expenseOperations', id(1))); delete receipt.inventoryVersion; delete receipt.usageMath;
+  h.calls.length = 0; const writes = h.writes(); assert.equal((await h.repo.commit(command)).status, 'already-committed');
+  assert.equal(h.writes(), writes); assert.equal(h.calls.filter(call => call.startsWith('get:')).length, 2);
 });

@@ -298,3 +298,13 @@ test('fresh recovery and ordinary callbacks recheck component ownership after ge
   switchNow = true; props.onResume?.(OP); assert.equal(resumes, 0); assert.deepEqual(h.calls, []);
   assert.equal(props.canRecover?.(), false); props.onLoadFirst(); assert.deepEqual(h.calls, []);
 });
+
+test('temporary auth checking blocks retained contact/native actions without disposing the draft lifetime', () => {
+  const h = controllerHarness(), refs: any[] = []; let closes = 0;
+  const old = invoke(CloudContactsWorkspace, { controller: h.controller, onClose: () => closes++ }, undefined, refs).props as CloudContactsWorkspaceViewProps;
+  invoke(CloudContactsWorkspace, { controller: h.controller, disabled: true, onClose() {} }, undefined, refs);
+  old.onCreate(); old.onLoadFirst(); old.onLoadMore(); old.onClose(); assert.equal(old.onContact(record()), false);
+  assert.deepEqual(h.calls, []); assert.equal(closes, 0); assert.equal(h.controller.getState().closed, false);
+  const current = invoke(CloudContactsWorkspace, { controller: h.controller, onClose() {} }, undefined, refs).props as CloudContactsWorkspaceViewProps;
+  current.onCreate(); assert.ok(h.controller.getState().draft);
+});

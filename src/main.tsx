@@ -6,7 +6,7 @@ import './index.css';
 
 // Resolve before App import: neither preparation nor a closed external entry
 // may initialize local accounts or hydrate clinical/financial records.
-const entry = resolveClinicEntry(window.location.hostname, window.location.search);
+const entry = resolveClinicEntry(window.location.hostname, window.location.search, window.location.protocol);
 const RootPage = lazy(() => {
   if (entry === 'setup') return import('./components/auth/CloudSetupPage.tsx');
   if (entry === 'operating') return import('./components/auth/CloudOperatingPage.tsx');

@@ -2,13 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { CLOUD_PATIENTS_UI_STAGE, createCloudPatientUiPreview } from './cloudPatientUiStage';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 test('patient UI availability is frozen source-only readiness and never authorization', () => {
-  assert.equal(CLOUD_PATIENTS_UI_STAGE.available, false);
+  assert.equal(CLOUD_PATIENTS_UI_STAGE.available, CLOUD_COMPLETE_RELEASE_UI.available);
   assert.equal(Object.isFrozen(CLOUD_PATIENTS_UI_STAGE), true);
-  assert.throws(() => { (CLOUD_PATIENTS_UI_STAGE as { available: boolean }).available = true; });
-  assert.match(CLOUD_PATIENTS_UI_STAGE.reason, /غير مفعّل/u);
-  assert.match(CLOUD_PATIENTS_UI_STAGE.reason, /الجلسات والتحصيلات/u);
+  assert.throws(() => { (CLOUD_PATIENTS_UI_STAGE as { available: boolean }).available = !CLOUD_PATIENTS_UI_STAGE.available; });
 });
 
 test('patient preview is empty and all retained read/draft/save callbacks are inert', async () => {

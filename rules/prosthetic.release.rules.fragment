@@ -1,0 +1,228 @@
+    // Owner-only coupled prosthetic orders and supplier payments. Witnesses
+    // below are SAME-request immutable financial validation, not staged money.
+    function pr_preparedProsthetic(c) {
+      return uuid(c.operationId) && uuid(c.labId) && expected(c.expectedLabAccountRevision)
+        && (c.action=='create' ? exact(c,['operationId','labId','expectedLabAccountRevision','createdAt','action','patientId','expectedPatientRevision','serviceId','expectedCatalogRevision','expectedRoutingRevision','expectedLabRevision','kind','units','teethIds','date','deliveryExpectedDate','patientUnitPriceCents','includeExamination','paidCents','note'])
+          && uuid(c.patientId) && uuid(c.serviceId) && expected(c.expectedPatientRevision)
+          && revision(c.expectedCatalogRevision) && revision(c.expectedRoutingRevision) && revision(c.expectedLabRevision)
+          && c.kind in ['fixed','removable'] && c.units is int && c.units>=1 && c.units<=100 && c.teethIds is list && c.teethIds.size()<=32
+          && (c.kind!='fixed' || c.teethIds.size()==0 || c.teethIds.size()==c.units)
+          && money(c.patientUnitPriceCents) && money(c.patientUnitPriceCents*c.units)
+          && c.includeExamination is bool && money(c.paidCents) && c.date is string && c.date.size()==10
+          && (c.deliveryExpectedDate==null || c.deliveryExpectedDate is string && c.deliveryExpectedDate.size()==10)
+          && c.note is string && c.note.size()<=2000
+        : c.action=='progress' ? exact(c,['operationId','labId','expectedLabAccountRevision','createdAt','action','caseId','expectedCaseRevision','status','note'])
+          && c.expectedLabAccountRevision>0 && uuid(c.caseId) && expected(c.expectedCaseRevision) && c.expectedCaseRevision>0
+          && c.status in ['pending','in_progress','ready','delivered'] && longText(c.note,2000)
+        : c.action=='lab-payment' && exact(c,['operationId','labId','expectedLabAccountRevision','createdAt','action','date','note','allocations'])
+          && c.expectedLabAccountRevision>0 && day(c.date) && longText(c.note,1000)
+          && c.allocations is list && c.allocations.size()>0 && c.allocations.size()<=8);
+    }
+    function pr_fresh(op) {
+      let i=getAfter(intentPath(op)).data;
+      return i.kind=='prosthetic' && i.status=='committed' && i.actorUid==request.auth.uid
+        && !exists(anyPath('prostheticOperations',op)) && existsAfter(anyPath('prostheticOperations',op));
+    }
+    function pr_command(op) { return getAfter(intentPath(op)).data.command; }
+    function pr_allocation(c,id) {
+      return c.allocations[0].caseId==id?c.allocations[0]
+        :c.allocations.size()>1 && c.allocations[1].caseId==id?c.allocations[1]
+        :c.allocations.size()>2 && c.allocations[2].caseId==id?c.allocations[2]
+        :c.allocations.size()>3 && c.allocations[3].caseId==id?c.allocations[3]
+        :c.allocations.size()>4 && c.allocations[4].caseId==id?c.allocations[4]
+        :c.allocations.size()>5 && c.allocations[5].caseId==id?c.allocations[5]
+        :c.allocations.size()>6 && c.allocations[6].caseId==id?c.allocations[6]
+        :c.allocations.size()>7 && c.allocations[7].caseId==id?c.allocations[7]:null;
+    }
+    function pr_receiptBase(r,id,c) {
+      return exact(r,['schemaVersion','clinicId','operationId','actorUid','action','labId','labRevision','createdAt','requestHash','patientId','caseId','patientRevision','caseRevision','fileNo','validationVersion','serviceIndex','routeIndex','materialIndex','totalAllocatedCents'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && uuid(id) && r.operationId==id
+        && r.actorUid==request.auth.uid && hash(r.requestHash) && r.action==c.action && r.labId==c.labId
+        && r.createdAt==c.createdAt && r.labRevision==c.expectedLabAccountRevision+1 && revision(r.labRevision)
+        && r.validationVersion is int && r.validationVersion==2 && money(r.totalAllocatedCents)
+        && coupledIntent('prosthetic',id);
+    }
+    function pr_proofPath(op,index) { return anyPath('prostheticPaymentProofs',op+'-'+string(index)); }
+    function pr_leaf(c,index) { return index*3<c.allocations.size()?getAfter(pr_proofPath(c.operationId,index)).data:{'caseIds':[],'subtotalCents':0}; }
+    function pr_paymentReceipt(r,id,c) {
+      let p0=pr_leaf(c,0); let p1=pr_leaf(c,1); let p2=pr_leaf(c,2);
+      let ids=p0.caseIds.concat(p1.caseIds).concat(p2.caseIds);
+      let payment=getAfter(anyPath('labPayments',id)).data;
+      return r.patientId==null && r.caseId==null && r.patientRevision==null && r.caseRevision==null && r.fileNo==null
+        && r.serviceIndex==null && r.routeIndex==null && r.materialIndex==null
+        && ids.size()==c.allocations.size() && ids.toSet().size()==ids.size()
+        && r.totalAllocatedCents==p0.subtotalCents+p1.subtotalCents+p2.subtotalCents && r.totalAllocatedCents>0
+        && payment.amountCents==r.totalAllocatedCents && payment.labId==c.labId;
+    }
+    function pr_receipt(r,id) {
+      let c=pr_command(id);
+      let a=getAfter(anyPath('labAccounts',c.labId)).data;
+      return pr_receiptBase(r,id,c) && a.lastOperationId==id && a.revision==r.labRevision
+        && (c.action=='create' ? r.patientId==c.patientId && r.caseId==id && r.patientRevision==c.expectedPatientRevision+1
+          && r.caseRevision==1 && patientPositiveNumber(r.fileNo) && r.totalAllocatedCents==0
+          && r.serviceIndex is int && r.serviceIndex>=0 && r.serviceIndex<300
+          && r.routeIndex is int && r.routeIndex>=0 && r.routeIndex<100 && r.materialIndex is int && r.materialIndex>=0 && r.materialIndex<100
+          && getAfter(anyPath('labCases',id)).data.lastOperationId==id
+          && getAfter(anyPath('patientAccounts',c.patientId)).data.lastOperationId==id
+          && getAfter(anyPath('patientSessions',id)).data.lastOperationId==id
+        : c.action=='progress' ? r.patientId==null && r.caseId==c.caseId && r.patientRevision==null && r.fileNo==null
+          && r.caseRevision==c.expectedCaseRevision+1 && r.totalAllocatedCents==0
+          && r.serviceIndex==null && r.routeIndex==null && r.materialIndex==null
+          && getAfter(anyPath('labCases',c.caseId)).data.lastOperationId==id
+        : pr_paymentReceipt(r,id,c));
+    }
+    function pr_caseSchema(a,id) {
+      return exact(a,['schemaVersion','clinicId','recordId','patientId','sessionId','fileNo','labId','revision','lastOperationId','totalCostCents','paidCostCents','status','note','snapshot'])
+        && a.schemaVersion is int && a.schemaVersion==1 && a.clinicId=='main' && uuid(id) && a.recordId==id && a.sessionId==id
+        && uuid(a.patientId) && patientPositiveNumber(a.fileNo) && uuid(a.labId) && revision(a.revision) && uuid(a.lastOperationId)
+        && money(a.totalCostCents) && money(a.paidCostCents) && a.paidCostCents<=a.totalCostCents
+        && a.status in ['pending','in_progress','ready','delivered'] && longText(a.note,2000);
+    }
+    function pr_createCase(a,id,c,r) {
+      let catalog=getAfter(singletonPath('serviceCatalog')).data;
+      let routing=getAfter(singletonPath('prostheticRouting')).data;
+      let lab=getAfter(anyPath('labDefinitions',c.labId)).data;
+      let svc=catalog.data.services[r.serviceIndex];
+      let route=routing.data.routes[r.routeIndex];
+      let material=lab.data.costs[r.materialIndex];
+      let s=a.snapshot;
+      return a.revision==1 && a.lastOperationId==id && a.patientId==c.patientId && a.fileNo==r.fileNo && a.labId==c.labId
+        && a.paidCostCents==0 && a.status=='pending' && a.note==c.note
+        && catalog.revision==c.expectedCatalogRevision && routing.revision==c.expectedRoutingRevision && lab.revision==c.expectedLabRevision
+        && lab.data.active && svc.active && svc.kind=='prosthetic' && svc.serviceId==c.serviceId && money(svc.priceCents)
+        && route.serviceId==c.serviceId && route.labId==c.labId && material.materialId==route.materialId
+        && material.active && money(material.unitCostCents) && (material.category=='other' || material.category==c.kind)
+        && exact(s,['serviceId','serviceName','catalogRevision','configuredPatientUnitPriceCents','patientUnitPriceCents','examinationCents','kind','units','teethIds','date','deliveryExpectedDate','labName','materialId','materialName','materialCategory','unitLabel','billingBasis','labRevision','routingRevision','unitCostCents'])
+        && s=={'serviceId':c.serviceId,'serviceName':svc.name,'catalogRevision':catalog.revision,'configuredPatientUnitPriceCents':svc.priceCents,
+          'patientUnitPriceCents':c.patientUnitPriceCents,'examinationCents':c.includeExamination?catalog.data.examinationCents:0,
+          'kind':c.kind,'units':c.units,'teethIds':c.teethIds,'date':c.date,'deliveryExpectedDate':c.deliveryExpectedDate,
+          'labName':lab.data.name,'materialId':material.materialId,'materialName':material.name,'materialCategory':material.category,
+          'unitLabel':material.unitLabel,'billingBasis':material.billingBasis,'labRevision':lab.revision,'routingRevision':routing.revision,'unitCostCents':material.unitCostCents}
+        && a.totalCostCents==material.unitCostCents*(material.billingBasis=='whole-case'?1:c.units)
+        && getAfter(anyPath('patientSessions',id)).data.data.prostheticCaseId==id;
+    }
+    function pr_caseWrite(before,a,id) {
+      let c=pr_command(a.lastOperationId);
+      let r=getAfter(anyPath('prostheticOperations',a.lastOperationId)).data;
+      let row=c.action=='lab-payment'?pr_allocation(c,id):null;
+      return pr_fresh(a.lastOperationId) && a.labId==c.labId
+        && (before==null ? pr_caseSchema(a,id) && c.action=='create' && id==c.operationId && pr_createCase(a,id,c,r)
+          : c.action=='progress' ? c.caseId==id && before.data.revision==c.expectedCaseRevision && a.revision==before.data.revision+1
+            && a.diff(before.data).affectedKeys().hasOnly(['revision','lastOperationId','status','note']) && a.status==c.status && a.note==c.note
+          : c.action=='lab-payment' && row!=null && before.data.revision==row.expectedRevision && a.revision==before.data.revision+1
+            && a.diff(before.data).affectedKeys().hasOnly(['revision','lastOperationId','paidCostCents'])
+            && a.paidCostCents==before.data.paidCostCents+row.amountCents && money(a.paidCostCents) && a.paidCostCents<=a.totalCostCents);
+    }
+    function pr_accountSchema(a,id) {
+      return exact(a,['schemaVersion','clinicId','labId','revision','lastOperationId','totalCostCents','paidCostCents','caseCount','paymentCount'])
+        && a.schemaVersion is int && a.schemaVersion==1 && a.clinicId=='main' && uuid(id) && a.labId==id && revision(a.revision)
+        && uuid(a.lastOperationId) && money(a.totalCostCents) && money(a.paidCostCents) && a.paidCostCents<=a.totalCostCents
+        && revision(a.caseCount) && expected(a.paymentCount) && a.caseCount+a.paymentCount<=a.revision;
+    }
+    function pr_labAccountWrite(before,a,id) {
+      let c=pr_command(a.lastOperationId);
+      let r=getAfter(anyPath('prostheticOperations',a.lastOperationId)).data;
+      let old=before==null?{'totalCostCents':0,'paidCostCents':0,'caseCount':0,'paymentCount':0}:before.data;
+      return pr_accountSchema(a,id) && pr_fresh(a.lastOperationId) && c.labId==id && a.revision==c.expectedLabAccountRevision+1
+        && (before==null?c.expectedLabAccountRevision==0 && c.action=='create':before.data.revision==c.expectedLabAccountRevision)
+        && a.totalCostCents==old.totalCostCents+(c.action=='create'?getAfter(anyPath('labCases',a.lastOperationId)).data.totalCostCents:0)
+        && a.paidCostCents==old.paidCostCents+r.totalAllocatedCents
+        && a.caseCount==old.caseCount+(c.action=='create'?1:0) && a.paymentCount==old.paymentCount+(c.action=='lab-payment'?1:0);
+    }
+    function pr_patientAccountWrite(before,a,id) {
+      let c=pr_command(a.lastOperationId);
+      let r=getAfter(anyPath('prostheticOperations',a.lastOperationId)).data;
+      let s=getAfter(anyPath('patientSessions',a.lastOperationId)).data;
+      let old=before==null?{'totalCents':0,'paidCents':0,'sessionCount':0}:before.data;
+      return accountSchema(a,id) && pr_fresh(a.lastOperationId) && c.action=='create' && c.patientId==id
+        && teeth(c.teethIds)
+        && a.revision==c.expectedPatientRevision+1 && a.fileNo==r.fileNo
+        && get(patientProfilePath(id)).data.fileNo==a.fileNo && get(patientFilePath(a.fileNo)).data.recordId==id
+        && (before==null?c.expectedPatientRevision==0:before.data.revision==c.expectedPatientRevision && before.data.fileNo==a.fileNo)
+        && s.lastOperationId==a.lastOperationId && a.totalCents==old.totalCents+s.totalCents
+        && a.paidCents==old.paidCents+c.paidCents && a.sessionCount==old.sessionCount+1
+        && (c.paidCents>0?existsAfter(anyPath('patientReceipts',a.lastOperationId)):!existsAfter(anyPath('patientReceipts',a.lastOperationId)));
+    }
+    function pr_patientSessionWrite(before,s,id) {
+      let c=pr_command(s.lastOperationId);
+      let r=getAfter(anyPath('prostheticOperations',s.lastOperationId)).data;
+      let snap=getAfter(anyPath('labCases',id)).data.snapshot;
+      return before==null && sessionSchema(s,id) && pr_fresh(s.lastOperationId) && c.action=='create' && c.operationId==id
+        && day(c.date) && (c.deliveryExpectedDate==null || day(c.deliveryExpectedDate) && c.deliveryExpectedDate>=c.date)
+        && s.lastOperationId==id && s.revision==1 && s.patientId==c.patientId && s.fileNo==r.fileNo
+        && s.totalCents==c.patientUnitPriceCents*c.units+snap.examinationCents && s.paidCents==c.paidCents
+        && s.data=={'type':snap.serviceName,'date':c.date,'teethIds':c.teethIds,
+          'services':[{'id':id,'name':snap.serviceName,'priceCents':c.patientUnitPriceCents*c.units,
+            'tooth':c.teethIds.size()==1?c.teethIds[0]:null,'catalogServiceId':c.serviceId}],
+          'examinationCents':snap.examinationCents,'notes':c.note,'treatmentStage':'first','rootCanalStatus':'','visitStatus':'follow_up',
+          'prostheticCaseId':id,'prosthetic':{'kind':c.kind,'material':snap.serviceName,'units':c.units,'unitPriceCents':c.patientUnitPriceCents}};
+    }
+    function pr_patientCash(r,id) {
+      let c=pr_command(id);
+      let receipt=getAfter(anyPath('prostheticOperations',id)).data;
+      return exact(r,['schemaVersion','clinicId','receiptId','patientId','sessionId','fileNo','amountCents','date','note','createdAt','actorUid','paymentMethod'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && r.receiptId==id && pr_fresh(id)
+        && c.action=='create' && c.paidCents>0 && r.patientId==c.patientId && r.sessionId==id && r.fileNo==receipt.fileNo
+        && r.amountCents==c.paidCents && r.date==c.date && r.note=='' && r.createdAt==c.createdAt && r.actorUid==request.auth.uid && r.paymentMethod=='cash';
+    }
+    function pr_row(row,op,labId) {
+      let a=getAfter(anyPath('labCases',row.caseId)).data;
+      return exact(row,['caseId','expectedRevision','amountCents']) && uuid(row.caseId) && expected(row.expectedRevision) && row.expectedRevision>0
+        && money(row.amountCents) && row.amountCents>0 && a.lastOperationId==op && a.labId==labId && a.revision==row.expectedRevision+1;
+    }
+    function pr_proof(p,id) {
+      let c=pr_command(p.operationId); let start=p.index*3; let rows=p.rows;
+      return exact(p,['schemaVersion','clinicId','operationId','labId','index','rows','caseIds','subtotalCents'])
+        && p.schemaVersion is int && p.schemaVersion==1 && p.clinicId=='main' && uuid(p.operationId)
+        && p.index is int && p.index>=0 && p.index<=2 && id==p.operationId+'-'+string(p.index)
+        && c.action=='lab-payment' && p.labId==c.labId && pr_fresh(p.operationId) && start<c.allocations.size()
+        && rows==c.allocations[start:(start+3<c.allocations.size()?start+3:c.allocations.size())]
+        && pr_row(rows[0],p.operationId,p.labId) && (rows.size()<2 || pr_row(rows[1],p.operationId,p.labId))
+        && (rows.size()<3 || pr_row(rows[2],p.operationId,p.labId))
+        && p.caseIds==(rows.size()==1?[rows[0].caseId]:rows.size()==2?[rows[0].caseId,rows[1].caseId]:[rows[0].caseId,rows[1].caseId,rows[2].caseId])
+        && p.subtotalCents==rows[0].amountCents+(rows.size()<2?0:rows[1].amountCents)+(rows.size()<3?0:rows[2].amountCents) && money(p.subtotalCents);
+    }
+    function pr_publicAllocation(c,n) { return {'caseId':c.allocations[n].caseId,'amountCents':c.allocations[n].amountCents}; }
+    function pr_publicAllocations(c) {
+      return [pr_publicAllocation(c,0)]
+        .concat(c.allocations.size()>1?[pr_publicAllocation(c,1)]:[]).concat(c.allocations.size()>2?[pr_publicAllocation(c,2)]:[])
+        .concat(c.allocations.size()>3?[pr_publicAllocation(c,3)]:[]).concat(c.allocations.size()>4?[pr_publicAllocation(c,4)]:[])
+        .concat(c.allocations.size()>5?[pr_publicAllocation(c,5)]:[]).concat(c.allocations.size()>6?[pr_publicAllocation(c,6)]:[])
+        .concat(c.allocations.size()>7?[pr_publicAllocation(c,7)]:[]);
+    }
+    function pr_labPayment(r,id) {
+      let c=pr_command(id); let receipt=getAfter(anyPath('prostheticOperations',id)).data;
+      return exact(r,['schemaVersion','clinicId','receiptId','labId','amountCents','date','note','createdAt','actorUid','paymentMethod','allocations'])
+        && r.schemaVersion is int && r.schemaVersion==1 && r.clinicId=='main' && r.receiptId==id && pr_fresh(id)
+        && c.action=='lab-payment' && r.labId==c.labId && r.amountCents==receipt.totalAllocatedCents
+        && r.date==c.date && r.note==c.note && r.createdAt==c.createdAt && r.actorUid==request.auth.uid && r.paymentMethod=='cash'
+        && r.allocations==pr_publicAllocations(c);
+    }
+    match /clinics/main/labCases/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery();
+      allow create,update: if owner() && pr_caseWrite(resource,request.resource.data,id);
+      allow delete: if false;
+    }
+    match /clinics/main/labAccounts/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery();
+      allow create,update: if owner() && pr_labAccountWrite(resource,request.resource.data,id);
+      allow delete: if false;
+    }
+    match /clinics/main/labPayments/{id} {
+      allow get: if owner() && uuid(id);
+      allow list: if owner() && boundedQuery();
+      allow create: if owner() && uuid(id) && pr_labPayment(request.resource.data,id);
+      allow update,delete: if false;
+    }
+    match /clinics/main/prostheticOperations/{id} {
+      allow get: if owner() && uuid(id);
+      allow create: if owner() && pr_receipt(request.resource.data,id);
+      allow list,update,delete: if false;
+    }
+    match /clinics/main/prostheticPaymentProofs/{id} {
+      allow get: if owner() && id.matches('[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[0-2]');
+      allow create: if owner() && pr_proof(request.resource.data,id);
+      allow list,update,delete: if false;
+    }

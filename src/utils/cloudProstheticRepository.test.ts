@@ -6,6 +6,7 @@ import { createCloudClinicalRepository } from './cloudClinicalRepository';
 import { CloudProstheticError, createCloudProstheticRepository, prepareCloudProstheticCommand, prepareCloudProstheticPageInput,
   parseCloudProstheticCase, parseCloudLabAccount, parseCloudLabPayment, parseCloudProstheticCommit, projectCloudProstheticFinancials, MAX_CLOUD_LAB_PAYMENT_ALLOCATIONS,
   type CloudProstheticAdapter, type CloudProstheticCommand } from './cloudProstheticRepository';
+import { cloudProstheticPaymentProofPath } from './cloudProstheticRepository';
 
 // Fabricated atomic adapter only. Never touches a browser or Firebase project.
 const OWNER = 'synthetic-prosthetic-owner';
@@ -78,6 +79,43 @@ function harness() {
 test('prosthetic construction is inert; absent lab account is unknown, not invented zero', async () => {
   const h = harness(); assert.deepEqual(h.calls, []); assert.equal(await h.repo.getLabAccount(LAB), null);
   assert.equal(await h.repo.getLabSummary({ labId: LAB, month: '2026-10' }), null); assert.equal(h.writes(), 0);
+});
+test('eight-case supplier payment retains capacity and atomically writes three bounded immutable witnesses', async () => {
+  const h = harness(), caseIds: string[] = [];
+  for (let index = 0; index < 8; index++) {
+    const operationId = `30000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`; caseIds.push(operationId);
+    await h.repo.commit(create({ operationId, expectedLabAccountRevision: index, expectedPatientRevision: index, paidCents: 0 }));
+  }
+  const command = payment({ expectedLabAccountRevision: 8, allocations: caseIds.map(caseId => ({ caseId, expectedRevision: 1, amountCents: 100 })) });
+  await h.repo.commit(command);
+  const receipt = h.docs.get(path('prostheticOperations', OP2));
+  assert.equal(receipt.validationVersion, 2); assert.equal(receipt.totalAllocatedCents, 800);
+  assert.deepEqual([0, 1, 2].map(index => h.docs.get(cloudProstheticPaymentProofPath(OP2, index)).rows.length), [3, 3, 2]);
+  assert.deepEqual([0, 1, 2].flatMap(index => h.docs.get(cloudProstheticPaymentProofPath(OP2, index)).caseIds), caseIds);
+  assert.equal((await h.repo.getLabSummary({ labId: LAB, month: '2026-10' }))?.paidCostCents, 800);
+  const before = structuredClone([...h.docs]); await h.repo.commit(command); assert.deepEqual([...h.docs], before);
+});
+test('legacy operation receipt acknowledges historically without current settings or new witnesses', async () => {
+  const h = harness(), command = create(); await h.repo.commit(command);
+  const receipt = h.docs.get(path('prostheticOperations', OP));
+  for (const key of ['validationVersion', 'serviceIndex', 'routeIndex', 'materialIndex', 'totalAllocatedCents']) delete receipt[key];
+  h.docs.delete(path('settings', 'serviceCatalog')); h.docs.delete(path('labDefinitions'));
+  h.calls.length = 0; assert.equal((await h.core.commit(command)).status, 'already-committed');
+  assert.deepEqual(h.calls.filter(call => call.startsWith('get:')).map(call => call.split('/').at(-2)), ['prostheticOperations', 'operationIntents']);
+});
+test('new indexed create receipt captures authoritative positions without changing public case or command hash', async () => {
+  const h = harness(), command = create(); await h.repo.commit(command);
+  const receipt = h.docs.get(path('prostheticOperations', OP));
+  assert.deepEqual([receipt.serviceIndex, receipt.routeIndex, receipt.materialIndex], [0, 0, 0]);
+  assert.equal(receipt.requestHash, await digest(JSON.stringify([OWNER, prepareCloudProstheticCommand(command)])));
+  assert.doesNotMatch(JSON.stringify(h.docs.get(path('labCases', OP))), /validationVersion|serviceIndex|totalAllocatedCents/);
+  receipt.materialIndex = 100; await assert.rejects(h.repo.commit(command), code('conflict'));
+});
+test('pre-existing supplier payment witness fails closed with no partial ledger movement', async () => {
+  const h = harness(); await h.repo.commit(create());
+  h.docs.set(cloudProstheticPaymentProofPath(OP2, 0), { unrelated: true });
+  const before = structuredClone([...h.docs]); await assert.rejects(h.repo.commit(payment()), code('conflict'));
+  assert.deepEqual([...h.docs].filter(([key]) => !key.includes('/operationIntents/')), before.filter(([key]) => !key.includes('/operationIntents/')));
 });
 test('one order atomically writes linked patient debt, actual receipt, private cost and recovery receipt', async () => {
   const h = harness(), result = await h.repo.commit(create());

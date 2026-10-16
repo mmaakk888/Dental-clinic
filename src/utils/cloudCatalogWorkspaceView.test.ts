@@ -348,3 +348,14 @@ test('view has explicit examination and selected-service saves, and refuses mixe
   assert.equal(view.button('حفظ الخدمة المحددة').props.disabled, false);
   assert.equal(view.button('حفظ قيمة الكشف').props.disabled, true);
 });
+
+test('temporary checking rejects retained catalog actions and preserves the raw editor for the same lease', () => {
+  const h = harness(), memory = slots(), props = { controller: h.controller, onClose() {} };
+  const old = invoke(CloudServiceCatalogWorkspace, props, memory).props;
+  invoke(CloudServiceCatalogWorkspace, { ...props, disabled: true }, memory);
+  old.onLoad(); old.onBeginEdit(); old.onHistoryLoad(); old.onHistoryMore(); assert.deepEqual(h.calls, []);
+  const enabled = invoke(CloudServiceCatalogWorkspace, props, memory).props; enabled.onBeginEdit();
+  const edited = invoke(CloudServiceCatalogWorkspace, props, memory).props, before = h.calls.length;
+  invoke(CloudServiceCatalogWorkspace, { ...props, disabled: true }, memory); edited.onSave(edited.editor); edited.onCancelEditor(edited.editor);
+  assert.equal(h.calls.length, before); assert.ok(h.controller.getState().draft); assert.equal(h.controller.getState().closed, false);
+});

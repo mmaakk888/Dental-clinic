@@ -44,6 +44,7 @@ async function harness(options: Options = {}) {
   const rows = new Map<string, any>(), active = { value: true };
   const rawAdapters: { expenses?: any; journal?: any } = {};
   let copy!: (value: unknown) => any;
+  class SyntheticBytes { constructor(readonly value: string) {} static fromBase64String(value: string) { return new SyntheticBytes(value); } toBase64() { return this.value; } }
   const step = (boundary: Boundary) => {
     calls.push(boundary);
     if (options.stopAt === boundary) active.value = false;
@@ -81,6 +82,7 @@ async function harness(options: Options = {}) {
         },
       };
       if (name === 'firebase/firestore/lite') return {
+        Bytes: SyntheticBytes,
         getFirestore: (app: unknown, databaseId: string) => {
           assert.equal(app, auth.app); assert.equal(databaseId, '(default)'); step('database'); return 'synthetic-expense-db';
         },
@@ -137,7 +139,7 @@ async function harness(options: Options = {}) {
         runTransaction: async (db: unknown, work: any, settings: any) => {
           assert.equal(db, 'synthetic-expense-db'); assert.equal(settings.maxAttempts, 5); step('transaction-start');
           const attempt = async (publish: boolean) => {
-            const staged = new Map(rows); let wrote = false;
+            const staged = new Map(rows); let wrote = false, domainWrite = false;
             const result = await work({
               get: async (key: string) => {
                 assert.equal(wrote, false, 'all reads precede writes'); calls.push(`get:${key}`); step('transaction-read');
@@ -145,15 +147,15 @@ async function harness(options: Options = {}) {
               },
               set: (key: string, value: unknown) => {
                 wrote = true; if (options.denyWrite) throw new Error('PRIVATE_SDK_WRITE_DENIED');
-                calls.push(`set:${key}`); staged.set(key, value); step('transaction-write');
+                calls.push(`set:${key}`); staged.set(key, value); domainWrite ||= key.includes('/expenseRecords/'); step('transaction-write');
               },
             });
-            if (publish) { rows.clear(); for (const [key, value] of staged) rows.set(key, value); }
+            if (publish) { rows.clear(); for (const [key, value] of staged) rows.set(key, value);
+              if (options.lostReply && domainWrite) { options.lostReply = false; throw new Error('PRIVATE_SDK_LOST_REPLY'); } }
             return result;
           };
           if (options.retryOnce) { options.retryOnce = false; await attempt(false); }
           const result = await attempt(true); step('transaction-ack');
-          if (options.lostReply) { options.lostReply = false; throw new Error('PRIVATE_SDK_LOST_REPLY'); }
           return result;
         },
       };
@@ -196,13 +198,14 @@ test('expense factory requires exact operating app/project/domain/loopback/lifet
 test('empty expense/material read null; never invent stock or cash', async () => {
   const h = await harness(), service = await capability(h); assert.equal(await service.repository.get(ID), null);
   assert.equal(await service.repository.getMaterial('a'.repeat(64)), null); assert.equal(h.rows.size, 0);
-  assert.equal(h.calls.filter(value => value === 'token').length, 8);
+  assert.equal(h.calls.filter(value => value === 'token').length, 11);
 });
 test('actual expense/journal core requires prepared intent and atomically preserves charge separate from cash', async () => {
   const h = await harness(), service = await capability(h);
   await assert.rejects(service.repository.commit(h.payload), failed); assert.equal(h.rows.size, 0);
   await service.journal.prepare('expense', h.payload, WHEN); assert.equal((await service.repository.commit(h.payload)).status, 'committed');
-  assert.deepEqual([...h.rows.keys()].sort(), [RECORD, path('expenseOperations'), path('operationIntents')].sort());
+  assert.deepEqual([...h.rows.keys()].sort(), [RECORD, path('expenseOperations'), path('operationIntents'),
+    `clinics/main/expenseInventoryProofs/${OP}-header-0`, `clinics/main/expenseInventoryProofs/${OP}-header-1`].sort());
   const record = await service.repository.get(ID); assert.equal(record.paidCents, 0); assert.equal(record.data.totalCents, 10000);
   const writes = h.calls.filter(value => value.startsWith('set:')).length;
   assert.equal((await service.repository.commit(h.payload)).status, 'already-committed');
@@ -226,7 +229,7 @@ test('supplier reservation and material purchases remain within explicit scoped 
   const u = h.copy({ action: 'usage', operationId: OP2, createdAt: WHEN, materialId: materials.records[0].recordId, expectedRevision: 1,
     quantityMilli: 1000, kind: 'used', date: DATE, note: '' }); await service.journal.prepare('expense', u, WHEN); await service.repository.commit(u);
   assert.equal((await service.repository.listUsagesPage(u.materialId)).records[0].costCents, 5000);
-  assert.ok(h.calls.filter(value => value.startsWith('set:')).every(value => /expenseRecords|expenseOperations|operationIntents|supplierInvoiceReservations|materialBalances|materialUsages/.test(value)));
+  assert.ok(h.calls.filter(value => value.startsWith('set:')).every(value => /expenseRecords|expenseOperations|operationIntents|supplierInvoiceReservations|materialBalances|materialUsages|expenseInventoryProofs/.test(value)));
 });
 test('invoice image bytes separate from journal; on-demand read and no image list query', async () => {
   const h = await harness(), service = await prepared(h); await service.repository.commit(h.payload);

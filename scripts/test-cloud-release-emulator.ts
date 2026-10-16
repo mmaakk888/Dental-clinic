@@ -1,7 +1,9 @@
 /** Combined release Rules-engine runner, DEMO namespace only. Never imports IAM
  * or production helpers. Explicit invocation, loopback endpoint, fabricated
  * Auth and records; every reset is hardcoded to this disposable project.
- * pnpm exec tsx scripts/test-cloud-release-emulator.ts --demo-emulator [domain]
+ * pnpm exec tsx scripts/test-cloud-release-emulator.ts --demo-emulator [domain|all]
+ * Add --plan-only to validate captured synthetic transaction plans without
+ * contacting/resetting the emulator or claiming Rules-engine acceptance.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,6 +19,7 @@ import { createCloudClinicalRepository } from '../src/utils/cloudClinicalReposit
 import { createCloudAppointmentRepository } from '../src/utils/cloudAppointmentRepository';
 import { createCloudExpenseRepository } from '../src/utils/cloudExpenseRepository';
 import { createCloudClinicSettingsRepository } from '../src/utils/cloudClinicSettingsRepository';
+import { createCloudInitialClinicSettings } from '../src/utils/cloudInitialClinicSettings';
 import { createCloudProstheticRepository } from '../src/utils/cloudProstheticRepository';
 
 const PROJECT = 'demo-clinic-release-rules', BASE = 'http://127.0.0.1:8789';
@@ -68,14 +71,16 @@ function client(auth: typeof token | null = token) {
   connectFirestoreEmulator(database, '127.0.0.1', 8789, mockUserToken ? { mockUserToken } : undefined);
   return { app, database };
 }
+type TransactionStep = { before: Map<string, any>; writes: Map<string, any> };
 type Scenario = { name: string; kind: CloudOperationKind; command: any; before: Map<string, any>; after: Map<string, any>; writes: Map<string, any>;
-  preparationBefore?: Map<string, any>; preparations?: Map<string, any> };
-function memory(rows: Map<string, any>) {
+  preparationBefore?: Map<string, any>; preparations?: Map<string, any>; expensePreparations?: TransactionStep[] };
+function memory(rows: Map<string, any>, steps?: TransactionStep[]) {
   const adapter: any = { authorizeOwner: async () => UID,
-    runTransaction: async (work: any) => { const staged = structuredClone(rows); const result = await work({
-      get: async (key: string) => structuredClone(staged.get(key) ?? null), set: (key: string, data: object) => staged.set(key, structuredClone(data)),
-      delete: (key: string) => staged.delete(key),
-    }); rows.clear(); staged.forEach((data, key) => rows.set(key, data)); return result; } };
+    runTransaction: async (work: any) => { const before = structuredClone(rows), staged = structuredClone(rows), writes = new Map<string, any>(); const result = await work({
+      get: async (key: string) => structuredClone(staged.get(key) ?? null), set: (key: string, data: object) => { staged.set(key, structuredClone(data)); writes.set(key, structuredClone(data)); },
+      delete: (key: string) => { staged.delete(key); writes.set(key, null); },
+    }); rows.clear(); staged.forEach((data, key) => rows.set(key, data));
+      if (writes.size) steps?.push({ before, writes }); return result; } };
   return adapter;
 }
 const domain = (kind: CloudOperationKind, adapter: any): any => ({ 'patient-profile': createJournaledCloudPatientRepository,
@@ -83,9 +88,25 @@ const domain = (kind: CloudOperationKind, adapter: any): any => ({ 'patient-prof
   appointment: createCloudAppointmentRepository, expense: createCloudExpenseRepository, settings: createCloudClinicSettingsRepository,
   prosthetic: createCloudProstheticRepository })[kind](adapter, { digest, digestBytes });
 async function scenario(name: string, kind: CloudOperationKind, command: any, initial = seedBase(), image?: string): Promise<Scenario> {
-  const rows = structuredClone(initial), adapter = memory(rows), journal = createCloudOperationIntentRepository(adapter, { digest });
+  const rows = structuredClone(initial), steps: TransactionStep[] = [], adapter = memory(rows, steps), journal = createCloudOperationIntentRepository(adapter, { digest });
   await journal.prepare(kind, command, WHEN); const before = structuredClone(rows);
+  steps.length = 0; // Journal preparation is checked separately below.
   await domain(kind, adapter).commit(command, image); const after = structuredClone(rows), writes = new Map<string, any>();
+  if (kind === 'expense') {
+    // An expense purchase can write the SAME material head more than once.
+    // A diff loses its prepared pending state and merges unrelated requests;
+    // retain the exact real repository transaction order and atomic boundary.
+    const final = steps.at(-1); assert.ok(final, `${name}: missing final expense transaction`);
+    assert.equal(final.writes.get(path('operationIntents', command.operationId))?.status, 'committed');
+    assert.ok(final.writes.has(path('expenseOperations', command.operationId)));
+    const expensePreparations = steps.slice(0, -1);
+    for (const step of expensePreparations) for (const [key, value] of step.writes) {
+      assert.ok(value !== null && (key.includes('/expenseInventoryProofs/') || key.includes('/materialBalances/')),
+        `${name}: a preparation must not write clinical, cash, invoice or committed journal records`);
+    }
+    return { name, kind, command, before: final.before, after, writes: final.writes,
+      preparationBefore: before, expensePreparations };
+  }
   for (const [key, value] of after) if (JSON.stringify(value) !== JSON.stringify(before.get(key))) writes.set(key, value);
   for (const key of before.keys()) if (!after.has(key)) writes.set(key, null);
   // Validation proofs are separate durable preparation requests, never a
@@ -95,6 +116,24 @@ async function scenario(name: string, kind: CloudOperationKind, command: any, in
   const preparationBefore = preparations.size ? structuredClone(before) : undefined;
   for (const [key, value] of preparations) { before.set(key, value); writes.delete(key); }
   return { name, kind, command, before, after, writes, preparationBefore, preparations };
+}
+function validateExpensePlan(s: Scenario) {
+  if (s.kind !== 'expense') return;
+  if (s.command.action === 'create') {
+    assert.ok(s.expensePreparations!.length > 0, `${s.name}: purchase preparations cannot collapse into the final commit`);
+    assert.ok([...s.writes.keys()].every(key => !key.includes('/expenseInventoryProofs/') && !key.includes('/materialBalances/')),
+      `${s.name}: final purchase commit must not merge staged proofs/material heads`);
+  }
+  const canonical = (rows: Map<string, any>) => JSON.stringify([...rows].sort(([a], [b]) => a.localeCompare(b)));
+  const replay = structuredClone(s.preparationBefore!);
+  const apply = (writes: Map<string, any>) => { for (const [key, value] of writes) value === null ? replay.delete(key) : replay.set(key, structuredClone(value)); };
+  for (const step of s.expensePreparations!) {
+    assert.equal(canonical(replay), canonical(step.before), `${s.name}: preparation order/snapshot changed`);
+    apply(step.writes);
+  }
+  assert.equal(canonical(replay), canonical(s.before), `${s.name}: final transaction must see every completed preparation`);
+  apply(s.writes);
+  assert.equal(canonical(replay), canonical(s.after), `${s.name}: exact final transaction differs from the repository outcome`);
 }
 const scenarios: Scenario[] = [];
 async function collect() {
@@ -243,19 +282,41 @@ async function appointmentTransactionAcceptance(initial:Scenario) {
   }finally{await deleteApp(app);}
 }
 async function readerQueryAcceptance(state:Map<string,any>) {
-  const cases:[string,boolean,(db:ReturnType<typeof getFirestore>)=>Promise<unknown>][]=[];
-  for(const name of ['patientProfiles','patientFiles','patientAccounts','patientSessions','patientReceipts','contactRecords','appointmentRecords','appointmentDays']){
+  // The fixed-readTime REST reader uses runQuery even for singletons. A get
+  // rule alone is insufficient: test the actual bounded list query shape.
+  const readerState=structuredClone(state);
+  readerState.set(path('settings','serviceCatalog'),envelope('serviceCatalog',{examinationCents:10000,services:[]}));
+  readerState.set(path('settings','clinicSettings'),envelope('clinicSettings',createCloudInitialClinicSettings()));
+  readerState.set(path('settings','prostheticRouting'),envelope('prostheticRouting',{routes:[]}));
+  readerState.set(path('settings','clinicLogo'),envelope('clinicLogo',null));
+  const cases:[string,boolean,(db:ReturnType<typeof getFirestore>)=>Promise<unknown>,(typeof token|null)?][]=[];
+  for(const name of ['patientProfiles','patientFiles','patientAccounts','patientSessions','patientReceipts','contactRecords','appointmentRecords','appointmentDays',
+    'labDefinitions','labCases','labAccounts','labPayments','expenseRecords','expensePayments','materialBalances','materialUsages']){
     cases.push([`${name}:bounded-whole-snapshot`,true,db=>getDocs(query(collection(db,`clinics/main/${name}`),orderBy(documentId()),limit(50)))]);
     cases.push([`${name}:unbounded-denied`,false,db=>getDocs(query(collection(db,`clinics/main/${name}`),orderBy(documentId())))]);
   }
   cases.push(['catalog:exact-ID-query',true,db=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==','serviceCatalog'),orderBy(documentId()),limit(1)))]);
+  for(const name of ['clinicSettings','prostheticRouting']){
+    const exact=(db:ReturnType<typeof getFirestore>)=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==',name),orderBy(documentId()),limit(1)));
+    cases.push([`${name}:exact-ID-query`,true,async db=>{const result=await exact(db);assert.equal(result.size,1);assert.equal(result.docs[0].id,name);return result;}]);
+    cases.push([`${name}:exact-ID-unbounded-denied`,false,db=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==',name),orderBy(documentId())))]);
+    cases.push([`${name}:exact-ID-limit2-denied`,false,db=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==',name),orderBy(documentId()),limit(2)))]);
+    cases.push([`${name}:anonymous-denied`,false,exact,null]);
+    const secretary=structuredClone(token);secretary.token.dentalClinicRole='secretary';
+    cases.push([`${name}:secretary-denied`,false,exact,secretary]);
+    const unverified=structuredClone(token);unverified.token.email_verified=false;
+    cases.push([`${name}:unverified-denied`,false,exact,unverified]);
+  }
+  for(const name of ['clinicLogo','unknownSetting'])cases.push([`${name}:list-not-exposed`,false,
+    db=>getDocs(query(collection(db,'clinics/main/settings'),where(documentId(),'==',name),orderBy(documentId()),limit(1)))]);
   cases.push(['counter:exact-ID-query',true,db=>getDocs(query(collection(db,'clinics/main/counters'),where(documentId(),'==','patientFiles'),orderBy(documentId()),limit(1)))]);
   cases.push(['settings:unfiltered-denied',false,db=>getDocs(query(collection(db,'clinics/main/settings'),limit(1)))]);
   cases.push(['counter:unfiltered-denied',false,db=>getDocs(query(collection(db,'clinics/main/counters'),limit(1)))]);
   cases.push(['appointment:date-filtered-page',true,db=>getDocs(query(collection(db,'clinics/main/appointmentRecords'),where('data.date','==',DAY),orderBy(documentId()),limit(50)))]);
-  for(const name of ['operationIntents','patientOperations','clinicalOperations','clinicalSessionProofs','invoiceImages'])
+  for(const name of ['operationIntents','patientOperations','clinicalOperations','clinicalSessionProofs','invoiceImages',
+    'expenseOperations','expenseInventoryProofs','supplierInvoiceReservations','settingsOperations','settingsValidationProofs','prostheticOperations','prostheticPaymentProofs'])
     cases.push([`${name}:private-unfiltered-denied`,false,db=>getDocs(query(collection(db,`clinics/main/${name}`),limit(50)))]);
-  for(const [name,expected,run]of cases){await seed(state);const {app,database}=client();let actual=false;
+  for(const [name,expected,run,auth]of cases){await seed(readerState);const {app,database}=client(auth===undefined?token:auth);let actual=false;
     try{await run(database);actual=true;}catch(error:any){if(error?.code!=='permission-denied')throw error;}finally{await deleteApp(app);}
     results.push({name:`reader:${name}`,expected,actual});if(actual!==expected)console.log(JSON.stringify({name:`reader:${name}`,expected,actual}));
   }
@@ -288,12 +349,41 @@ async function patientImportTransactionAcceptance(initial:Scenario){
   }finally{await deleteApp(app);}
 }
 try {
-  await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.release.rules', content: readFileSync('firestore.release.rules', 'utf8') }] } });
-  await collect(); const selected = process.argv[3] ? scenarios.filter(s => s.kind === process.argv[3] || s.name === process.argv[3]) : scenarios;
+  await collect(); const selection = process.argv[3] === '--plan-only' ? undefined : process.argv[3];
+  const selected = selection && selection !== 'all' ? scenarios.filter(s => s.kind === selection || s.name === selection) : scenarios;
   if (!selected.length) throw new Error('Unknown selected DEMO domain/case.');
+  for (const s of selected) validateExpensePlan(s);
+  if (process.argv.includes('--plan-only')) {
+    console.log(JSON.stringify({ target: 'synthetic-memory-only', scenarios: selected.length,
+      expensePreparationRequests: selected.reduce((sum, s) => sum + (s.expensePreparations?.length ?? 0), 0),
+      testedDomains: [...new Set(selected.map(s => s.kind))], emulatorRequests: 0, rulesEngineAccepted: false, completeRelease: false }));
+  } else {
+  await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.release.rules', content: readFileSync('firestore.release.rules', 'utf8') }] } });
   for (const s of selected) {
     await check(`${s.name}:prepared-journal-create`, true, new Map([...(s.preparationBefore ?? s.before)].filter(([key]) => key !== path('operationIntents', s.command.operationId))),
       new Map([[path('operationIntents', s.command.operationId), s.before.get(path('operationIntents', s.command.operationId))]]));
+    for (const [index, step] of (s.expensePreparations ?? []).entries()) {
+      const label = `${s.name}:expense-preparation-${index}`;
+      await check(`${label}:complete-original-transaction`, true, step.before, step.writes);
+      await check(`${label}:anonymous-denied`, false, step.before, step.writes, null);
+      const secretary = structuredClone(token); secretary.token.dentalClinicRole = 'secretary';
+      await check(`${label}:secretary-denied`, false, step.before, step.writes, secretary);
+      const unverified = structuredClone(token); unverified.token.email_verified = false;
+      await check(`${label}:unverified-denied`, false, step.before, step.writes, unverified);
+      for (const key of step.writes.keys()) {
+        if (step.writes.size > 1) {
+          const partial = structuredClone(step.writes); partial.delete(key);
+          await check(`${label}:missing-${key.split('/').at(-2)}`, false, step.before, partial);
+        }
+        const extra = structuredClone(step.writes); extra.get(key).extra = 'tampered';
+        await check(`${label}:extra-${key.split('/').at(-2)}`, false, step.before, extra);
+      }
+      const missing = structuredClone(step.before); missing.delete(path('operationIntents', s.command.operationId));
+      await check(`${label}:missing-prepared-intent`, false, missing, step.writes);
+      const cancelled = structuredClone(step.before), intent = cancelled.get(path('operationIntents', s.command.operationId));
+      intent.status = 'cancelled'; intent.revision = 2;
+      await check(`${label}:cancelled-intent`, false, cancelled, step.writes);
+    }
     const preparedState = s.preparationBefore && structuredClone(s.preparationBefore);
     if (preparedState && s.preparations) for (const [key, value] of s.preparations) {
       await check(`${s.name}:prepare-service-chunk-${value.level}-${value.index}`, true, preparedState, new Map([[key,value]]));
@@ -389,4 +479,5 @@ try {
   console.log(JSON.stringify({ target: '127.0.0.1:8789 DEMO-only', rulesEngineCases: results.length, passed: results.length - failed.length, failed,
     testedDomains: [...new Set(selected.map(s => s.kind))], completeRelease: false }));
   if (failed.length) process.exitCode = 1;
+  }
 } catch (error: any) { console.error(JSON.stringify({ status: 'release-demo-incomplete', detail: String(error?.message ?? 'unknown').slice(0, 2000) })); process.exitCode = 1; }

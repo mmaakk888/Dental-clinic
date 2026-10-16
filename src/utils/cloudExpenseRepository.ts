@@ -2,7 +2,7 @@ import { CloudOperationIntentError, readCloudOperationIntentForCommit,
   markCloudOperationIntentCommitted } from './cloudOperationIntent';
 import { parseCloudOperationIntent } from './cloudOperationIntent';
 import { buildExpenseInventoryProofs, cloudMaterialIdentityV2, cloudSupplierInvoiceIdentityV2,
-  expenseProofId, expenseRatioProof, verifyExpenseRatioProof,
+  expenseProofId, expenseRatioProof,
   type CloudExpenseInventoryProof, type CloudExpenseRatioProof } from './cloudExpenseInventoryProofs';
 
 /** Pure owner-only expenses/inventory contract. Amounts are piastres, physical
@@ -52,7 +52,7 @@ export interface CloudMaterialBalance {
 }
 export interface CloudMaterialHead {
   schemaVersion: 2; clinicId: 'main'; recordId: string; base: CloudMaterialBalance | null;
-  pending: null | { operationId: string; indexes: number[]; candidate: CloudMaterialBalance };
+  pending: null | { operationId: string; indexes: number[]; lastProofRank: number; candidate: CloudMaterialBalance };
 }
 export interface CloudExpensePayment {
   schemaVersion: 1; clinicId: 'main'; recordId: string; expenseId: string; amountCents: number;
@@ -110,6 +110,17 @@ function optionalFields(value: unknown, required: readonly string[], optional: r
   if (!value || typeof value !== 'object') invalid();
   const extra = optional.filter(key => Object.prototype.hasOwnProperty.call(value, key));
   return fields(value, [...required, ...extra]);
+}
+/** Firestore map ordering is unspecified. Compare detached JSON values by
+ * their exact key sets, never by insertion order or coercion. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (!Array.isArray(a) && (![Object.prototype, null].includes(Object.getPrototypeOf(a)) || ![Object.prototype, null].includes(Object.getPrototypeOf(b)))) return false;
+  const ak = Reflect.ownKeys(a), bk = Reflect.ownKeys(b);
+  if (ak.length !== bk.length || ak.some(key => typeof key !== 'string' || !bk.includes(key))) return false;
+  return ak.every(key => { const av = Object.getOwnPropertyDescriptor(a, key), bv = Object.getOwnPropertyDescriptor(b, key);
+    return !!av && !!bv && 'value' in av && 'value' in bv && av.enumerable === bv.enumerable && sameValue(av.value, bv.value); });
 }
 const uuid = (value: unknown): value is string => typeof value === 'string' && value.length === 36 && UUID.test(value);
 const hash = (value: unknown): value is string => typeof value === 'string' && value.length === 64 && HASH.test(value);
@@ -230,12 +241,12 @@ export function parseCloudMaterialHead(value: unknown): CloudMaterialHead | Clou
     if (row.clinicId !== 'main' || !hash(row.recordId)) invalid();
     const base = row.base === null ? null : parseCloudMaterialBalance(row.base);
     if (base && (base.recordId !== row.recordId || base.identityVersion !== 2)) invalid();
-    const pending = row.pending === null ? null : fields(row.pending, ['operationId', 'indexes', 'candidate']);
+    const pending = row.pending === null ? null : fields(row.pending, ['operationId', 'indexes', 'lastProofRank', 'candidate']);
     if (!base && !pending) invalid();
     if (pending) {
       const indexes = array(pending.indexes, 20, value => { if (!integer(value, 0, 19)) invalid(); return value; });
       const candidate = parseCloudMaterialBalance(pending.candidate);
-      if (!uuid(pending.operationId) || !indexes.length || new Set(indexes).size !== indexes.length
+      if (!uuid(pending.operationId) || !integer(pending.lastProofRank, 0, 19) || !indexes.length || new Set(indexes).size !== indexes.length
         || candidate.recordId !== row.recordId || candidate.identityVersion !== 2
         || candidate.revision !== (base?.revision ?? 0) + 1 || candidate.lastOperationId !== pending.operationId
         || base && (candidate.name !== base.name || candidate.unit !== base.unit || candidate.usedMilli !== base.usedMilli
@@ -309,7 +320,8 @@ async function sha256Bytes(bytes: Uint8Array): Promise<string> {
 }
 const normalize = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('ar-EG')
   .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ');
-/** This is a deterministic material identity, not secrecy/anonymization. */
+/** Historical v1 identity for unchanged reads/replay, not new purchases.
+ * New writes deliberately use cloudMaterialIdV2; neither hash is secrecy. */
 export async function cloudMaterialId(name: string, unit: string, options: CloudExpenseOptions = {}): Promise<string> {
   try { if (!text(name, 200) || !name || !text(unit, 40) || !unit) invalid();
     const result = await (options.digest ?? (value => sha256Bytes(new TextEncoder().encode(value))))(JSON.stringify(['clinic-material-v1', normalize(name), normalize(unit)]));
@@ -335,12 +347,21 @@ export function parseCloudExpenseOperation(value: unknown): CloudExpenseOperatio
     || !integer(row.expectedRevision, row.action === 'create' ? 0 : 1, REVISION - 1)
     || row.resultRevision !== row.expectedRevision + 1 || !timestamp(row.createdAt) || !hash(row.requestHash)
     || ('inventoryVersion' in row) !== ('usageMath' in row) || 'inventoryVersion' in row && row.inventoryVersion !== 2
-    || row.usageMath !== undefined && row.usageMath !== null && row.action !== 'usage') invalid();
+    || 'inventoryVersion' in row && ((row.action === 'usage') !== (row.usageMath !== null))) invalid();
   if (row.usageMath !== undefined && row.usageMath !== null) {
-    const math = fields(row.usageMath, ['quotient', 'remainder', 'product']);
-    if (!integer(math.quotient) || !integer(math.remainder)) invalid();
+    const math = fields(row.usageMath, ['quotient', 'remainder', 'right', 'denominator', 'product', 'productCarry', 'quotientCarry', 'operands']);
+    if (!integer(math.quotient) || !integer(math.remainder) || !integer(math.right) || !integer(math.denominator,1)) invalid();
     array(math.product, 5, value => { if (!integer(value, 0, 999999)) invalid(); return value; });
     if (math.product.length !== 5) invalid();
+    for (const key of ['productCarry', 'quotientCarry']) {
+      array(math[key], 4, value => { if (!integer(value, 0, 2_000_000)) invalid(); return value; });
+      if (math[key].length !== 4) invalid();
+    }
+    const operands = fields(math.operands, ['a', 'b', 'q', 'd', 'r']);
+    for (const key of ['a', 'b', 'q', 'd', 'r']) {
+      const digits = array(operands[key], 3, value => { if (!integer(value, 0, 999999)) invalid(); return value; });
+      if (digits.length !== 3) invalid();
+    }
   }
   return row as CloudExpenseOperation;
 }
@@ -395,7 +416,7 @@ function allocatedCosts(data: CloudExpenseData): number[] {
   const values = data.items.map((row, index) => ({ index, id: row.itemId,
     cost: Number(BigInt(row.totalCents) * total / subtotal), remainder: BigInt(row.totalCents) * total % subtotal }));
   let remaining = data.totalCents - values.reduce((sum, row) => sum + row.cost, 0);
-  const ranked = [...values].sort((a, b) => a.remainder === b.remainder ? a.id.localeCompare(b.id) : a.remainder > b.remainder ? -1 : 1);
+  const ranked = [...values].sort((a, b) => a.remainder === b.remainder ? a.id < b.id ? -1 : 1 : a.remainder > b.remainder ? -1 : 1);
   for (const row of ranked) { if (remaining-- <= 0) break; row.cost++; }
   return values.map(row => row.cost);
 }
@@ -404,6 +425,10 @@ export function createCloudExpenseRepository(adapter: CloudExpenseAdapter, optio
   const digest = options.digest ?? (value => digestBytes(new TextEncoder().encode(value)));
   const authorize = async () => { const uid = await adapter.authorizeOwner(); if (!actor(uid)) invalid(); return uid; };
   const reauthorize = async (uid: string) => { if (await authorize() !== uid) unavailable(); };
+  const privateRead = async (uid: string, collection: 'expenseOperations' | 'operationIntents', id: string) => {
+    if (!adapter.readRecord) unavailable();
+    await reauthorize(uid); const value = await adapter.readRecord(path(collection, id)); await reauthorize(uid); return value;
+  };
   const read = async <T>(collection: string, id: string, parse: (raw: unknown) => T): Promise<T | null> => {
     if (collection === 'materialBalances' ? !hash(id) : !uuid(id)) invalid();
     const uid = await authorize(); if (!adapter.readRecord) unavailable();
@@ -428,8 +453,10 @@ export function createCloudExpenseRepository(adapter: CloudExpenseAdapter, optio
   return {
     async get(recordId: string): Promise<CloudExpenseRecord | null> { try { return await read('expenseRecords', recordId, parseCloudExpenseRecord); } catch (error) { throw safeError(error); } },
     async getMaterial(materialId: string): Promise<CloudMaterialBalance | null> {
-      try { const uid = await authorize(), result = await read('materialBalances', materialId, parseCloudMaterialBalance);
-        if (result && await cloudMaterialId(result.name, result.unit, { digest }) !== materialId) invalid();
+      try { const uid = await authorize(), raw = await read('materialBalances', materialId, parseCloudMaterialHead);
+        const result = raw === null ? null : await resolveCloudMaterialHead(raw, (collection, id) => privateRead(uid, collection, id), { digest });
+        const fence = await read('materialBalances', materialId, parseCloudMaterialHead);
+        if (!sameValue(fence, raw)) conflict();
         await reauthorize(uid); return result; } catch (error) { throw safeError(error); }
     },
     async getInvoiceImage(expenseId: string): Promise<CloudInvoiceImage | null> {
@@ -440,14 +467,22 @@ export function createCloudExpenseRepository(adapter: CloudExpenseAdapter, optio
         for (const key of ['sha256', 'byteLength', 'width', 'height', 'contentType'] as const) if (image[key] !== expense.image![key]) invalid();
         if (await digestBytes(decodeJpeg(image.base64).bytes) !== image.sha256) invalid();
         const fence = await read('expenseRecords', expenseId, parseCloudExpenseRecord);
-        if (!fence || JSON.stringify(fence) !== JSON.stringify(expense)) conflict(); await reauthorize(uid); return image;
+        if (!fence || !sameValue(fence, expense)) conflict(); await reauthorize(uid); return image;
       } catch (error) { throw safeError(error); }
     },
     async listPage(input: CloudExpensePageInput = {}) { try { return await list('expenseRecords', null, input, parseCloudExpenseRecord); } catch (error) { throw safeError(error); } },
     async listMaterialsPage(input: CloudExpensePageInput = {}) {
-      try { const uid = await authorize(), result = await list('materialBalances', null, input, parseCloudMaterialBalance);
-        for (const row of result.records) if (await cloudMaterialId(row.name, row.unit, { digest }) !== row.recordId) invalid();
-        await reauthorize(uid); return result; } catch (error) { throw safeError(error); }
+      try { const uid = await authorize(), query = prepareCloudExpensePageInput(input), records: CloudMaterialBalance[] = [];
+        let after = query.afterId, visited = 0;
+        do {
+          const result = await list('materialBalances', null, { afterId: after, limit: query.limit - records.length }, parseCloudMaterialHead);
+          for (const head of result.records) { if (++visited > 20_000) unavailable();
+            const material = await resolveCloudMaterialHead(head, (collection, id) => privateRead(uid, collection, id), { digest });
+            if (material) records.push(material); }
+          after = result.nextAfterId;
+        } while (after !== null && records.length < query.limit);
+        await reauthorize(uid); return { records, nextAfterId: records.length === query.limit ? after : null };
+      } catch (error) { throw safeError(error); }
     },
     async listPaymentsPage(expenseId: string, input: CloudExpensePageInput = {}) { try { if (!uuid(expenseId)) invalid();
       return await list('expensePayments', expenseId, input, parseCloudExpensePayment); } catch (error) { throw safeError(error); } },
@@ -462,67 +497,221 @@ export function createCloudExpenseRepository(adapter: CloudExpenseAdapter, optio
         const requestHash = await digest(JSON.stringify(['clinic-expense-v1', uid, command])); if (!hash(requestHash)) invalid();
         await reauthorize(uid);
         const recordId = command.action === 'usage' ? command.materialId : command.recordId;
-        const receipt = { schemaVersion: 1, clinicId: 'main', operationId: command.operationId, recordId,
+        const receipt: CloudExpenseOperation = { schemaVersion: 1, clinicId: 'main', operationId: command.operationId, recordId,
           actorUid: uid, action: command.action, expectedRevision: command.expectedRevision, resultRevision: command.expectedRevision + 1,
-          createdAt: command.createdAt, requestHash };
-        const result = await adapter.runTransaction<CloudExpenseCommit>(async transaction => {
-          const checked: CloudExpenseTransaction = { get: async target => { await reauthorize(uid);
-            const result = await transaction.get(target); await reauthorize(uid); return result; }, set: (target, value) => transaction.set(target, value) };
-          const oldReceipt = await checked.get(path('expenseOperations', command.operationId));
+          createdAt: command.createdAt, requestHash, inventoryVersion: 2, usageMath: null };
+        const checkedTransaction = (transaction: CloudExpenseTransaction): CloudExpenseTransaction => ({
+          get: async target => { await reauthorize(uid); const value = await transaction.get(target); await reauthorize(uid); return value; },
+          set: (target, value) => transaction.set(target, value),
+        });
+        const historical = async (checked: CloudExpenseTransaction) => {
+          const old = await checked.get(path('expenseOperations', command.operationId));
           const intent = await readCloudOperationIntentForCommit(checked, { actorUid: uid, kind: 'expense', command }, { digest });
-          if (intent.createdAt !== command.createdAt || intent.status !== (oldReceipt === null ? 'prepared' : 'committed')) conflict();
-          if (oldReceipt !== null) { const previous = fields(oldReceipt, Object.keys(receipt));
-            if (Object.keys(receipt).some(key => previous[key] !== receipt[key as keyof typeof receipt])) conflict();
+          if (intent.createdAt !== command.createdAt || intent.status !== (old === null ? 'prepared' : 'committed')) conflict();
+          if (old !== null) {
+            const previous = parseCloudExpenseOperation(old);
+            for (const key of ['schemaVersion', 'clinicId', 'operationId', 'recordId', 'actorUid', 'action', 'expectedRevision', 'resultRevision', 'createdAt', 'requestHash'] as const)
+              if (previous[key] !== receipt[key]) conflict();
+            return { intent, acknowledged: true };
+          }
+          return { intent, acknowledged: false };
+        };
+        const prepareRatio = async (kind: 'item' | 'allocation' | 'usage', rowIndex: number, ratio: CloudExpenseRatioProof,
+          basis: { quantityMilli: number; costCents: number } | null = null) => {
+          for (const part of [0, 1, 2, 3]) await adapter.runTransaction(async transaction => {
+            const checked = checkedTransaction(transaction), { intent, acknowledged } = await historical(checked);
+            if (acknowledged) return;
+            const value = { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: intent.requestHash, createdAt: command.createdAt, kind, rowIndex, part, ratio, basis: part === 0 ? basis : null };
+            const target = path('expenseInventoryProofs', `${command.operationId}-math-${kind}-${rowIndex}-${part}`), previous = await checked.get(target);
+            if (previous !== null) { if (!sameValue(previous, value)) invalid(); return; }
+            if (part > 0 && !sameValue(await checked.get(path('expenseInventoryProofs', `${command.operationId}-math-${kind}-${rowIndex}-${part - 1}`)),
+              { ...value, part: part - 1, basis: part === 1 ? basis : null })) invalid();
+            await reauthorize(uid); transaction.set(target, value);
+          });
+        };
+        let proofLevels: CloudExpenseInventoryProof[][] = [];
+        let headerProof: object | null = null;
+        let completeProof: object | null = null;
+        if (command.action === 'create') {
+          const first = await adapter.runTransaction(async transaction => {
+            const checked = checkedTransaction(transaction), state = await historical(checked);
+            if (state.acknowledged) return state;
+            // Reject already-known duplicate targets before taking any private
+            // stock locks. The final atomic commit still rechecks both names.
+            if (await checked.get(path('expenseRecords', command.recordId)) !== null) conflict();
+            if (command.data.invoiceNumber) {
+              const key = await digest(cloudSupplierInvoiceIdentityV2(command.data.supplierName, command.data.invoiceNumber));
+              if (!hash(key)) invalid();
+              if (await checked.get(path('supplierInvoiceReservations', key)) !== null) conflict();
+            }
+            return state;
+          });
+          if (first.acknowledged) { await reauthorize(uid); return { status: 'already-committed', recordId, revision: receipt.resultRevision }; }
+          for (const part of [0, 1]) {
+            const currentHeader = { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: first.intent.requestHash, createdAt: command.createdAt, part };
+            headerProof = currentHeader;
+            await adapter.runTransaction(async transaction => {
+            const checked = checkedTransaction(transaction), state = await historical(checked);
+            if (state.acknowledged) return;
+            const target = path('expenseInventoryProofs', `${command.operationId}-header-${part}`), previous = await checked.get(target);
+            if (previous !== null) { if (!sameValue(previous, currentHeader)) invalid(); return; }
+            if (part > 0) {
+              const prior = await checked.get(path('expenseInventoryProofs', `${command.operationId}-header-${part - 1}`));
+              if (!sameValue(prior, { ...currentHeader, part: part - 1 })) invalid();
+            }
+            await reauthorize(uid); transaction.set(target, currentHeader);
+            });
+          }
+          proofLevels = await buildExpenseInventoryProofs(command.data, { schemaVersion: 2, clinicId: 'main', operationId: command.operationId,
+            actorUid: uid, requestHash, intentRequestHash: first.intent.requestHash, createdAt: command.createdAt }, digest);
+          for (const level of proofLevels) for (const proof of level) {
+            if (proof.leaf) {
+              await prepareRatio('item', proof.leaf.rowIndex, proof.leaf.itemBase);
+              await prepareRatio('allocation', proof.leaf.rowIndex, proof.leaf.allocation);
+            }
+            const itemProof = proof.leaf ? { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: first.intent.requestHash, createdAt: command.createdAt,
+              rowIndex: proof.leaf.rowIndex, itemBase: proof.leaf.itemBase } : null;
+            if (itemProof) await adapter.runTransaction(async transaction => {
+              const checked = checkedTransaction(transaction), state = await historical(checked);
+              if (state.acknowledged) return;
+              const target = path('expenseInventoryProofs', `${command.operationId}-item-${itemProof.rowIndex}`), previous = await checked.get(target);
+              if (previous !== null) { if (!sameValue(previous, itemProof)) invalid(); return; }
+              await reauthorize(uid); transaction.set(target, itemProof);
+            });
+            await adapter.runTransaction(async transaction => {
+              const checked = checkedTransaction(transaction), state = await historical(checked);
+              if (state.acknowledged) return;
+              const proofPath = path('expenseInventoryProofs', expenseProofId(command.operationId, proof.level, proof.index));
+              const previous = await checked.get(proofPath);
+              if (previous !== null) { if (!sameValue(previous, proof)) invalid(); return; }
+              let headWrite: [string, CloudMaterialHead] | null = null;
+              if (proof.leaf) {
+                const leaf = proof.leaf, row = command.data.items[leaf.rowIndex], materialPath = path('materialBalances', leaf.materialId);
+                if (!sameValue(await checked.get(path('expenseInventoryProofs', `${command.operationId}-item-${leaf.rowIndex}`)), itemProof)) invalid();
+                const raw = await checked.get(materialPath), old = raw === null ? null : parseCloudMaterialHead(raw);
+                let base: CloudMaterialBalance | null = null, candidate: CloudMaterialBalance | null = null, indexes: number[] = [];
+                if (old?.schemaVersion === 2 && old.pending?.operationId === command.operationId) {
+                  base = old.base; candidate = old.pending.candidate; indexes = old.pending.indexes;
+                  if (indexes.includes(leaf.rowIndex)) invalid();
+                } else if (old) {
+                  base = await resolveCloudMaterialHead(old, (collection, id) => checked.get(path(collection, id)), { digest }, false);
+                  if (base && base.identityVersion !== 2) invalid(); candidate = base;
+                }
+                if (candidate && (candidate.name !== row.name || candidate.unit !== row.unit || candidate.recordId !== leaf.materialId)) invalid();
+                const next = parseCloudMaterialBalance({ schemaVersion: 1, clinicId: 'main', recordId: leaf.materialId,
+                  identityVersion: 2, revision: (base?.revision ?? 0) + 1, lastOperationId: command.operationId,
+                  name: row.name, unit: row.unit, purchasedMilli: (candidate?.purchasedMilli ?? 0) + row.quantityMilli,
+                  purchaseCostCents: (candidate?.purchaseCostCents ?? 0) + proof.summary.costCents,
+                  usedMilli: base?.usedMilli ?? 0, wasteMilli: base?.wasteMilli ?? 0, consumedCostCents: base?.consumedCostCents ?? 0 });
+                headWrite = [materialPath, parseCloudMaterialHead({ schemaVersion: 2, clinicId: 'main', recordId: leaf.materialId, base,
+                  pending: { operationId: command.operationId, indexes: [...indexes, leaf.rowIndex], lastProofRank: leaf.rank, candidate: next } }) as CloudMaterialHead];
+              } else {
+                const children = proofLevels[proof.level - 1].slice(proof.index * 2, proof.index * 2 + 2);
+                for (const child of children) if (!sameValue(await checked.get(path('expenseInventoryProofs', expenseProofId(command.operationId, child.level, child.index))), child)) invalid();
+              }
+              await reauthorize(uid);
+              if (headWrite) transaction.set(...headWrite);
+              transaction.set(proofPath, proof);
+            });
+          }
+          if (command.data.items.length) {
+            const root = proofLevels.at(-1)![0];
+            completeProof = { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: first.intent.requestHash, createdAt: command.createdAt, summary: root.summary };
+            await adapter.runTransaction(async transaction => {
+              const checked = checkedTransaction(transaction), state = await historical(checked); if (state.acknowledged) return;
+              const target = path('expenseInventoryProofs', `${command.operationId}-complete`), previous = await checked.get(target);
+              if (previous !== null) { if (!sameValue(previous, completeProof)) invalid(); return; }
+              if (!sameValue(await checked.get(path('expenseInventoryProofs', expenseProofId(command.operationId, root.level, root.index))), root)) invalid();
+              await reauthorize(uid); transaction.set(target, completeProof!);
+            });
+          }
+        }
+        if (command.action === 'usage') {
+          const prepared = await adapter.runTransaction(async transaction => {
+            const checked = checkedTransaction(transaction), state = await historical(checked);
+            if (state.acknowledged) return { acknowledged: true as const, ratio: null };
+            const raw = await checked.get(path('materialBalances', command.materialId)); if (raw === null) conflict();
+            const balance = await resolveCloudMaterialHead(raw, (collection, id) => checked.get(path(collection, id)), { digest }, false);
+            if (!balance || balance.identityVersion !== 2 || balance.revision !== command.expectedRevision) conflict();
+            const available = balance.purchasedMilli - balance.usedMilli - balance.wasteMilli;
+            if (command.quantityMilli > available) conflict();
+            const target = path('expenseInventoryProofs', `${command.operationId}-usage`), previous = await checked.get(target);
+            const source = { balance, quantityMilli: available, costCents: balance.purchaseCostCents - balance.consumedCostCents };
+            const proof = { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: state.intent.requestHash, createdAt: command.createdAt, source };
+            if (previous !== null && !sameValue(previous, proof)) conflict();
+            await reauthorize(uid); if (previous === null) transaction.set(target, proof);
+            return { acknowledged: false as const, basis: { quantityMilli: available, costCents: source.costCents }, ratio: expenseRatioProof(source.costCents, command.quantityMilli, available) };
+          });
+          if (prepared.acknowledged) { await reauthorize(uid); return { status: 'already-committed', recordId, revision: receipt.resultRevision }; }
+          await prepareRatio('usage', 0, prepared.ratio, prepared.basis);
+        }
+        let editProof: object | null = null;
+        if (command.action === 'edit') {
+          const acknowledged = await adapter.runTransaction(async transaction => {
+            const checked = checkedTransaction(transaction), state = await historical(checked); if (state.acknowledged) return true;
+            const currentRaw = await checked.get(path('expenseRecords', command.recordId)); if (currentRaw === null) conflict();
+            const current = parseCloudExpenseRecord(currentRaw); if (current.revision !== command.expectedRevision) conflict();
+            if (command.data.totalCents !== undefined) {
+              if (current.data.items.length) invalid(); if (command.data.totalCents < current.paidCents) conflict();
+            }
+            editProof = { schemaVersion: 2, clinicId: 'main', operationId: command.operationId, actorUid: uid,
+              intentRequestHash: state.intent.requestHash, createdAt: command.createdAt };
+            const target = path('expenseInventoryProofs', `${command.operationId}-edit`), previous = await checked.get(target);
+            if (previous !== null) { if (!sameValue(previous, editProof)) invalid(); return false; }
+            await reauthorize(uid); transaction.set(target, editProof); return false;
+          });
+          if (acknowledged) { await reauthorize(uid); return { status: 'already-committed', recordId, revision: receipt.resultRevision }; }
+        }
+        const result = await adapter.runTransaction<CloudExpenseCommit>(async transaction => {
+          const checked = checkedTransaction(transaction), { intent, acknowledged } = await historical(checked);
+          if (acknowledged) {
             await reauthorize(uid); return { status: 'already-committed', recordId, revision: receipt.resultRevision }; }
           const writes: [string, object][] = [];
           if (command.action === 'usage') {
             const raw = await checked.get(path('materialBalances', command.materialId)); if (raw === null) conflict();
-            const balance = parseCloudMaterialBalance(raw); if (balance.recordId !== command.materialId) invalid();
+            const balance = await resolveCloudMaterialHead(raw, (collection, id) => checked.get(path(collection, id)), { digest }, false);
+            if (!balance || balance.recordId !== command.materialId || balance.identityVersion !== 2) invalid();
             if (balance.revision !== command.expectedRevision || command.quantityMilli > balance.purchasedMilli - balance.usedMilli - balance.wasteMilli) conflict();
-            if (await cloudMaterialId(balance.name, balance.unit, { digest }) !== command.materialId) invalid();
+            if (await cloudMaterialIdV2(balance.name, balance.unit, { digest }) !== command.materialId) invalid();
             const availableQuantity = balance.purchasedMilli - balance.usedMilli - balance.wasteMilli;
             const availableCost = balance.purchaseCostCents - balance.consumedCostCents;
             const costCents = command.quantityMilli === availableQuantity ? availableCost
               : roundRatio(BigInt(availableCost) * BigInt(command.quantityMilli), BigInt(availableQuantity));
+            receipt.usageMath = expenseRatioProof(availableCost, command.quantityMilli, availableQuantity);
+            const ratioProof = await checked.get(path('expenseInventoryProofs', `${command.operationId}-math-usage-0-3`));
+            if (!ratioProof || !sameValue((ratioProof as any).ratio, receipt.usageMath)) invalid();
             const usage = parseCloudMaterialUsage({ schemaVersion: 1, clinicId: 'main', recordId: command.operationId,
               materialId: command.materialId, name: balance.name, unit: balance.unit, quantityMilli: command.quantityMilli,
               costCents, kind: command.kind, date: command.date, note: command.note, actorUid: uid, createdAt: command.createdAt });
             if (await checked.get(path('materialUsages', command.operationId)) !== null) conflict();
-            writes.push([path('materialBalances', balance.recordId), parseCloudMaterialBalance({ ...balance,
+            const changed = parseCloudMaterialBalance({ ...balance,
               revision: receipt.resultRevision, lastOperationId: command.operationId,
               usedMilli: balance.usedMilli + (command.kind === 'used' ? command.quantityMilli : 0),
-              wasteMilli: balance.wasteMilli + (command.kind === 'waste' ? command.quantityMilli : 0), consumedCostCents: balance.consumedCostCents + costCents })],
-            [path('materialUsages', command.operationId), usage]);
+              wasteMilli: balance.wasteMilli + (command.kind === 'waste' ? command.quantityMilli : 0), consumedCostCents: balance.consumedCostCents + costCents });
+            writes.push([path('materialBalances', balance.recordId), { schemaVersion: 2, clinicId: 'main', recordId: balance.recordId, base: changed, pending: null }],
+              [path('materialUsages', command.operationId), usage]);
           } else {
+            if (command.action === 'edit' && !sameValue(await checked.get(path('expenseInventoryProofs', `${command.operationId}-edit`)), editProof)) invalid();
             const raw = await checked.get(path('expenseRecords', command.recordId));
             const current = raw === null ? null : parseCloudExpenseRecord(raw); if (current && current.recordId !== command.recordId) invalid();
             if ((current?.revision ?? 0) !== command.expectedRevision) conflict();
             let next: CloudExpenseRecord;
             if (command.action === 'create') {
-              const invoiceKey = command.data.invoiceNumber ? await digest(JSON.stringify(['clinic-supplier-invoice-v1',
-                normalize(command.data.supplierName), normalize(command.data.invoiceNumber)])) : null;
+              if (!sameValue(await checked.get(path('expenseInventoryProofs', `${command.operationId}-header-1`)), headerProof)) invalid();
+              const invoiceKey = command.data.invoiceNumber ? await digest(cloudSupplierInvoiceIdentityV2(command.data.supplierName, command.data.invoiceNumber)) : null;
               if (invoiceKey !== null && !hash(invoiceKey)) invalid();
               if (invoiceKey !== null) { if (await checked.get(path('supplierInvoiceReservations', invoiceKey)) !== null) conflict();
                 writes.push([path('supplierInvoiceReservations', invoiceKey), { schemaVersion: 1, clinicId: 'main', recordId: invoiceKey,
                   expenseId: command.recordId, operationId: command.operationId }]); }
-              const costs = allocatedCosts(command.data), materials = new Map<string, { name: string; unit: string; quantity: number; cost: number }>();
-              for (let index = 0; index < command.data.items.length; index++) { const row = command.data.items[index];
-                const materialId = await cloudMaterialId(row.name, row.unit, { digest }), existing = materials.get(materialId);
-                materials.set(materialId, { name: existing?.name ?? row.name, unit: existing?.unit ?? row.unit,
-                  quantity: (existing?.quantity ?? 0) + row.quantityMilli, cost: (existing?.cost ?? 0) + costs[index] }); }
-              for (const [materialId, addition] of [...materials].sort(([a], [b]) => a.localeCompare(b))) {
-                const stored = await checked.get(path('materialBalances', materialId)), balance = stored === null ? null : parseCloudMaterialBalance(stored);
-                if (balance && (balance.recordId !== materialId || await cloudMaterialId(balance.name, balance.unit, { digest }) !== materialId)) invalid();
-                if (balance && balance.revision >= REVISION) unavailable();
-                writes.push([path('materialBalances', materialId), parseCloudMaterialBalance({ schemaVersion: 1, clinicId: 'main', recordId: materialId,
-                  revision: (balance?.revision ?? 0) + 1, lastOperationId: command.operationId, name: balance?.name ?? addition.name,
-                  unit: balance?.unit ?? addition.unit, purchasedMilli: (balance?.purchasedMilli ?? 0) + addition.quantity,
-                  purchaseCostCents: (balance?.purchaseCostCents ?? 0) + addition.cost, usedMilli: balance?.usedMilli ?? 0,
-                  wasteMilli: balance?.wasteMilli ?? 0, consumedCostCents: balance?.consumedCostCents ?? 0 })]);
-              }
+              if (completeProof !== null && !sameValue(await checked.get(path('expenseInventoryProofs', `${command.operationId}-complete`)), completeProof)) invalid();
               next = parseCloudExpenseRecord({ schemaVersion: 1, clinicId: 'main', recordId: command.recordId,
                 revision: 1, lastOperationId: command.operationId, data: command.data, paidCents: command.paidCents,
-                paymentCount: command.paidCents > 0 ? 1 : 0, invoiceKey, imageId: null, image: null });
+                paymentCount: command.paidCents > 0 ? 1 : 0, invoiceKey, imageId: null, image: null, inventoryVersion: 2 });
             } else {
               if (!current) conflict();
               next = { ...current, revision: receipt.resultRevision, lastOperationId: command.operationId };

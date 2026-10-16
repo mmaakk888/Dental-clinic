@@ -273,3 +273,12 @@ test('settings responsive CSS uses bounded grids/touch targets and no logo mirro
   assert.match(css, /min-height:46px/); assert.match(css, /font-size:16px/); assert.match(css, /prefers-reduced-motion:reduce/);
   assert.match(css, /\.csettings-logo\{[^}]*direction:ltr;transform:none/); assert.doesNotMatch(css, /scaleX\(-1\)|width:100vw|white-space:nowrap/);
 });
+
+test('temporary checking disables retained settings handlers without clearing an owned draft', () => {
+  const h = harness(), memory = slots(); const old = wrapper(h, memory); wrapper(h, memory, { disabled: true });
+  old.onLoad(); old.onBegin(); old.onHistory(false); old.onLabs(false); old.onReferences(); assert.deepEqual(h.calls, []);
+  const current = wrapper(h, memory); current.onBegin(); assert.ok(h.controller.getState().draft);
+  const drafted = wrapper(h, memory), before = h.calls.length; wrapper(h, memory, { disabled: true });
+  drafted.onSave(drafted.state.draft!); drafted.onCancel(drafted.state.draft!); assert.equal(h.calls.length, before);
+  assert.ok(h.controller.getState().draft); assert.equal(h.controller.getState().closed, false);
+});

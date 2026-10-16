@@ -2,9 +2,10 @@ import type { CloudExpenseData } from './cloudExpenseRepository';
 
 /** Private, immutable nonfinancial preparations. A purchase is authoritative
  * only after its matching expense receipt AND intent are committed. */
-export const CLOUD_EXPENSE_PROOF_BRANCH = 4;
+export const CLOUD_EXPENSE_PROOF_BRANCH = 2;
 export const CLOUD_EXPENSE_PROOF_BASE = 1_000_000;
-export interface CloudExpenseRatioProof { quotient: number; remainder: number; product: number[] }
+export interface CloudExpenseRatioProof { quotient: number; remainder: number; right: number; denominator: number; product: number[]; productCarry: number[]; quotientCarry: number[];
+  operands: { a: number[]; b: number[]; q: number[]; d: number[]; r: number[] } }
 export interface CloudExpenseProofSummary {
   count: number; indexes: number[]; itemIds: string[]; firstRank: number; lastRank: number;
   firstRemainder: number; lastRemainder: number; firstItemId: string; lastItemId: string;
@@ -31,19 +32,39 @@ export function expenseRatioProof(a: number, b: number, denominator: number): Cl
   const product = BigInt(a) * BigInt(b), divisor = BigInt(denominator);
   const quotient = Number(product / divisor), remainder = Number(product % divisor);
   if (!safe(quotient) || !safe(remainder)) fail();
-  return { quotient, remainder, product: expenseProductDigits(a, b) };
+  return { quotient, remainder, right: b, denominator, product: expenseProductDigits(a, b), productCarry: expenseProductCarry(a, b), quotientCarry: expenseProductCarry(quotient, denominator, remainder),
+    operands: { a: expenseOperandDigits(a), b: expenseOperandDigits(b), q: expenseOperandDigits(quotient),
+      d: expenseOperandDigits(denominator), r: expenseOperandDigits(remainder) } };
+}
+function expenseOperandDigits(value: number): number[] {
+  let n = BigInt(value); const base = 1_000_000n;
+  return [Number(n % base), Number(n / base % base), Number(n / (base * base))];
+}
+function expenseProductCarry(a: number, b: number, r = 0): number[] {
+  const base = 1_000_000n, split = (value: number) => { let n = BigInt(value); return [n % base, n / base % base, n / (base * base)]; };
+  const x = split(a), y = split(b), z = split(r), carry: number[] = []; let previous = 0n;
+  for (let n = 0; n < 4; n++) { let coefficient = previous + (z[n] ?? 0n);
+    for (let k = 0; k < 3; k++) if (n - k >= 0 && n - k < 3) coefficient += x[k] * y[n - k];
+    previous = coefficient / base; carry.push(Number(previous)); }
+  return carry;
 }
 /** Rules use exactly these base-1e6 chunks; no intermediate exceeds 3e12,
  * unlike multiplying two allowed 1e12 inputs directly in signed int64. */
 export function verifyExpenseRatioProof(value: CloudExpenseRatioProof, a: number, b: number, denominator: number): boolean {
   try {
-    if (!value || Object.keys(value).sort().join(',') !== 'product,quotient,remainder'
+    if (!value || Object.keys(value).sort().join(',') !== 'denominator,operands,product,productCarry,quotient,quotientCarry,remainder,right'
+      || value.right !== b || value.denominator !== denominator
       || !safe(value.quotient) || !safe(value.remainder) || value.remainder >= denominator
       || !Array.isArray(value.product) || value.product.length !== 5
       || value.product.some(digit => !Number.isInteger(digit) || digit < 0 || digit >= CLOUD_EXPENSE_PROOF_BASE)) return false;
     const expected = expenseRatioProof(a, b, denominator);
+    if (!value.operands || Object.keys(value.operands).sort().join(',') !== 'a,b,d,q,r'
+      || (['a', 'b', 'q', 'd', 'r'] as const).some(key => !Array.isArray(value.operands[key])
+        || value.operands[key].length !== 3 || value.operands[key].some((digit, index) => digit !== expected.operands[key][index]))) return false;
     return value.quotient === expected.quotient && value.remainder === expected.remainder
-      && value.product.every((digit, index) => digit === expected.product[index]);
+      && value.product.every((digit, index) => digit === expected.product[index])
+      && [value.productCarry, value.quotientCarry].every((carry, index) => Array.isArray(carry) && carry.length === 4
+        && carry.every((digit, n) => digit === [expected.productCarry, expected.quotientCarry][index][n]));
   } catch { return false; }
 }
 /** Version 2 deliberately hashes the exact displayed material name and unit,
@@ -67,7 +88,7 @@ export function expenseProofId(operationId: string, level: number, index: number
 export function expenseProofRootLocations(count: number): { level: number; index: number }[] {
   if (!Number.isInteger(count) || count < 0 || count > 20) fail();
   let level = 0, size = count;
-  while (size > 4) { size = Math.ceil(size / 4); level++; }
+  while (size > 1) { size = Math.ceil(size / CLOUD_EXPENSE_PROOF_BRANCH); level++; }
   return Array.from({ length: size }, (_, index) => ({ level, index }));
 }
 export function joinExpenseProofSummaries(children: CloudExpenseProofSummary[]): CloudExpenseProofSummary {
@@ -103,10 +124,10 @@ export async function buildExpenseInventoryProofs(data: CloudExpenseData, envelo
         itemBase: expenseRatioProof(item.quantityMilli, item.unitPriceCents, 1000), allocation: allocation.allocation } });
   }
   leaves.sort((a, b) => a.index - b.index); const levels = [leaves];
-  while (levels.at(-1)!.length > 4) {
+  while (levels.at(-1)!.length > 1) {
     const children = levels.at(-1)!, groups: CloudExpenseInventoryProof[] = [];
-    for (let index = 0; index < Math.ceil(children.length / 4); index++) groups.push({ ...envelope, level: levels.length, index,
-      summary: joinExpenseProofSummaries(children.slice(index * 4, index * 4 + 4).map(child => child.summary)), leaf: null });
+    for (let index = 0; index < Math.ceil(children.length / CLOUD_EXPENSE_PROOF_BRANCH); index++) groups.push({ ...envelope, level: levels.length, index,
+      summary: joinExpenseProofSummaries(children.slice(index * CLOUD_EXPENSE_PROOF_BRANCH, index * CLOUD_EXPENSE_PROOF_BRANCH + CLOUD_EXPENSE_PROOF_BRANCH).map(child => child.summary)), leaf: null });
     levels.push(groups);
   }
   return levels;

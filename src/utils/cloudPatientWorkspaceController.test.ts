@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
-import { createCloudPatientWorkspaceController, type CloudPatientWorkspaceController, type CloudPatientWorkspaceCapability } from './cloudPatientWorkspaceController';
+import { createCloudPatientWorkspaceController, type CloudPatientRegistrationDirectory, type CloudPatientWorkspaceController, type CloudPatientWorkspaceCapability } from './cloudPatientWorkspaceController';
 import { CloudPatientError, type CloudPatientCommand, type CloudPatientWriteCommand, type CloudPatientCommit, type CloudPatientPage,
   type CloudPatientRecord, type CloudPatientRepository } from './cloudPatientRepository';
 import { createJournaledCloudPatientRepository, type CloudPatientAdapter } from './cloudPatientRepository';
@@ -25,7 +25,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 async function tick() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
-function harness() {
+function harness(getDirectory?: () => Promise<CloudPatientRegistrationDirectory>) {
   const calls: string[] = [], commands: CloudPatientWriteCommand[] = [];
   let active = true, ids = [ID, OP], current: CloudPatientRecord | null = record();
   let page: CloudPatientPage = { records: [], nextAfterId: null };
@@ -78,12 +78,13 @@ function harness() {
   const controller = createCloudPatientWorkspaceController({
     getRepository: async () => { calls.push('factory'); return handlers.factoryDelay ?? repository; },
     isActive: () => active, newId: () => ids.shift()!, today: () => DAY, now: () => NOW,
+    ...(getDirectory ? { getDirectory: async () => { calls.push('directory'); return getDirectory(); } } : {}),
   });
   const createDraft = () => {
     assert.equal(controller.beginCreate(), true);
     assert.equal(controller.updateProfile({ name: 'ملف جديد وهمي', mobile: '01000000001' }), true);
   };
-  return { controller, calls, commands, handlers, repository, createDraft,
+  return { controller, calls, commands, handlers, repository, createDraft, intents,
     setActive: (value: boolean) => { active = value; }, setIds: (value: string[]) => { ids = value; },
     setPage: (value: CloudPatientPage) => { page = value; },
     setCurrent: (value: CloudPatientRecord | null) => { current = value; } };
@@ -649,4 +650,60 @@ test('patient workspace recovery read locks creation and navigation state until 
   assert.equal(h.controller.beginCreate(), false); await h.controller.refresh(); assert.equal(h.calls.includes('list:first:25'), false);
   h.controller.dispose(); gate.resolve({ records: [], nextAfterId: null }); await pending;
   assert.equal(h.controller.getState().closed, true); assert.equal(h.controller.recovery.getState().closed, true); assert.equal(h.controller.getState().recoveryLoading, false);
+});
+const directory = (patients: CloudPatientRecord[] = []): CloudPatientRegistrationDirectory => ({ readTime: NOW, patientProfiles: patients, contactRecords: [] });
+test('new file freshly reviews the full directory before journal/counter writes and requires exact explicit separate-file confirmation', async () => {
+  const source = directory([record(1, 'ملف جديد وهمي', 2)]);
+  source.contactRecords = [{ schemaVersion: 1, clinicId: 'main', recordId: OTHER, revision: 1, lastOperationId: OP, deleted: false, phoneKey: 'a'.repeat(64),
+    data: { id: OTHER, name: 'جهة مصطنعة', mobile: '+201000000001', createdAt: NOW } }];
+  const h = harness(async () => source); h.createDraft(); assert.deepEqual(h.calls, []); await h.controller.save();
+  const check = h.controller.getState().registrationCheck!; assert.ok(check); assert.equal(check.matchCount, 2);
+  assert.deepEqual(check.matches.map(row => [row.source, row.fileNo]), [['patient', 2], ['contact', null]]);
+  assert.equal(h.intents.size, 0); assert.equal(h.commands.length, 0); assert.equal(h.controller.getState().pendingOperationId, null);
+  await h.controller.save(); await h.controller.confirmSeparateFile({ ...check }); assert.equal(h.commands.length, 0);
+  await h.controller.confirmSeparateFile(check); assert.equal(h.commands.length, 1); assert.equal(h.commands[0].recordId, ID);
+  assert.equal(h.calls.filter(value => value === 'directory').length, 1); assert.equal(h.controller.getState().registrationCheck, null);
+  await h.controller.confirmSeparateFile(check); assert.equal(h.commands.length, 1); assert.equal(source.patientProfiles[0].recordId, OTHER);
+});
+test('duplicate matching uses Arabic normalized similar full names and exact canonical phones, never nearby phone digits or first name alone', async () => {
+  for (const [name, mobile, expected] of [['ملف جديد وهمى', '01099999999', true], ['شخص آخر مصطنع', '+201000000001', true],
+    ['شخص آخر مصطنع', '01000000002', false], ['ملف', '01099999999', false]] as const) {
+    const source = record(1, name, 2); source.data.mobile = mobile;
+    const h = harness(async () => directory([source])); h.createDraft(); await h.controller.save();
+    assert.equal(Boolean(h.controller.getState().registrationCheck), expected); assert.equal(h.commands.length, expected ? 0 : 1);
+  }
+});
+test('any draft change invalidates its old duplicate review and confirmation; a fresh save reads again', async () => {
+  const h = harness(async () => directory([record(1, 'ملف جديد وهمي', 2)])); h.createDraft(); await h.controller.save();
+  const old = h.controller.getState().registrationCheck!; assert.equal(h.controller.updateProfile({ name: 'شخص مختلف تمامًا', mobile: '01099999999' }), true);
+  assert.equal(h.controller.getState().registrationCheck, null); await h.controller.confirmSeparateFile(old); assert.equal(h.commands.length, 0);
+  await h.controller.save(); assert.equal(h.calls.filter(value => value === 'directory').length, 2); assert.equal(h.commands.length, 1);
+});
+test('missing/partial/malformed/failed directory reads never claim no matches or allocate a journal operation', async () => {
+  for (const value of [null, { ...directory(), nextAfterId: ID }, { ...directory(), patientProfiles: Array(2) },
+    { ...directory(), patientProfiles: [record(), record()] }, { ...directory(), readTime: 'bad' }, { ...directory(), patientProfiles: Array(20_001) }]) {
+    const h = harness(async () => value as any); h.createDraft(); await h.controller.save();
+    assert.equal(h.controller.getState().loading, false); assert.equal(h.controller.getState().registrationCheck, null);
+    assert.equal(h.controller.getState().pendingOperationId, null); assert.equal(h.commands.length, 0); assert.equal(h.intents.size, 0); assert.ok(h.controller.getState().error);
+  }
+  const h = harness(async () => { throw Error('PRIVATE_DIRECTORY'); }); h.createDraft(); await h.controller.save();
+  assert.equal(h.commands.length, 0); assert.doesNotMatch(h.controller.getState().error, /PRIVATE_DIRECTORY/);
+});
+test('directory preflight owns the draft/read ticket and rejects concurrent edits, saves and late view results', async () => {
+  const gate = deferred<CloudPatientRegistrationDirectory>(), h = harness(() => gate.promise); h.createDraft();
+  const first = h.controller.save(); await tick(); assert.equal(h.controller.getState().loading, true);
+  assert.equal(h.controller.updateProfile({ name: 'متأخر' }), false); await h.controller.save(); assert.equal(h.calls.filter(v => v === 'directory').length, 1);
+  h.controller.dispose(); gate.resolve(directory()); await first; assert.equal(h.controller.getState().closed, true); assert.equal(h.commands.length, 0);
+});
+test('retained uncertain commands skip duplicate review on exact retry instead of creating another operation or blocking historical ACK', async () => {
+  let read = 0; const h = harness(async () => { if (++read > 1) throw Error('NO_SECOND_DIRECTORY'); return directory(); }); h.createDraft();
+  h.handlers.commitError = Error('PRIVATE_LOST_ACK'); await h.controller.save(); const original = h.controller.getState().pendingOperationId;
+  assert.equal(original, OP); delete h.handlers.commitError; await h.controller.save();
+  assert.equal(read, 1); assert.equal(h.commands.length, 2); assert.equal(h.commands[0], h.commands[1]); assert.equal(h.controller.getState().saveStatus, 'idle');
+});
+test('reentrant warning subscriber cannot retain approval for the draft it replaced', async () => {
+  const h = harness(async () => directory([record(1, 'ملف جديد وهمي', 2)])); h.createDraft(); let old: ReturnType<typeof h.controller.getState>['registrationCheck'] = null;
+  h.controller.subscribe(value => { if (value.registrationCheck && !old) { old = value.registrationCheck; h.controller.updateProfile({ mobile: '01099999999' }); } });
+  await h.controller.save(); assert.ok(old); assert.equal(h.controller.getState().registrationCheck, null); await h.controller.confirmSeparateFile(old!);
+  assert.equal(h.commands.length, 0); assert.equal(h.intents.size, 0);
 });

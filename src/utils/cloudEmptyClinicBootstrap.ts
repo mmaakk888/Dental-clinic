@@ -43,7 +43,7 @@ export const CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS = Object.freeze([
   'clinicalOperations', 'clinicalSessionProofs', 'contactRecords', 'contactPhones', 'contactOperations', 'operationIntents', 'catalogOperations',
   'catalogServiceIds', 'catalogServiceNames',
   'appointmentRecords', 'appointmentDays', 'appointmentOperations', 'labDefinitions', 'labCases', 'labAccounts',
-  'labPayments', 'prostheticOperations', 'expenseRecords', 'expensePayments', 'expenseOperations', 'materialBalances',
+  'labPayments', 'prostheticOperations', 'prostheticPaymentProofs', 'expenseRecords', 'expensePayments', 'expenseOperations', 'expenseInventoryProofs', 'materialBalances',
   'materialUsages', 'supplierInvoiceReservations', 'invoiceImages', 'settingsOperations', 'settingsValidationProofs', 'settings', 'counters', 'bootstrap',
 ] as const);
 function invalid(): never { throw new CloudBootstrapError('invalid'); }

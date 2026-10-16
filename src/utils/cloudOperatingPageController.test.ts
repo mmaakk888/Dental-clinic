@@ -36,6 +36,7 @@ function fixture(options: {
   getContacts?: () => Promise<CloudContactRepository>;
   getPatients?: () => Promise<CloudPatientRepository>;
   getClinical?: () => Promise<CloudClinicalCapability>;
+  getClinicSnapshot?: NonNullable<CloudOperatingPageSession['getClinicSnapshot']>;
 } = {}) {
   const calls: string[] = [];
   const credentials: [string, string][] = [];
@@ -56,6 +57,10 @@ function fixture(options: {
       calls.push('getPatients'); return options.getPatients!();
     } } : {}), ...(options.getClinical ? { getClinical: async () => {
       calls.push('getClinical'); return options.getClinical!();
+    } } : {}), ...(options.getPatients || options.getClinicSnapshot ? { getClinicSnapshot: async () => {
+      calls.push('getClinicSnapshot');
+      return options.getClinicSnapshot ? options.getClinicSnapshot() : { readFull: async () => { throw Error('NO_FINANCIAL_DIRECTORY_SHORTCUT'); },
+        readDirectory: async () => ({ readTime: '2026-10-14T00:00:00.000Z', patientProfiles: [], contactRecords: [] }) } as any;
     } } : {}) };
     return options.factory ? options.factory(candidate) : candidate;
   }, options.runtime ?? (() => runtime));
@@ -772,6 +777,34 @@ test('explicit patients opening shares a lazy factory and never automatically re
   assert.equal(h.controller.closePatients(workspace), true);
   assert.equal(workspace.getState().closed, true);
   await h.controller.dispose();
+});
+test('ordinary patient create uses the protected directory subset only at explicit save, not sign-in/opening or financial scans', async () => {
+  const repo = patientRepository(); let directoryReads = 0, fullReads = 0;
+  const existing = { schemaVersion: 1, clinicId: 'main', recordId: '10000000-0000-4000-8000-000000000099', revision: 1,
+    lastOperationId: '20000000-0000-4000-8000-000000000099', fileNo: 451, phoneKey: null,
+    data: { name: 'اسم موجود', mobile: '', age: 30, gender: '', firstVisit: '2026-10-14', notes: '', allergy: '' } };
+  const h = fixture({ getPatients: async () => repo.repository, getClinicSnapshot: async () => ({
+    readFull: async () => { fullReads++; throw Error('NO_FINANCIAL_SCAN'); },
+    readDirectory: async () => { directoryReads++; return { readTime: '2026-10-14T00:00:00.000Z', patientProfiles: [existing], contactRecords: [] }; },
+  }) as any });
+  await h.controller.signIn(EMAIL, PASSWORD); const workspace = await h.controller.openPatients(); assert.ok(workspace);
+  assert.equal(directoryReads, 0); assert.equal(fullReads, 0); assert.equal(workspace.beginCreate(), true); workspace.updateProfile({ name: 'اسم موجود' });
+  await workspace.save(); assert.equal(directoryReads, 1); assert.equal(fullReads, 0); assert.equal(workspace.getState().registrationCheck?.matches[0].fileNo, 451);
+  assert.deepEqual(repo.calls, []); assert.equal(workspace.getState().pendingOperationId, null);
+  workspace.cancelDraft(); await h.controller.dispose();
+});
+test('missing directory capability or revoked parent during directory preflight cannot silently create a patient', async () => {
+  for (const lost of [false, true]) {
+    const repo = patientRepository(), gate = deferred<any>();
+    const h = fixture({ getPatients: async () => repo.repository, getClinicSnapshot: async () => lost
+      ? { readFull: async () => { throw Error(); }, readDirectory: () => gate.promise } as any : { readFull: async () => { throw Error(); } } as any });
+    await h.controller.signIn(EMAIL, PASSWORD); const workspace = await h.controller.openPatients(); assert.ok(workspace);
+    assert.equal(workspace.beginCreate(), true); workspace.updateProfile({ name: 'مريض جديد مصطنع' });
+    const saving = workspace.save(); if (lost) { for (let n=0;n<40;n++) await Promise.resolve(); await h.controller.signOut();
+      gate.resolve({ readTime: '2026-10-14T00:00:00.000Z', patientProfiles: [], contactRecords: [] }); }
+    await saving; assert.equal(repo.calls.includes('commit'), false); assert.equal(workspace.getState().pendingOperationId, null);
+    if (!lost) assert.ok(workspace.getState().error); await h.controller.dispose();
+  }
 });
 
 test('patient opening is permanently revoked by close, logout, disposal, identity or runtime loss', async () => {

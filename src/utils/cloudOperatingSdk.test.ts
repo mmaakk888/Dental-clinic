@@ -6,6 +6,7 @@ import type { CloudClinicalCapability, CloudOperatingFirebaseSession, CloudServi
 import type { CloudClinicalCommand } from './cloudClinicalRepository';
 import type { FirebaseCloudAppointmentsCapability } from './firebaseCloudAppointments';
 import { prepareCloudIntentCommand, type CloudOperationKind } from './cloudOperationIntent';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
 const PROJECT = 'dental-clinic-mmaakk888';
 const INSTANCE = '00000000-0000-4000-8000-000000000001';
@@ -56,13 +57,21 @@ async function until(check: () => boolean) {
   assert.equal(check(), true, 'Expected synthetic boundary was not reached.');
 }
 
-const bundle = build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
+function buildOperatingBundle(stage: 'source' | 'closed' | 'qualified' = 'source') { return build({ entryPoints: ['src/utils/cloudOperatingAuth.ts'], bundle: true, write: false,
   metafile: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['firebase/*', './firebaseCloudContacts', './firebaseCloudPatients', './firebaseCloudClinical', './firebaseCloudServiceCatalog', './firebaseCloudAppointments',
     './firebaseCloudClinicSettings', './firebaseCloudProsthetics', './firebaseCloudExpenses', './firebaseCloudClinicSnapshot'],
-  supported: { 'dynamic-import': false } });
+  supported: { 'dynamic-import': false }, plugins: stage === 'source' ? [] : [{ name: 'explicit-source-stage-test-only', setup(builder) {
+    builder.onLoad({ filter: /cloudReleaseReadiness\.ts$/ }, () => ({
+      contents: `export const CLOUD_COMPLETE_RELEASE_UI = Object.freeze({ available: ${stage === 'qualified'} });`, loader: 'ts',
+    }));
+  } }] }); }
+const bundle = buildOperatingBundle();
+const stageBundles = new Map<'closed' | 'qualified', ReturnType<typeof buildOperatingBundle>>();
 
 async function fixture(options: {
   hostname?: string;
+  protocol?: string;
+  sourceStage?: 'closed' | 'qualified';
   verified?: boolean;
   emulator?: boolean;
   membership?: Record<string, unknown> | null;
@@ -141,7 +150,7 @@ async function fixture(options: {
     __copy(value: object): object;
     __input<T>(value: T): T;
   } };
-  const location = { hostname: options.hostname ?? '127.0.0.1' };
+  const location = { hostname: options.hostname ?? '127.0.0.1', protocol: options.protocol ?? 'http:' };
   function step(name: string) {
     calls.push(name);
     if (options.switchAt === name) {
@@ -166,7 +175,8 @@ async function fixture(options: {
       cancel: (id: string) => work('cancel', id, intent(rawProfileContactCommand(kind), undefined, 'cancelled')),
     };
   }
-  const compiled = await bundle;
+  if (options.sourceStage && !stageBundles.has(options.sourceStage)) stageBundles.set(options.sourceStage, buildOperatingBundle(options.sourceStage));
+  const compiled = await (options.sourceStage ? stageBundles.get(options.sourceStage)! : bundle);
   runInNewContext(`${compiled.outputFiles[0].text}\nmodule.exports.__copy = value => ({ ...value });
 module.exports.__input = value => JSON.parse(JSON.stringify(value));`, {
     module, exports: module.exports,
@@ -485,11 +495,28 @@ for (const [method, dependency] of [['getClinicSettings', './firebaseCloudClinic
   });
 }
 
-test('factory rejects external hosts before importing SDK, never just removes the loopback protection', async () => {
-  for (const hostname of ['example.com', `${PROJECT}.web.app`, '127.0.0.1.evil.invalid', '192.168.1.2']) {
-    const h = await fixture({ hostname });
+test('factory rejects foreign HTTPS hosts and approved HTTP before importing SDK', async () => {
+  for (const [hostname, protocol] of [['example.com','https:'], [`${PROJECT}.web.app`,'http:'], ['127.0.0.1.evil.invalid','https:'], ['192.168.1.2','https:']]) {
+    const h = await fixture({ hostname, protocol });
     await assert.rejects(h.api.createFirebaseOperatingAuth());
     assert.deepEqual(h.imports, []); assert.deepEqual(h.calls, []);
+  }
+});
+
+test('factory approved HTTPS follows real source readiness and explicit closed/qualified test fixtures without granting owner authority', async () => {
+  for (const sourceStage of [undefined, 'closed', 'qualified'] as const) {
+    const h = await fixture({ hostname: `${PROJECT}.web.app`, protocol: 'https:', sourceStage });
+    const enabled = sourceStage === 'qualified' || sourceStage === undefined && CLOUD_COMPLETE_RELEASE_UI.available;
+    if (!enabled) {
+      await assert.rejects(h.api.createFirebaseOperatingAuth()); assert.deepEqual(h.imports, []); assert.deepEqual(h.calls, []);
+    } else {
+      const session = await h.api.createFirebaseOperatingAuth();
+      assert.equal(session.getState().phase, 'signed-out');
+      assert.deepEqual(h.imports.sort(), ['firebase/app', 'firebase/auth'].sort());
+      assert.deepEqual(h.calls, ['initializeApp','initializeAuth','subscribe']); assert.deepEqual(h.paths, []);
+      await assert.rejects(session.authorizeOwner());
+      await session.dispose();
+    }
   }
 });
 

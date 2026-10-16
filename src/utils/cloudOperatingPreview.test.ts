@@ -1,9 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import CloudOperatingPage from '../components/auth/CloudOperatingPage';
+import type CloudOperatingPage from '../components/auth/CloudOperatingPage';
+import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { runInThisContext } from 'node:vm';
 import type { createCloudContactWorkspaceController } from './cloudContactWorkspaceController';
 import type { CloudPatientWorkspaceController } from './cloudPatientWorkspaceController';
+
+
+/** Historical preparation UI in an explicit TEST-ONLY closed source build.
+ * Evaluate in this test's realm so inert preview arrays keep normal prototypes.
+ * This never changes the real release flag, runtime or application props. */
+const closedPageOutput = await build({ entryPoints: ['src/components/auth/CloudOperatingPage.tsx'], bundle: true,
+  write: false, platform: 'node', format: 'cjs', logLevel: 'silent', supported: { 'dynamic-import': false },
+  external: ['react', 'react/jsx-runtime', 'lucide-react', 'firebase/*'],
+  plugins: [{ name: 'historical-closed-preparation-only', setup(builder) {
+    builder.onLoad({ filter: /cloudReleaseReadiness\.ts$/ }, () => ({
+      contents: 'export const CLOUD_COMPLETE_RELEASE_UI = Object.freeze({ available: false, reason: "Synthetic historical preparation" });', loader: 'ts',
+    }));
+    builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }));
+  } }] });
+const closedPageModule = { exports: {} as { default: typeof CloudOperatingPage } };
+const closedPageRequire = createRequire(import.meta.url);
+runInThisContext('(function(module, exports, require) {' + closedPageOutput.outputFiles[0].text + '\n})')(
+  closedPageModule, closedPageModule.exports, (name: string) => {
+    assert.ok(['react', 'react/jsx-runtime', 'lucide-react'].includes(name), 'Preparation render must not import SDK/native/provider modules: ' + name);
+    return closedPageRequire(name);
+  });
+assert.match(closedPageOutput.outputFiles[0].text, /Synthetic historical preparation/);
+const ClosedOperatingPage = closedPageModule.exports.default;
 
 type Workspace = ReturnType<typeof createCloudContactWorkspaceController>;
 type Element = { type: unknown; props: Record<string, any> };
@@ -56,7 +82,7 @@ async function withPage(check: (page: {
         if (!(index in slots)) { slots[index] = true; effects.push(effect); }
       },
     };
-    try { tree = CloudOperatingPage() as unknown as Element; }
+    try { tree = ClosedOperatingPage() as unknown as Element; }
     finally { internals.H = previous; }
     for (const effect of effects.splice(0)) { const stop = effect(); if (stop) cleanup.push(stop); }
     return tree;

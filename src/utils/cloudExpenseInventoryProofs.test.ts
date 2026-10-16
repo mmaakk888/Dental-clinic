@@ -5,8 +5,8 @@ import { expenseProductDigits, expenseRatioProof, verifyExpenseRatioProof, expen
   buildExpenseInventoryProofs, expenseProofRootLocations, cloudMaterialIdentityV2 } from './cloudExpenseInventoryProofs';
 import { prepareCloudExpenseCommand, type CloudExpenseData } from './cloudExpenseRepository';
 
-// Nonfinancial proof primitives only. The v2 stock transition/Rules are not yet
-// implemented; these tests never claim a successful inventory transaction.
+// Pure proof primitives only; actual stock/Rules acceptance is a separate
+// disposable-engine check and is never inferred from these unit tests.
 const id = (n: number) => `70000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
 function data(count: number): CloudExpenseData {
@@ -25,13 +25,14 @@ test('five base-1e6 chunks preserve maximum1e24 product without Number precision
   assert.equal(decoded, 1_000_000_000_000n ** 2n);
   const proof = expenseRatioProof(1_000_000_000_000, 1_000_000_000_000, 1_000_000_000_000);
   assert.equal(proof.quotient, 1_000_000_000_000); assert.equal(proof.remainder, 0);
-  assert.equal(verifyExpenseRatioProof({ product: proof.product, remainder: 0, quotient: proof.quotient }, 1e12, 1e12, 1e12), true);
+  assert.equal(verifyExpenseRatioProof({ ...proof, remainder: 0, quotient: proof.quotient }, 1e12, 1e12, 1e12), true);
 });
 test('ratio evidence rejects altered quotient/remainder/chunk, zero divisor and unsafe numbers', () => {
   const proof = expenseRatioProof(101, 3, 2);
   assert.equal(proof.quotient, 151); assert.equal(proof.remainder, 1);
   for (const bad of [{ ...proof, quotient: 152 }, { ...proof, remainder: 2 }, { ...proof, product: [304, 0, 0, 0, 0] },
-    { ...proof, product: [303] }, { ...proof, extra: true }]) assert.equal(verifyExpenseRatioProof(bad, 101, 3, 2), false);
+    { ...proof, product: [303] }, { ...proof, operands: { ...proof.operands, a: [102,0,0] } },
+    { ...proof, productCarry: [1,0,0,0] }, { ...proof, quotientCarry: [1,0,0,0] }, { ...proof, extra: true }]) assert.equal(verifyExpenseRatioProof(bad, 101, 3, 2), false);
   for (const input of [-1, 1.1, Number.MAX_SAFE_INTEGER, NaN]) assert.throws(() => expenseProductDigits(input, 1));
   assert.throws(() => expenseRatioProof(1, 1, 0));
 });
@@ -50,7 +51,7 @@ test('20-row forest remains bounded, preserves all row identities and sums; no b
     assert.ok(roots.length <= 4); assert.equal(roots.reduce((sum, row) => sum + row.summary.count, 0), count);
     assert.equal(roots.reduce((sum, row) => sum + row.summary.costCents, 0), original.totalCents);
     assert.equal(new Set(roots.flatMap(row => row.summary.indexes)).size, count);
-    assert.ok(levels.length <= 3); assert.equal('expenseRecord' in levels[0][0], false);
+    assert.ok(levels.length <= 6); assert.equal('expenseRecord' in levels[0][0], false);
   }
   assert.throws(() => expenseProofRootLocations(21));
 });

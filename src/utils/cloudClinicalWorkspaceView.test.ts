@@ -11,6 +11,7 @@ import type { CloudClinicalWorkspaceState } from './cloudClinicalWorkspaceContro
 import type { CloudClinicalRecoveryState } from './cloudClinicalRecoveryController';
 import type { CloudClinicalWorkspaceBundle } from './cloudClinicalUiStage';
 import { createCloudClinicalUiPreview, CLOUD_CLINICAL_UI_STAGE } from './cloudClinicalUiStage';
+import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 import type { CloudOperationIntent } from './cloudOperationIntent';
 import type { CloudClinicalEditor, CloudClinicalWorkspaceViewProps } from '../components/patients/CloudClinicalWorkspace';
 
@@ -326,8 +327,10 @@ test('late successful save or retry cannot clear an editor belonging to a replac
   }
 });
 
-test('explicit preview bundle is readiness-disabled, subscription-only and every retained clinical/recovery action remains inert', async () => {
-  assert.equal(CLOUD_CLINICAL_UI_STAGE.available, false); let active = true;
+test('explicit preview bundle stays subscription-only and inert independently of central readiness', async () => {
+  assert.equal(CLOUD_CLINICAL_UI_STAGE.available, CLOUD_COMPLETE_RELEASE_UI.available);
+  assert.equal(Object.isFrozen(CLOUD_CLINICAL_UI_STAGE), true);
+  assert.throws(() => { (CLOUD_CLINICAL_UI_STAGE as { available: boolean }).available = !CLOUD_CLINICAL_UI_STAGE.available; }); let active = true;
   const bundle = createCloudClinicalUiPreview(() => active), h = hooks(), p = invoke(CloudClinicalWorkspace, { controller: bundle, previewOnly: true, onClose() {} }, h).props as CloudClinicalWorkspaceViewProps;
   assert.equal(h.subscriptions.length, 2); assert.equal(bundle.file.getState().snapshot, null); assert.equal(bundle.recovery.getState().records.length, 0);
   await bundle.file.open(ID); await bundle.file.refresh(); await bundle.file.addReceipt(ID, SESSION, { amountCents: 100, date: DAY, note: '' });

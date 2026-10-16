@@ -66,6 +66,12 @@ export interface CloudLabFinancialSummary {
 }
 export const MAX_CLOUD_PROSTHETIC_CENTS = 1_000_000_000_000;
 export const MAX_CLOUD_LAB_PAYMENT_ALLOCATIONS = 8;
+/** Immutable witnesses are written in the SAME atomic payment transaction.
+ * Three rows per witness keep every Rules evaluation below its ten-read
+ * ceiling without reducing the existing eight-case allocation capacity. */
+export const CLOUD_LAB_PAYMENT_PROOF_ROWS = 3;
+export const cloudProstheticPaymentProofPath = (operationId: string, index: number) =>
+  `clinics/main/prostheticPaymentProofs/${operationId}-${index}`;
 export const MAX_CLOUD_LAB_HISTORY_RECORDS = 2000;
 export const cloudProstheticPath = (collection: 'labCases' | 'labAccounts' | 'labPayments' | 'prostheticOperations', id: string) => `clinics/main/${collection}/${id}`;
 export class CloudProstheticError extends Error {
@@ -268,7 +274,10 @@ function assertPatientSessionLink(item: CloudProstheticCase, session: CloudClini
     || session.data.examinationCents !== snapshot.examinationCents || session.totalCents !== sum([snapshot.patientUnitPriceCents * snapshot.units, snapshot.examinationCents])
     || !publicSnapshot || publicSnapshot.kind !== snapshot.kind || publicSnapshot.material !== snapshot.serviceName
     || publicSnapshot.units !== snapshot.units || publicSnapshot.unitPriceCents !== snapshot.patientUnitPriceCents
-    || session.data.services[0]?.catalogServiceId !== snapshot.serviceId
+    || session.data.services.length !== 1 || session.data.services[0]?.catalogServiceId !== snapshot.serviceId
+    || session.data.services[0].id !== item.sessionId || session.data.services[0].name !== snapshot.serviceName
+    || session.data.services[0].priceCents !== snapshot.patientUnitPriceCents * snapshot.units
+    || session.data.services[0].tooth !== (snapshot.teethIds.length === 1 ? snapshot.teethIds[0] : null)
     || JSON.stringify(session.data.teethIds) !== JSON.stringify(snapshot.teethIds)) invalid();
 }
 export function parseCloudProstheticCommit(value: unknown, input: CloudProstheticCommand): CloudProstheticCommit {
@@ -394,9 +403,19 @@ export function createCloudProstheticRepository(adapter: CloudProstheticAdapter,
           const intent = await readCloudOperationIntentForCommit(tx, { actorUid: uid, kind: 'prosthetic', command }, { digest });
           if (intent.createdAt !== command.createdAt || intent.status !== (previous === null ? 'prepared' : 'committed')) conflict();
           if (previous !== null) {
-            const receipt = fields(previous, [...Object.keys(baseReceipt), 'fileNo']);
+            const receipt = fields(previous, [...Object.keys(baseReceipt), 'fileNo'],
+              ['validationVersion', 'serviceIndex', 'routeIndex', 'materialIndex', 'totalAllocatedCents']);
             if (Object.keys(baseReceipt).some(key => receipt[key] !== baseReceipt[key as keyof typeof baseReceipt])
               || (command.action === 'create' ? !integer(receipt.fileNo, 1) : receipt.fileNo !== null)) conflict();
+            // Historical v1 acknowledgements never read current prices/cases
+            // or introduce missing witnesses. New v2 metadata is strict too.
+            const metadata = Object.prototype.hasOwnProperty.call(receipt, 'validationVersion');
+            if (metadata ? receipt.validationVersion !== 2
+              || (command.action === 'create' ? !integer(receipt.serviceIndex, 0, 299) || !integer(receipt.routeIndex, 0, 99)
+                || !integer(receipt.materialIndex, 0, 99) || receipt.totalAllocatedCents !== 0
+                : receipt.serviceIndex !== null || receipt.routeIndex !== null || receipt.materialIndex !== null
+                  || receipt.totalAllocatedCents !== (command.action === 'lab-payment' ? sum(command.allocations.map(row => row.amountCents)) : 0))
+              : ['serviceIndex', 'routeIndex', 'materialIndex', 'totalAllocatedCents'].some(key => key in receipt)) conflict();
             await reauthorize(uid); return { status: 'already-committed', operationId: command.operationId, action: command.action, labId: command.labId,
               labRevision: baseReceipt.labRevision, patientId: baseReceipt.patientId, caseId: baseReceipt.caseId, fileNo: receipt.fileNo as number | null,
               patientRevision: baseReceipt.patientRevision, caseRevision: baseReceipt.caseRevision };
@@ -406,6 +425,7 @@ export function createCloudProstheticRepository(adapter: CloudProstheticAdapter,
           if ((current?.revision ?? 0) !== command.expectedLabAccountRevision || !current && command.action !== 'create') conflict();
           if (await tx.get(path('labPayments', command.operationId)) !== null) conflict();
           const writes: [string, object][] = []; let fileNo: number | null = null;
+          let serviceIndex: number | null = null, routeIndex: number | null = null, materialIndex: number | null = null;
           let charged = 0, paid = 0;
           if (command.action === 'create') {
             if (!definition.data.active || definition.revision !== command.expectedLabRevision) conflict();
@@ -417,6 +437,8 @@ export function createCloudProstheticRepository(adapter: CloudProstheticAdapter,
             if (!service?.active || service.kind !== 'prosthetic' || service.priceCents === null || !route || route.labId !== command.labId) conflict();
             const material = definition.data.costs.find(item => item.materialId === route.materialId);
             if (!material?.active || material.unitCostCents === null || material.category !== 'other' && material.category !== command.kind) conflict();
+            serviceIndex = catalog.data.services.indexOf(service); routeIndex = routing.data.routes.indexOf(route);
+            materialIndex = definition.data.costs.indexOf(material);
             const owner = await profile(command.patientId, tx, uid); fileNo = owner.fileNo;
             const accountRaw = await tx.get(path('patientAccounts', command.patientId));
             const account = accountRaw === null ? null : parseCloudClinicalAccount(accountRaw);
@@ -468,6 +490,13 @@ export function createCloudProstheticRepository(adapter: CloudProstheticAdapter,
             if (paid > current!.totalCostCents - current!.paidCostCents) conflict();
             writes.push([path('labPayments', command.operationId), parseCloudLabPayment({ schemaVersion: 1, clinicId: 'main', receiptId: command.operationId,
               labId: command.labId, amountCents: paid, date: command.date, note: command.note, createdAt: command.createdAt, actorUid: uid, paymentMethod: 'cash', allocations })]);
+            for (let index = 0; index * CLOUD_LAB_PAYMENT_PROOF_ROWS < command.allocations.length; index++) {
+              const key = cloudProstheticPaymentProofPath(command.operationId, index);
+              if (await tx.get(key) !== null) conflict();
+              const rows = command.allocations.slice(index * CLOUD_LAB_PAYMENT_PROOF_ROWS, (index + 1) * CLOUD_LAB_PAYMENT_PROOF_ROWS);
+              writes.push([key, { schemaVersion: 1, clinicId: 'main', operationId: command.operationId, labId: command.labId,
+                index, rows, caseIds: rows.map(row => row.caseId), subtotalCents: sum(rows.map(row => row.amountCents)) }]);
+            }
           }
           const nextLab = parseCloudLabAccount({ schemaVersion: 1, clinicId: 'main', labId: command.labId, revision: baseReceipt.labRevision,
             lastOperationId: command.operationId, totalCostCents: sum([current?.totalCostCents ?? 0, charged]), paidCostCents: sum([current?.paidCostCents ?? 0, paid]),
@@ -477,7 +506,8 @@ export function createCloudProstheticRepository(adapter: CloudProstheticAdapter,
           // cross-ledger financial changes must also be rejected by Rules.
           for (const [key, value] of writes) tx.set(key, value);
           tx.set(path('labAccounts', command.labId), nextLab);
-          tx.set(path('prostheticOperations', command.operationId), { ...baseReceipt, fileNo });
+          tx.set(path('prostheticOperations', command.operationId), { ...baseReceipt, fileNo, validationVersion: 2,
+            serviceIndex, routeIndex, materialIndex, totalAllocatedCents: paid });
           markCloudOperationIntentCommitted(tx, intent);
           return { status: 'committed', operationId: command.operationId, action: command.action, labId: command.labId, labRevision: nextLab.revision,
             patientId: baseReceipt.patientId, caseId: baseReceipt.caseId, fileNo, patientRevision: baseReceipt.patientRevision, caseRevision: baseReceipt.caseRevision };

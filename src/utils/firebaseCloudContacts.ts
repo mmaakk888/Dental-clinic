@@ -7,7 +7,7 @@ import { createJournaledCloudContactRepository, prepareCloudContactCommand, Clou
 import { createCloudOperationIntentRepository, parseCloudOperationIntent, prepareCloudIntentCommand,
   CloudOperationIntentError, type CloudOperationIntent, type CloudOperationIntentRepository,
   type CloudOperationKind } from './cloudOperationIntent';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 
 /** Source preparation only. Existing live Rules deny this entire domain.
  * The caller owns the isolated operating Auth app and its lifetime. */
@@ -32,7 +32,7 @@ export async function createFirebaseCloudContacts(auth: Auth, options: FirebaseC
   const requireRuntime = () => {
     try {
       if (revoked || options.isActive && options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || auth.app.options.projectId !== CLOUD_PROJECT_ID
         || auth.app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`

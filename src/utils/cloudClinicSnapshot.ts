@@ -6,7 +6,9 @@ import { parseCloudAppointmentRecord, parseCloudAppointmentDay } from './cloudAp
 import { parseCloudLabDefinition, parseCloudClinicSettingsRecord, parseCloudProstheticRouting } from './cloudClinicSettingsRepository';
 import { parseCloudServiceCatalogRecord } from './cloudServiceCatalogRepository';
 import { parseCloudProstheticCase, parseCloudLabAccount, parseCloudLabPayment, projectCloudProstheticFinancials } from './cloudProstheticRepository';
-import { parseCloudExpenseRecord, parseCloudExpensePayment, parseCloudMaterialBalance, parseCloudMaterialUsage, cloudMaterialId } from './cloudExpenseRepository';
+import { parseCloudExpenseRecord, parseCloudExpensePayment, parseCloudMaterialBalance, parseCloudMaterialHead, resolveCloudMaterialHead,
+  parseCloudMaterialUsage, cloudMaterialId, cloudMaterialIdV2 } from './cloudExpenseRepository';
+import { cloudSupplierInvoiceIdentityV2 } from './cloudExpenseInventoryProofs';
 import { normalizeContactPhone } from './clinicContacts';
 
 const parsers = { patientProfiles: parseCloudPatientRecord, patientAccounts: parseCloudClinicalAccount,
@@ -27,8 +29,15 @@ export interface CloudClinicSnapshot {
     prostheticRouting: ReturnType<typeof parseCloudProstheticRouting> };
   patients: CloudClinicalPatientSnapshot[];
 }
+/** Protected registration-only directory. No accounts, sessions, receipts,
+ * images, operation history or partial loaded-page fallback. */
+export interface CloudClinicDirectorySnapshot {
+  readTime: string;
+  patientProfiles: readonly ReturnType<typeof parseCloudPatientRecord>[];
+  contactRecords: readonly ReturnType<typeof parseCloudContactRecord>[];
+}
 export interface CloudSnapshotQuery {
-  collection: CloudSnapshotCollection | 'settings' | 'counters'; afterId: string | null; documentId: string | null; readTime: string; limit: number;
+  collection: CloudSnapshotCollection | 'settings' | 'counters' | 'expenseOperations' | 'operationIntents'; afterId: string | null; documentId: string | null; readTime: string; limit: number;
 }
 export interface CloudClinicSnapshotAdapter {
   /** Exact catalog query without a consistency selector, used only for its final server time. */
@@ -92,9 +101,11 @@ const documentRoot = 'projects/dental-clinic-mmaakk888/databases/(default)/docum
 export function parseCloudSnapshotQueryResponse(value: unknown, input: Omit<CloudSnapshotQuery, 'readTime'> & { readTime?: string }) {
   try {
     const scope = fields(input, ['collection', 'afterId', 'documentId', 'limit'], ['readTime']);
-    if (![...CLOUD_SNAPSHOT_COLLECTIONS, 'settings', 'counters'].includes(scope.collection) || !integer(scope.limit, 1, 50)
+    if (![...CLOUD_SNAPSHOT_COLLECTIONS, 'settings', 'counters', 'expenseOperations', 'operationIntents'].includes(scope.collection) || !integer(scope.limit, 1, 50)
       || scope.afterId !== null && (typeof scope.afterId !== 'string' || scope.afterId.length > 100)
-      || scope.documentId !== null && (typeof scope.documentId !== 'string' || scope.documentId.length > 100)) fail();
+      || scope.documentId !== null && (typeof scope.documentId !== 'string' || scope.documentId.length > 100)
+      || ['expenseOperations', 'operationIntents'].includes(scope.collection)
+        && (!uuid(scope.documentId) || scope.afterId !== null || scope.limit !== 1 || scope.readTime === undefined)) fail();
     const expected = scope.readTime === undefined ? null : parseCloudSnapshotReadTime(scope.readTime);
     const records: { id: string; data: unknown }[] = []; let finalTime: string | null = null, previous = scope.afterId;
     const responses = rows(value, scope.limit + 200); if (!responses.length) fail();
@@ -126,7 +137,7 @@ function costs(data: ReturnType<typeof parseCloudExpenseRecord>['data']): number
   if (!data.items.length) return []; if (!data.subtotalCents) return data.items.map(() => 0);
   const values = data.items.map(row => ({ id: row.itemId, cost: Number(BigInt(row.totalCents) * BigInt(data.totalCents) / BigInt(data.subtotalCents)), remainder: BigInt(row.totalCents) * BigInt(data.totalCents) % BigInt(data.subtotalCents) }));
   let remaining = data.totalCents - values.reduce((sum, row) => sum + row.cost, 0);
-  for (const row of [...values].sort((a, b) => a.remainder === b.remainder ? a.id.localeCompare(b.id) : a.remainder > b.remainder ? -1 : 1)) { if (remaining-- <= 0) break; row.cost++; } return values.map(row => row.cost);
+  for (const row of [...values].sort((a, b) => a.remainder === b.remainder ? a.id < b.id ? -1 : 1 : a.remainder > b.remainder ? -1 : 1)) { if (remaining-- <= 0) break; row.cost++; } return values.map(row => row.cost);
 }
 /** Complete operational read-only export/report source, NOT disaster restore.
  * No automatic calls, arbitrary readTime/path, SDK, storage, writes or images.
@@ -134,7 +145,47 @@ function costs(data: ReturnType<typeof parseCloudExpenseRecord>['data']): number
  * Hard bounds reject oversized clinics; they never silently truncate totals. */
 export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdapter, options: { digest?: (value: string) => Promise<string> } = {}) {
   const digest = async (value: string) => { const hash = await (options.digest ?? sha256)(value); if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) fail(); return hash; };
-  return Object.freeze({ async readFull(): Promise<CloudClinicSnapshot> {
+  return Object.freeze({ async readDirectory(): Promise<CloudClinicDirectorySnapshot> {
+    try {
+      const assert = () => adapter.assertActive?.();
+      const call = async <T>(work: () => Promise<T>) => { assert(); const value = await work(); assert(); return value; };
+      const probe = parseCloudSnapshotQueryResponse(await call(() => adapter.probeReadTime()),
+        { collection: 'settings', documentId: 'serviceCatalog', afterId: null, limit: 1 });
+      const readTime = probe.readTime; let count = 0, byteLength = 0;
+      const result: CloudClinicDirectorySnapshot = { readTime, patientProfiles: [], contactRecords: [] };
+      const fileNos = new Set<number>(), contactPhones = new Set<string>();
+      for (const collection of ['patientProfiles', 'contactRecords'] as const) {
+        const records: any[] = []; let afterId: string | null = null;
+        do {
+          const input = { collection, documentId: null, afterId, limit: CLOUD_SNAPSHOT_LIMITS.pageSize, readTime };
+          const page = parseCloudSnapshotQueryResponse(await call(() => adapter.query(input)), input);
+          count += page.records.length;
+          byteLength += new TextEncoder().encode(JSON.stringify(page.records)).byteLength;
+          if (count > CLOUD_SNAPSHOT_LIMITS.totalRecords || byteLength > CLOUD_SNAPSHOT_LIMITS.totalBytes
+            || records.length + page.records.length > CLOUD_SNAPSHOT_LIMITS.perCollection) fail();
+          for (const row of page.records) {
+            const parsed = parsers[collection](row.data);
+            if (parsed.recordId !== row.id) fail();
+            if (collection === 'patientProfiles') {
+              const patient = parsed as ReturnType<typeof parseCloudPatientRecord>;
+              const key = patient.data.mobile ? await call(() => digest(`patient-phone-v1:${normalizeContactPhone(patient.data.mobile)}`)) : null;
+              if (patient.phoneKey !== key || fileNos.has(patient.fileNo)) fail(); fileNos.add(patient.fileNo);
+            } else {
+              const contact = parsed as ReturnType<typeof parseCloudContactRecord>;
+              if (!contact.deleted) {
+                const key = await call(() => digest(`contact-phone-v1:${normalizeContactPhone(contact.data!.mobile)}`));
+                if (contact.phoneKey !== key || contactPhones.has(key)) fail(); contactPhones.add(key);
+              }
+            }
+            records.push(parsed);
+          }
+          afterId = page.nextAfterId;
+        } while (afterId !== null);
+        result[collection] = records;
+      }
+      assert(); return freeze(result);
+    } catch { return fail(); }
+  }, async readFull(): Promise<CloudClinicSnapshot> {
     try {
       const assert = () => adapter.assertActive?.();
       const call = async <T>(work: () => Promise<T>) => { assert(); const value = await work(); assert(); return value; };
@@ -146,11 +197,28 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
         byteLength += new TextEncoder().encode(JSON.stringify(value.records)).byteLength; count += value.records.length;
         if (byteLength > CLOUD_SNAPSHOT_LIMITS.totalBytes || count > CLOUD_SNAPSHOT_LIMITS.totalRecords) fail(); return value;
       }
+      // A material head may refer to exactly one immutable receipt and intent.
+      // Read only those names at the SAME instant as the public snapshot, and
+      // keep their content private (never a journal/proof collection export).
+      const privateRows = new Map<string, unknown | null>();
+      async function readPrivate(collection: 'expenseOperations' | 'operationIntents', id: string): Promise<unknown | null> {
+        const key = `${collection}/${id}`;
+        if (privateRows.has(key)) return privateRows.get(key)!;
+        const page = await query(collection, id, null, 1);
+        if (page.records.length > 1 || page.records.length === 1 && page.records[0].id !== id) fail();
+        const value = page.records[0]?.data ?? null; privateRows.set(key, value); return value;
+      }
       for (const collection of CLOUD_SNAPSHOT_COLLECTIONS) {
-        const records: unknown[] = []; let afterId: string | null = null;
+        const records: unknown[] = []; let afterId: string | null = null, seenRecords = 0;
         do { const page = await query(collection, null, afterId, 50);
           for (const row of page.records) {
-            const parsed = parsers[collection](row.data as never);
+            if (++seenRecords > CLOUD_SNAPSHOT_LIMITS.perCollection) fail();
+            const parsed = collection === 'materialBalances'
+              ? await call(() => resolveCloudMaterialHead(parseCloudMaterialHead(row.data), readPrivate, { digest }))
+              : parsers[collection](row.data as never);
+            // A new cancelled/prepared head has no purchase yet. Its private
+            // candidate must never inflate stock, expenses, reports or export.
+            if (parsed === null) continue;
             const identity = collection === 'patientFiles' ? String((parsed as CloudPatientFileIndex).fileNo)
               : collection === 'patientAccounts' ? (parsed as ReturnType<typeof parseCloudClinicalAccount>).patientId
                 : collection === 'patientSessions' ? (parsed as ReturnType<typeof parseCloudClinicalSession>).sessionId
@@ -187,8 +255,12 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
       for (const appointment of records.appointmentRecords) if (!days.has(appointment.data.date) || appointment.data.patientRecordId && !profiles.has(appointment.data.patientRecordId)) fail();
       for (const day of days.values()) {
         const slots = (appointmentsByDay.get(day.recordId) ?? []).filter(row => ['scheduled', 'confirmed', 'waiting', 'attended'].includes(row.data.status)).map(row => {
-          const startMinute = Number(row.data.time.slice(0, 2)) * 60 + Number(row.data.time.slice(3)); return { recordId: row.recordId, startMinute, endMinute: startMinute + row.data.durationMinutes }; });
-        if (JSON.stringify(slots) !== JSON.stringify(day.slots)) fail();
+          const startMinute = Number(row.data.time.slice(0, 2)) * 60 + Number(row.data.time.slice(3)); return { recordId: row.recordId, startMinute, endMinute: startMinute + row.data.durationMinutes }; })
+          .sort((a, b) => a.startMinute - b.startMinute || a.recordId.localeCompare(b.recordId));
+        // Legacy readable indexes retain UUID order; compare a sorted copy,
+        // without rewriting the historical record or mutating exported data.
+        const storedSlots = [...day.slots].sort((a, b) => a.startMinute - b.startMinute || a.recordId.localeCompare(b.recordId));
+        if (JSON.stringify(slots) !== JSON.stringify(storedSlots)) fail();
       }
       const labs = new Map(records.labDefinitions.map(row => [row.recordId, row])), sessions = new Map(records.patientSessions.map(row => [row.sessionId, row]));
       for (const route of settings.prostheticRouting.data.routes) {
@@ -218,18 +290,20 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
       for (const expense of expenses.values()) {
         const payments = paymentsByExpense.get(expense.recordId) ?? [];
         if (payments.length !== expense.paymentCount || expense.paidCents !== payments.reduce((sum, row) => sum + row.amountCents, 0)) fail();
-        const key = expense.data.invoiceNumber ? await call(() => digest(JSON.stringify(['clinic-supplier-invoice-v1', normalizeSupplier(expense.data.supplierName), normalizeSupplier(expense.data.invoiceNumber)]))) : null;
+        const key = expense.data.invoiceNumber ? await call(() => digest(expense.inventoryVersion === 2
+          ? cloudSupplierInvoiceIdentityV2(expense.data.supplierName, expense.data.invoiceNumber)
+          : JSON.stringify(['clinic-supplier-invoice-v1', normalizeSupplier(expense.data.supplierName), normalizeSupplier(expense.data.invoiceNumber)]))) : null;
         if (key !== expense.invoiceKey || key && invoiceKeys.has(key)) fail(); if (key) invoiceKeys.add(key);
         const allocated = costs(expense.data), seen = new Set<string>();
         for (let index = 0; index < expense.data.items.length; index++) {
-          const item = expense.data.items[index], key = await call(() => cloudMaterialId(item.name, item.unit, { digest })), previous = purchased.get(key) ?? { quantity: 0, cost: 0, revisions: 0 };
+          const item = expense.data.items[index], key = await call(() => (expense.inventoryVersion === 2 ? cloudMaterialIdV2 : cloudMaterialId)(item.name, item.unit, { digest })), previous = purchased.get(key) ?? { quantity: 0, cost: 0, revisions: 0 };
           purchased.set(key, { quantity: previous.quantity + item.quantityMilli, cost: previous.cost + allocated[index], revisions: previous.revisions + (seen.has(key) ? 0 : 1) }); seen.add(key);
         }
       }
       for (const usage of records.materialUsages) if (!materials.has(usage.materialId)) fail();
       if (purchased.size !== materials.size) fail();
       for (const material of materials.values()) {
-        if (await call(() => cloudMaterialId(material.name, material.unit, { digest })) !== material.recordId) fail();
+        if (await call(() => (material.identityVersion === 2 ? cloudMaterialIdV2 : cloudMaterialId)(material.name, material.unit, { digest })) !== material.recordId) fail();
         const purchase = purchased.get(material.recordId), usages = usagesByMaterial.get(material.recordId) ?? [];
         if (!purchase || purchase.quantity !== material.purchasedMilli || purchase.cost !== material.purchaseCostCents
           || material.revision !== purchase.revisions + usages.length || material.usedMilli !== usages.filter(row => row.kind === 'used').reduce((sum, row) => sum + row.quantityMilli, 0)

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createCloudOperationIntentRepository } from '../cloudOperationIntent';
 import { createCloudClinicalRepository } from '../cloudClinicalRepository';
 import { createCloudProstheticRepository } from '../cloudProstheticRepository';
-import { createCloudExpenseRepository, cloudMaterialId } from '../cloudExpenseRepository';
+import { createCloudExpenseRepository, cloudMaterialIdV2 } from '../cloudExpenseRepository';
 import { createCloudAppointmentRepository } from '../cloudAppointmentRepository';
 import type { CloudClinicSettingsData } from '../cloudClinicSettingsRepository';
 import type { CloudSnapshotQuery } from '../cloudClinicSnapshot';
@@ -79,7 +79,7 @@ export async function makeClinicSnapshotFixture(full = true) {
         subtotalCents: 10_000, taxCents: 0, discountCents: 0, totalCents: 10_000,
         items: [{ itemId: snapshotId(15), name: 'قفازات مصطنعة', unit: 'علبة', quantityMilli: 2000, unitPriceCents: 5000, discountCents: 0, taxCents: 0, totalCents: 10_000 }] } });
     await commit('expense', expense, { action: 'pay', operationId: snapshotId(16), recordId: snapshotId(14), expectedRevision: 1, amountCents: 1000, date: day, note: '', createdAt: SNAPSHOT_WHEN });
-    await commit('expense', expense, { action: 'usage', operationId: snapshotId(17), materialId: await cloudMaterialId('قفازات مصطنعة', 'علبة', { digest: snapshotDigest }),
+    await commit('expense', expense, { action: 'usage', operationId: snapshotId(17), materialId: await cloudMaterialIdV2('قفازات مصطنعة', 'علبة', { digest: snapshotDigest }),
       expectedRevision: 1, quantityMilli: 500, kind: 'used', date: day, note: '', createdAt: SNAPSHOT_WHEN });
     const appointments = createCloudAppointmentRepository(adapter, { digest: snapshotDigest });
     await commit('appointment', appointments, { operationId: snapshotId(18), recordId: snapshotId(19), expectedRevision: 0, createdAt: SNAPSHOT_WHEN,

@@ -2,7 +2,7 @@ import type { Auth } from 'firebase/auth';
 import type { DocumentSnapshot, QueryConstraint, Transaction } from 'firebase/firestore/lite';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID } from './cloudIdentity';
 import { assessCloudOwnerMembership } from './cloudMembership';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 import { CLOUD_CLINIC_SETTINGS_PATH, CLOUD_CLINIC_LOGO_PATH, CLOUD_PROSTHETIC_ROUTING_PATH,
   CloudClinicSettingsError, createCloudClinicSettingsRepository, prepareCloudClinicSettingsCommand,
   parseCloudClinicSettingsRecord, parseCloudClinicLogoRecord, parseCloudProstheticRouting, parseCloudLabDefinition,
@@ -21,6 +21,7 @@ const ID = new RegExp(`^${UUID}${END}`), APP = new RegExp(`^clinic-operating-${U
 const LAB = new RegExp(`^clinics/main/labDefinitions/(${UUID})${END}`);
 const OPERATION = new RegExp(`^clinics/main/settingsOperations/${UUID}${END}`);
 const INTENT = new RegExp(`^clinics/main/operationIntents/${UUID}${END}`);
+const PROOF = new RegExp(`^clinics/main/settingsValidationProofs/${UUID}-((scalar|routes)(-shape)?|(medications|costs)-unique-(ids|names)|routes-unique-ids|routing-refs-shape|(medications|templates|costs)(-(shape|text))?|dependencies)-[0-4]-([0-9]|[1-9][0-9]|[12][0-9][0-9])${END}`);
 const CATALOG = 'clinics/main/settings/serviceCatalog';
 const domain = (path: string) => path === CLOUD_CLINIC_SETTINGS_PATH || path === CLOUD_CLINIC_LOGO_PATH || path === CLOUD_PROSTHETIC_ROUTING_PATH || LAB.test(path);
 const settingsKind = (kind: CloudOperationKind) => { if (kind !== 'settings') throw new CloudOperationIntentError('invalid'); };
@@ -33,7 +34,7 @@ export async function createFirebaseCloudClinicSettings(auth: Auth,
   const requireRuntime = () => {
     try {
       if (revoked || !options || typeof options.isActive !== 'function' || options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || auth.app.options.projectId !== CLOUD_PROJECT_ID || auth.app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`
         || !APP.test(auth.app.name) || auth.emulatorConfig) throw new Error();
@@ -72,7 +73,7 @@ export async function createFirebaseCloudClinicSettings(auth: Auth,
     };
     const reference = (path: string, writing = false) => {
       requireRuntime();
-      if (typeof path !== 'string' || !(domain(path) || OPERATION.test(path) || INTENT.test(path) || !writing && path === CATALOG))
+      if (typeof path !== 'string' || !(domain(path) || OPERATION.test(path) || INTENT.test(path) || PROOF.test(path) || !writing && path === CATALOG))
         throw new CloudClinicSettingsError('invalid');
       return sdkCall(() => store.doc(database, path));
     };

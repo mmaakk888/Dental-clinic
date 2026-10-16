@@ -1,7 +1,7 @@
 import config from '../../firebase.cloud-config.json';
 import { assessCloudOwnerIdentity, CLOUD_PROJECT_ID, type CloudOwnerIdentity } from './cloudIdentity';
 import { assessCloudOwnerMembership, type CloudOwnerMembership } from './cloudMembership';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 import type { CloudContactRepository } from './cloudContactRepository';
 import type { CloudPatientRepository } from './cloudPatientRepository';
 import type { CloudClinicalRepository } from './cloudClinicalRepository';
@@ -214,7 +214,7 @@ export type CloudOperatingFirebaseSession = CloudOperatingAuthSession & {
  */
 export async function createFirebaseOperatingAuth(): Promise<CloudOperatingFirebaseSession> {
   const requireRuntime = () => {
-    if (typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+    if (typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
       || config.projectId !== CLOUD_PROJECT_ID || config.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`) {
       throw new CloudOperatingAuthError('unavailable');
     }

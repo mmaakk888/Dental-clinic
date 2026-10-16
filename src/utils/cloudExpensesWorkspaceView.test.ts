@@ -111,3 +111,13 @@ test('mobile/desktop source reuses bounded compression, no local OCR/Storage/Aut
   assert.doesNotMatch(source, /localStorage|Storage\.get|AiService|InvoiceOcrModal|setInterval|requestAnimationFrame/); assert.doesNotMatch(css, /overflow-x:\s*(auto|scroll)|animation:/);
   assert.ok(!Object.keys(compiled.metafile!.inputs).some(file => /firebaseCloud|services[/\\]aiService|utils[/\\]Storage/.test(file)));
 });
+test('unitemized correction field is explicit, raw and guarded without claiming another cash payment', () => {
+  const draft: CloudExpenseWorkspaceDraft = { action: 'edit', recordId: id(1), expectedRevision: 1, amount: '400.',
+    data: { title: 'كهرباء', date: '2026-10-14', note: '', isFixed: true, recurringPeriod: 'monthly', expenseType: 'electricity' } };
+  const h = harness({ loaded: true, snapshot: snapshot(), draft }), view = h.render();
+  assert.match(view.content, /قيمة المصروف بعد التصحيح|لا يسجّل دفعة/);
+  const field = view.elements.find(item => item.type === 'input' && item.props.placeholder === 'القيمة الكاملة وليست دفعة جديدة')!;
+  assert.equal(field.props.value, '400.'); field.props.onChange({ target: { value: '401.25' } });
+  assert.equal(h.calls[0][1].amount, '401.25'); h.replace({ draft: { ...draft, amount: '402' } }); field.props.onChange({ target: { value: '10' } }); assert.equal(h.calls.length, 1);
+  const { amount: ignored, ...withoutAmount } = draft; h.replace({ draft: withoutAmount }); assert.doesNotMatch(h.html(), /قيمة المصروف بعد التصحيح/);
+});

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCloudClinicOverviewController } from './cloudClinicOverviewController';
 import { createCloudClinicSnapshotReader, type CloudClinicSnapshot } from './cloudClinicSnapshot';
-import { makeClinicSnapshotFixture, snapshotDigest } from './testing/cloudClinicSnapshotFixtures';
+import { makeClinicSnapshotFixture, snapshotDigest, snapshotId } from './testing/cloudClinicSnapshotFixtures';
 
 const DAY = '2026-10-13';
 const deferred = <T>() => { let resolve!: (value: T) => void, reject!: (error: Error) => void;
@@ -118,4 +118,25 @@ test('reentrant lifetime callbacks cannot recurse or initiate reads during getSt
   }, getSnapshot: async () => { calls++; throw new Error(); } });
   assert.equal(controller.getState().closed, false); assert.equal(calls, 0);
   active = false; assert.equal(controller.getState().closed, true); assert.equal(calls, 0);
+});
+
+test('protected configured logo is read explicitly and fenced without loading invoice images or local settings', async () => {
+  const h = await harness(), snapshot = structuredClone(h.snapshot); snapshot.settings.clinicSettings.data.identity.logoRecordId = 'clinicLogo';
+  const logo = { schemaVersion: 1, clinicId: 'main', recordId: 'clinicLogo', revision: 1, lastOperationId: snapshotId(998),
+    data: { mimeType: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZNsAAAAASUVORK5CYII=', width: 1, height: 1 } };
+  let calls = 0;
+  const controller = createCloudClinicOverviewController({ initialDate: DAY, isActive: () => true,
+    getSnapshot: async () => ({ readFull: async () => snapshot }), getSettings: async () => ({ repository: {
+      get: async () => { calls++; return snapshot.settings.clinicSettings; }, getLogo: async () => { calls++; return logo; } } }) });
+  assert.equal(calls, 0); assert.equal(controller.getState().logo, null); assert.equal(await controller.refresh(), true);
+  assert.equal(calls, 4); assert.equal(controller.getState().logo, `data:image/png;base64,${logo.data.base64}`);
+  controller.dispose(); assert.equal(controller.getState().logo, null);
+});
+
+test('a changed protected branding revision never publishes a mismatched overview/header', async () => {
+  const h = await harness(); const settings = structuredClone(h.snapshot.settings.clinicSettings); settings.revision++;
+  const controller = createCloudClinicOverviewController({ initialDate: DAY, isActive: () => true,
+    getSnapshot: async () => ({ readFull: async () => h.snapshot }), getSettings: async () => ({ repository: {
+      get: async () => settings, getLogo: async () => { throw new Error('MUST_NOT_READ'); } } }) });
+  assert.equal(await controller.refresh(), false); assert.equal(controller.getState().snapshot, null); assert.equal(controller.getState().logo, null);
 });

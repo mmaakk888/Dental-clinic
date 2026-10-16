@@ -11,7 +11,7 @@ type Header = Omit<CloudExpenseData, 'subtotalCents' | 'taxCents' | 'discountCen
 export interface CloudExpenseItemDraft { key: number; name: string; unit: string; quantity: string; unitPrice: string; discount: string; tax: string }
 export type CloudExpenseWorkspaceDraft =
   | { action: 'create'; header: Header; subtotal: string; tax: string; discount: string; paid: string; items: CloudExpenseItemDraft[] }
-  | { action: 'edit'; recordId: string; expectedRevision: number; data: CloudExpenseEditable }
+  | { action: 'edit'; recordId: string; expectedRevision: number; data: Omit<CloudExpenseEditable, 'totalCents'>; amount?: string }
   | { action: 'pay'; recordId: string; expectedRevision: number; amount: string; date: string; note: string }
   | { action: 'usage'; materialId: string; expectedRevision: number; quantity: string; kind: 'used' | 'waste'; date: string; note: string }
   | { action: 'attach-image'; recordId: string; expectedRevision: number; image: CloudInvoiceImageMetadata };
@@ -71,10 +71,10 @@ function parseDraft(value: unknown): CloudExpenseWorkspaceDraft {
     : action === 'pay' ? ['action', 'recordId', 'expectedRevision', 'amount', 'date', 'note']
       : action === 'usage' ? ['action', 'materialId', 'expectedRevision', 'quantity', 'kind', 'date', 'note']
         : action === 'attach-image' ? ['action', 'recordId', 'expectedRevision', 'image'] : fail();
-  const item = exact(value, keys);
+  const item = exact(value, action === 'edit' && Object.prototype.hasOwnProperty.call(value, 'amount') ? [...keys, 'amount'] : keys);
   if (action === 'usage' ? !hash(item.materialId) : !uuid(item.recordId)) fail();
   if (!Number.isInteger(item.expectedRevision) || item.expectedRevision < 1 || item.expectedRevision >= 2_000_000_000) fail();
-  if (action === 'edit') { const data = exact(item.data, editKeys);
+  if (action === 'edit') { const data = exact(item.data, editKeys); if ('amount' in item && !raw(item.amount, 32)) fail();
     if (editKeys.some(key => key === 'isFixed' ? typeof data[key] !== 'boolean' : !raw(data[key]))) fail(); return { ...item, data } as CloudExpenseWorkspaceDraft; }
   if (action === 'attach-image') return { ...item, image: parseCloudInvoiceImageMetadata(item.image) } as CloudExpenseWorkspaceDraft;
   if (!raw(item.date, 32) || !raw(item.note, 2000) || !raw(item[action === 'pay' ? 'amount' : 'quantity'], 32)
@@ -148,7 +148,9 @@ export function createCloudExpenseWorkspaceController(options: {
       if (command.action === 'pay') return { action: 'pay', recordId: command.recordId, expectedRevision: command.expectedRevision, amount: String(command.amountCents / 100), date: command.date, note: command.note };
       if (command.action === 'usage') return { action: 'usage', materialId: command.materialId, expectedRevision: command.expectedRevision,
         quantity: String(command.quantityMilli / 1000), kind: command.kind, date: command.date, note: command.note };
-      return command.action === 'edit' ? { action: 'edit', recordId: command.recordId, expectedRevision: command.expectedRevision, data: command.data }
+      return command.action === 'edit' ? { action: 'edit', recordId: command.recordId, expectedRevision: command.expectedRevision,
+        data: Object.fromEntries(editKeys.map(key => [key, command.data[key]])) as Omit<CloudExpenseEditable, 'totalCents'>,
+        ...('totalCents' in command.data ? { amount: String(command.data.totalCents! / 100) } : {}) }
         : { action: 'attach-image', recordId: command.recordId, expectedRevision: command.expectedRevision, image: command.image };
     },
     createCommand: (snapshot, draft) => {
@@ -166,7 +168,17 @@ export function createCloudExpenseWorkspaceController(options: {
       else if (draft.action === 'usage') { const quantityMilli = parseCloudExpenseQuantity(draft.quantity); if (quantityMilli === null || selection.kind !== 'material'
         || quantityMilli > selection.record.purchasedMilli - selection.record.usedMilli - selection.record.wasteMilli) fail();
         body = { action: 'usage', materialId: draft.materialId, expectedRevision: draft.expectedRevision, quantityMilli, kind: draft.kind, date: draft.date, note: draft.note }; }
-      else if (draft.action === 'edit') body = { action: 'edit', recordId: draft.recordId, expectedRevision: draft.expectedRevision, data: draft.data };
+      else if (draft.action === 'edit') {
+        const data: CloudExpenseEditable = { ...draft.data };
+        if ('amount' in draft) {
+          const totalCents = parseCloudExpenseMoney(draft.amount);
+          if (selection.kind !== 'expense' || selection.record.data.items.length || totalCents === null || totalCents < selection.record.paidCents) fail();
+          const subtotal = totalCents - selection.record.data.taxCents + selection.record.data.discountCents;
+          if (!Number.isSafeInteger(subtotal) || subtotal < selection.record.data.discountCents || subtotal > moneyMax) fail();
+          data.totalCents = totalCents;
+        }
+        body = { action: 'edit', recordId: draft.recordId, expectedRevision: draft.expectedRevision, data };
+      }
       else { if (!imageBytes || imageBytes.sha256 !== draft.image.sha256) fail(); body = { action: 'attach-image', recordId: draft.recordId, expectedRevision: draft.expectedRevision, image: draft.image }; }
       prepareCloudExpenseCommand({ ...body, operationId: '00000000-0000-4000-8000-000000000000', createdAt: '2000-01-01T00:00:00.000Z' });
       return prepareCloudExpenseCommand({ ...body, operationId: makeId(), createdAt: clock() });
@@ -275,7 +287,8 @@ export function createCloudExpenseWorkspaceController(options: {
       return base.beginDraft({ action: 'pay', recordId: selection.record.recordId, expectedRevision: selection.record.revision, amount: '', date: clock().slice(0, 10), note: '' }); },
     beginEdit(expected?: CloudExpenseSelection) { const selection = freshSelection(expected); if (selection?.kind !== 'expense') return false;
       return base.beginDraft({ action: 'edit', recordId: selection.record.recordId, expectedRevision: selection.record.revision,
-        data: Object.fromEntries(editKeys.map(key => [key, selection.record.data[key]])) }); },
+        data: Object.fromEntries(editKeys.map(key => [key, selection.record.data[key]])),
+        ...(selection.record.data.items.length ? {} : { amount: String(selection.record.data.totalCents / 100) }) }); },
     beginUsage(expected?: CloudExpenseSelection) { const selection = freshSelection(expected); if (selection?.kind !== 'material') return false;
       return base.beginDraft({ action: 'usage', materialId: selection.record.recordId, expectedRevision: selection.record.revision, quantity: '', kind: 'used', date: clock().slice(0, 10), note: '' }); },
     updateDraft: (next: unknown, expected: CloudExpenseWorkspaceDraft) => !imageLoading && base.updateDraft(next, expected),

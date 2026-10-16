@@ -5,7 +5,7 @@ import { assessCloudOwnerMembership } from './cloudMembership';
 import { createJournaledCloudPatientRepository, prepareCloudPatientCommand, CloudPatientError, type CloudPatientRepository } from './cloudPatientRepository';
 import { CloudOperationIntentError, createCloudOperationIntentRepository, prepareCloudIntentCommand, parseCloudOperationIntent,
   type CloudOperationIntent, type CloudOperationKind, type CloudOperationIntentRepository } from './cloudOperationIntent';
-import { isLocalClinicHost } from './localRuntime';
+import { isCloudOperatingRuntime } from './cloudOperatingRuntime';
 
 /** Prepared explicit Auth capability only: no UI, live Rules or Hosting activation. */
 export interface FirebaseCloudPatientsOptions { isActive?: () => boolean }
@@ -36,7 +36,7 @@ export async function createFirebaseCloudPatients(auth: Auth, options: FirebaseC
   const requireRuntime = () => {
     try {
       if (revoked || options.isActive && options.isActive() !== true
-        || typeof window === 'undefined' || !isLocalClinicHost(window.location.hostname)
+        || typeof window === 'undefined' || !isCloudOperatingRuntime(window.location.hostname, window.location.protocol)
         || !auth || !user || typeof uid !== 'string' || !uid || auth.currentUser !== user || user.uid !== uid || auth.app !== app
         || app.options.projectId !== CLOUD_PROJECT_ID
         || app.options.authDomain !== `${CLOUD_PROJECT_ID}.firebaseapp.com`

@@ -659,6 +659,14 @@ export function createCloudOperatingPageController(
             if (!patientsActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
             return repository;
           },
+          getDirectory: async () => {
+            if (!patientsActive(ticket, candidate, owner.uid) || typeof candidate.getClinicSnapshot !== 'function') throw new CloudOperatingAuthError('changed');
+            const directory = await candidate.getClinicSnapshot();
+            if (!patientsActive(ticket, candidate, owner.uid) || typeof directory.readDirectory !== 'function') throw new CloudOperatingAuthError('changed');
+            const result = await directory.readDirectory();
+            if (!patientsActive(ticket, candidate, owner.uid)) throw new CloudOperatingAuthError('changed');
+            return result;
+          },
           isActive: () => patientsActive(ticket, candidate, owner.uid),
         });
         if (!patientsActive(ticket, candidate, owner.uid)) { controller.dispose(); return null; }

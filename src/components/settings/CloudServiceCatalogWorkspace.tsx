@@ -68,7 +68,7 @@ export function cloudCatalogEditorSaveTarget(editor: CloudCatalogEditor, snapsho
   } catch { return null; }
 }
 export interface CloudServiceCatalogWorkspaceViewProps {
-  state: CloudCatalogWorkspaceState; previewOnly?: boolean; editor: CloudCatalogEditor | null;
+  state: CloudCatalogWorkspaceState; previewOnly?: boolean; disabled?: boolean; editor: CloudCatalogEditor | null;
   query: string; filter: CloudCatalogFilter;
   onClose: () => void; onLoad: () => void; onBeginEdit: () => void;
   onQuery: (query: string) => void; onFilter: (filter: CloudCatalogFilter) => void;
@@ -84,7 +84,7 @@ export interface CloudServiceCatalogWorkspaceViewProps {
 export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorkspaceViewProps) {
   const prefix = useId(), latest = useRef(props); latest.current = props;
   const { state } = props, unavailable = props.previewOnly || state.closed;
-  const disabled = unavailable || locked(state);
+  const disabled = props.disabled === true || unavailable || locked(state);
   const editor = unavailable ? null : props.editor;
   const rows = unavailable ? [] : editor?.rows ?? state.snapshot?.data.services.map(row => ({ ...row, price: moneyText(row.priceCents) })) ?? [];
   const query = unavailable ? '' : normalizeDirectoryName(props.query);
@@ -92,8 +92,8 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
     && normalizeDirectoryName(row.name).includes(query)), [rows, props.filter, query]);
   const selected = editor?.rows.find(row => row.serviceId === editor.selectedServiceId) ?? null;
   const saveTarget = editor ? cloudCatalogEditorSaveTarget(editor, state.snapshot) : null;
-  const blockedClose = !props.previewOnly && !state.closed && (locked(state) || Boolean(state.draft) || Boolean(state.pendingOperationId));
-  const ready = () => !latest.current.previewOnly && !latest.current.state.closed && !locked(latest.current.state);
+  const blockedClose = props.disabled === true || !props.previewOnly && !state.closed && (locked(state) || Boolean(state.draft) || Boolean(state.pendingOperationId));
+  const ready = () => !latest.current.disabled && !latest.current.previewOnly && !latest.current.state.closed && !locked(latest.current.state);
   const browse = (action: (current: CloudServiceCatalogWorkspaceViewProps) => void) => { if (ready()) action(latest.current); };
   const edit = (expected: CloudCatalogEditor, action: (current: CloudServiceCatalogWorkspaceViewProps) => void) => {
     if (ready() && latest.current.editor === expected && latest.current.state.draft === expected.sourceDraft) action(latest.current);
@@ -106,7 +106,7 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
       <div><h2 id={`${prefix}-title`}>الخدمات والأسعار</h2><p>فهرس موحّد لأسعار المريض وقيمة الكشف، دون حسابات المعامل.</p></div></div>
       <div><button className="ccat-button ccat-secondary" type="button" disabled={blockedClose} onClick={() => {
         const current = latest.current, s = current.state;
-        if (current.previewOnly || s.closed || !locked(s) && !s.draft && !s.pendingOperationId) current.onClose();
+        if (!current.disabled && (current.previewOnly || s.closed || !locked(s) && !s.draft && !s.pendingOperationId)) current.onClose();
       }}><ArrowRight size={18} aria-hidden="true" />إلغاء وإغلاق</button>
         {blockedClose && <p className="ccat-help">ألغِ المسودة أو أكمل التحقق من العملية قبل الإغلاق.</p>}</div>
     </header>
@@ -116,11 +116,11 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
       <p>{refresh ? 'إعادة التحقق تقرأ الفهرس فقط؛ لا تُرسل تعديلًا جديدًا.' : 'قد يكون التعديل وصل. أعد نفس العملية دون تغيير المسودة أو إنشاء محاولة جديدة.'}</p>
       {state.pendingOperationId && <p className="ccat-operation">معرّف العملية <bdi dir="ltr">{state.pendingOperationId}</bdi></p>}
       <div className="ccat-actions"><button className="ccat-button ccat-primary" type="button" disabled={state.loading || state.historyLoading} onClick={() => {
-        const current = latest.current; if (!current.previewOnly && !current.state.closed && !current.state.loading && !current.state.historyLoading
+        const current = latest.current; if (!current.disabled && !current.previewOnly && !current.state.closed && !current.state.loading && !current.state.historyLoading
           && ['retry-required', 'refresh-required'].includes(current.state.saveStatus)) current.onRetry();
       }}><RefreshCw size={18} aria-hidden="true" />{refresh ? 'إعادة التحقق بالقراءة' : 'إعادة نفس المحاولة'}</button>
         {retry && <button className="ccat-button ccat-secondary" type="button" disabled={state.loading || state.historyLoading} onClick={() => {
-          const current = latest.current; if (!current.previewOnly && !current.state.closed && !current.state.loading && !current.state.historyLoading
+          const current = latest.current; if (!current.disabled && !current.previewOnly && !current.state.closed && !current.state.loading && !current.state.historyLoading
             && current.state.saveStatus === 'retry-required') current.onCancelPending();
         }}><X size={18} aria-hidden="true" />التحقق من إلغاء العملية</button>}</div></div>}
     {!unavailable && state.error && <p className="ccat-message ccat-error" role="alert">{state.error}</p>}
@@ -183,16 +183,17 @@ export function CloudServiceCatalogWorkspaceView(props: CloudServiceCatalogWorks
   </section>;
 }
 
-export default function CloudServiceCatalogWorkspace({ controller, previewOnly = false, onClose }: {
-  controller: CloudCatalogWorkspaceController; previewOnly?: boolean; onClose: () => void;
+export default function CloudServiceCatalogWorkspace({ controller, previewOnly = false, disabled = false, onClose }: {
+  controller: CloudCatalogWorkspaceController; previewOnly?: boolean; disabled?: boolean; onClose: () => void;
 }) {
   const state = useSyncExternalStore(useCallback(notify => controller.subscribe(notify), [controller]), controller.getState, controller.getState);
-  const latest = useRef({ controller, previewOnly, onClose }); latest.current = { controller, previewOnly, onClose };
+  const latest = useRef({ controller, previewOnly, disabled, onClose }); latest.current = { controller, previewOnly, disabled, onClose };
   const [query, setQuery] = useState(''), [filter, setFilter] = useState<CloudCatalogFilter>('all');
   const [editor, setEditor] = useState<CloudCatalogEditor | null>(null);
   const editing = useRef<{ controller: CloudCatalogWorkspaceController; value: CloudCatalogEditor } | null>(null);
   const busy = useRef(false);
-  const current = () => latest.current.controller === controller && !latest.current.previewOnly ? controller.getState() : null;
+  const current = () => { const lease = latest.current; if (lease.controller !== controller || lease.previewOnly || lease.disabled) return null;
+    const value = controller.getState(); return latest.current === lease ? value : null; };
   const available = () => { const value = current(); return value && !value.closed && !locked(value) && !busy.current ? value : null; };
   const editorCurrent = (expected: CloudCatalogEditor) => {
     const value = available(); return value && editing.current?.controller === controller && editing.current.value === expected
@@ -208,10 +209,10 @@ export default function CloudServiceCatalogWorkspace({ controller, previewOnly =
   };
   const visibleEditor = !previewOnly && !state.closed && editor && editing.current?.controller === controller
     && state.draft === editor.sourceDraft ? editor : null;
-  return <CloudServiceCatalogWorkspaceView state={state} previewOnly={previewOnly} query={query} filter={filter} editor={visibleEditor}
+  return <CloudServiceCatalogWorkspaceView state={state} previewOnly={previewOnly} disabled={disabled} query={query} filter={filter} editor={visibleEditor}
     onQuery={value => { if (available()) setQuery(value); }} onFilter={value => { if (available() && ['all', 'clinical', 'prosthetic'].includes(value)) setFilter(value); }}
     onClose={() => { const value = latest.current.controller === controller ? controller.getState() : null;
-      if (value && !busy.current && (latest.current.previewOnly || value.closed || !locked(value) && !value.draft && !value.pendingOperationId)) latest.current.onClose(); }}
+      if (value && !latest.current.disabled && !busy.current && (latest.current.previewOnly || value.closed || !locked(value) && !value.draft && !value.pendingOperationId)) latest.current.onClose(); }}
     onLoad={() => { const value = available(); if (value && !value.draft) void run(() => controller.load()); }}
     onBeginEdit={() => { const value = available(); if (!value || !value.loaded || value.draft || !controller.beginEdit()) return;
       const fresh = current(); if (fresh?.draft && !fresh.closed) publishEditor(editorFor(fresh.draft)); }}
