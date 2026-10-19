@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { scopeCloudReleaseRules } from './scope-cloud-release-rules.mjs';
+import { compactCloudRuleSymbols } from './compact-cloud-rule-symbols.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = path => readFileSync(resolve(root, path), 'utf8').replace(/\r\n/g, '\n');
@@ -43,7 +44,8 @@ export function composeUnscopedCloudReleaseRules(base, fragments) {
 }
 
 export function composeCloudReleaseRules(base, fragments) {
-  return scopeCloudReleaseRules(composeUnscopedCloudReleaseRules(base, fragments), fragments).source;
+  const scoped = scopeCloudReleaseRules(composeUnscopedCloudReleaseRules(base, fragments), fragments).source;
+  return compactCloudRuleSymbols(scoped).source;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

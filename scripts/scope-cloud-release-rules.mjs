@@ -1,6 +1,6 @@
 /** Pure structural relocation of the reviewed Rules. No I/O or predicate edits.
- * Shared primitives live once at database scope; exclusive helpers live at
- * their users' lowest common match inside one of four sibling clinic groups.
+ * Shared helpers live at database scope; each other helper lives at its
+ * users' lowest common match inside one of four sibling clinic groups.
  */
 import assert from 'node:assert/strict';
 
@@ -45,13 +45,13 @@ function closeBrace(mask, start) {
   throw new Error('Unbalanced Rules source');
 }
 
-function definitions(source) {
+function definitions(source, scopedCopies = false) {
   const mask = masked(source), result = [];
   for (const match of mask.matchAll(/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*\{/g)) {
     const start = match.index, end = closeBrace(mask, start + match[0].lastIndexOf('{'));
     result.push({ name: match[1], start, end, raw: source.slice(start, end) });
   }
-  assert.equal(new Set(result.map(row => row.name)).size, result.length, 'Duplicate Rules function');
+  if (!scopedCopies) assert.equal(new Set(result.map(row => row.name)).size, result.length, 'Duplicate Rules function');
   return result;
 }
 
@@ -101,15 +101,16 @@ function callGraph(source) {
  * The input is the unscoped, unique-definition source, never a deployed file.
  */
 export function verifyCloudReleaseRulesScopeEquivalence(before, after) {
-  const original = callGraph(before), next = definitions(after), blocks = matches(after);
+  const original = callGraph(before), next = definitions(after, true), blocks = matches(after);
   const reachable = original.closure(grants(before).flatMap(grant => original.calls(grant.raw)));
-  assert.deepEqual(next.map(row => row.name).sort(), [...reachable].sort(), 'Reachable helper missing or extra helper introduced');
+  assert.deepEqual([...new Set(next.map(row => row.name))].sort(), [...reachable].sort(), 'Reachable helper missing or extra helper introduced');
   for (const definition of next) {
     assert.equal(definition.raw, original.byName.get(definition.name)?.raw, `Changed predicate ${definition.name}`);
     definition.scope = blocks.filter(block => block.start < definition.start && block.end > definition.end)
       .sort((a, b) => b.start - a.start)[0];
     assert.ok(definition.scope, 'Unscoped helper');
   }
+  assert.equal(new Set(next.map(row => `${row.scope.start}:${row.name}`)).size, next.length, 'Duplicate helper in the same lexical scope');
   assert.deepEqual(grants(after), grants(before), 'Changed allow predicate or effective path');
   let checkedCalls = 0;
   for (const match of masked(after).matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
@@ -142,11 +143,12 @@ export function verifyCloudReleaseRulesScopeEquivalence(before, after) {
   const root = next.filter(row => row.scope.path === '/databases/{database}/documents');
   const leaves = blocks.filter(block => !blocks.some(child => child !== block && child.start > block.start && child.end < block.end));
   return {
-    originalFunctions: original.functions.length, reachableFunctions: next.length,
+    originalFunctions: original.functions.length, reachableFunctions: reachable.size, definitionCopies: next.length,
     removedUnreachable: original.functions.filter(row => !reachable.has(row.name)).map(row => row.name).sort(),
     rootFunctions: root.length, sharedRootNames: root.map(row => row.name).sort(),
     maxLeafVisibleFunctions: Math.max(...leaves.map(leaf => next.filter(row => row.scope.start <= leaf.start && row.scope.end >= leaf.end).length)),
-    checkedCalls, wildcardChecks, everyReachableFunctionDefinedOnce: true,
+    checkedCalls, wildcardChecks, everyReachableFunctionDefinedOnce: next.length === reachable.size,
+    helperCopiesOnlyInDistinctLexicalScopes: true,
     exactReachableFunctionBodies: true, exactAllowBodies: true, effectiveGrantPathsEqual: true,
     everyUserFunctionCallResolvedToOriginalBody: true, newFreeWildcardCaptures: 0,
   };
@@ -176,8 +178,7 @@ export function scopeCloudReleaseRules(source, fragments) {
   for (const [kind, rows] of Object.entries(groups)) for (const leaf of rows) for (const name of closure(calls(source.slice(leaf.start, leaf.end)))) {
     if (!domainUsage.has(name)) domainUsage.set(name, new Set()); domainUsage.get(name).add(kind);
   }
-  // Closing the shared primitives explicitly guarantees a root helper never
-  // tries to resolve a dependency from a child domain or sibling match.
+  // A globally shared helper must inherit all its dependencies too.
   const shared = closure(['owner', ...[...domainUsage].filter(([, domains]) => domains.size >= 2).map(([name]) => name)]);
   assert.ok([...shared].every(name => domainUsage.get(name)?.size >= 2 || ['owner', 'verifiedOwner', 'activeOwner'].includes(name)), 'Unrelated global helper');
   const samePrefix = (a, b) => a.length <= b.length && a.every((part, index) => part === b[index]);

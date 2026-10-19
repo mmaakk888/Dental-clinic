@@ -16,8 +16,8 @@ async function harness(options: Options = {}) {
   const output = await compiled, fixture = await makeClinicSnapshotFixture(options.full ?? false), module = { exports: {} as any };
   const calls: string[] = [], requests: { url: string; init: any; body: any }[] = [];
   const user = { uid: SNAPSHOT_OWNER, email: 'snapshot-owner@example.invalid', emailVerified: options.verified ?? true };
-  const auth = { app: { name: options.appName ?? `clinic-operating-${snapshotId(999)}`, options: { projectId: options.projectId ?? 'dental-clinic-mmaakk888',
-    authDomain: 'dental-clinic-mmaakk888.firebaseapp.com' } }, currentUser: user as typeof user | null, emulatorConfig: options.emulator ? {} : null };
+  const auth = { app: { name: options.appName ?? `clinic-operating-${snapshotId(999)}`, options: { projectId: options.projectId ?? 'osama-clinic-38706',
+    authDomain: 'osama-clinic-38706.firebaseapp.com' } }, currentUser: user as typeof user | null, emulatorConfig: options.emulator ? {} : null };
   let active = true, copy!: (value: unknown) => any;
   const location = { hostname: options.hostname ?? '127.0.0.1' };
   function step(name: string) { calls.push(name); if (name === options.stopAt) active = false; if (name === options.swapAt) auth.currentUser = { ...user }; }
@@ -25,7 +25,7 @@ async function harness(options: Options = {}) {
     window: { location, get localStorage() { throw new Error('PRIVATE_LOCAL'); }, get sessionStorage() { throw new Error('PRIVATE_LOCAL'); } },
     require: (name: string) => {
       if (name === 'firebase/auth') return { getIdTokenResult: async (target: unknown) => { assert.equal(target, user); step('token'); return copy({ token: 'SYNTHETIC_ID_TOKEN',
-        signInProvider: options.provider ?? 'password', claims: { sub: SNAPSHOT_OWNER, aud: 'dental-clinic-mmaakk888', iss: 'https://securetoken.google.com/dental-clinic-mmaakk888',
+        signInProvider: options.provider ?? 'password', claims: { sub: SNAPSHOT_OWNER, aud: 'osama-clinic-38706', iss: 'https://securetoken.google.com/osama-clinic-38706',
           email: user.email, email_verified: options.verified ?? true, dentalClinicId: 'main', dentalClinicRole: 'owner', auth_time: 100, ...options.claims } }); } };
       if (name === 'firebase/firestore/lite') return { getFirestore: (app: unknown, database: string) => { assert.equal(app, auth.app); assert.equal(database, '(default)'); step('database'); return 'synthetic-db'; },
         doc: (database: unknown, ...parts: string[]) => { assert.equal(database, 'synthetic-db'); const key = parts.join('/');
@@ -37,8 +37,8 @@ async function harness(options: Options = {}) {
     fetch: async (url: string, init: any) => {
       step('fetch'); const body = JSON.parse(init.body); requests.push({ url, init, body });
       const privateRead = Array.isArray(body.documents);
-      assert.equal(url, privateRead ? 'https://firestore.googleapis.com/v1/projects/dental-clinic-mmaakk888/databases/(default)/documents:batchGet'
-        : 'https://firestore.googleapis.com/v1/projects/dental-clinic-mmaakk888/databases/(default)/documents/clinics/main:runQuery');
+      assert.equal(url, privateRead ? 'https://firestore.googleapis.com/v1/projects/osama-clinic-38706/databases/(default)/documents:batchGet'
+        : 'https://firestore.googleapis.com/v1/projects/osama-clinic-38706/databases/(default)/documents/clinics/main:runQuery');
       assert.equal(init.method, 'POST'); assert.equal(init.cache, 'no-store'); assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'error'); assert.equal(init.referrerPolicy, 'no-referrer');
       const query = body.structuredQuery, collection = privateRead ? body.documents[0].split('/').at(-2) : query.from[0].collectionId,
         documentId = privateRead ? body.documents[0].split('/').at(-1) : query.where?.fieldFilter.value.referenceValue.split('/').at(-1),
@@ -53,7 +53,7 @@ async function harness(options: Options = {}) {
         : [privateRead ? { readTime: stamp, missing: body.documents[0] } : { readTime: stamp }];
       if (privateRead && options.privateFault) {
         const row: any = response[0];
-        if (options.privateFault === 'foreign') row.found.name = row.found.name.replace('dental-clinic-mmaakk888', 'foreign-project');
+        if (options.privateFault === 'foreign') row.found.name = row.found.name.replace('osama-clinic-38706', 'foreign-project');
         if (options.privateFault === 'time') row.readTime = '2026-10-13T00:00:00.999999Z';
         if (options.privateFault === 'extra') row.transaction = 'PRIVATE_UNEXPECTED';
         if (options.privateFault === 'duplicate') response.push(response[0]);

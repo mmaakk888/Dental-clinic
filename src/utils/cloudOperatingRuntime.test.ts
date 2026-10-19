@@ -8,7 +8,7 @@ import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 test('actual operating production boundary follows only the reviewed source gate and never widens local host access', () => {
   assert.equal(isCloudOperatingRuntime(CLOUD_OPERATING_HOST, 'https:'), CLOUD_COMPLETE_RELEASE_UI.available);
   for (const host of ['localhost', 'LOCALHOST', '127.0.0.1', '::1', '[::1]']) assert.equal(isCloudOperatingRuntime(host, 'http:'), true);
-  for (const host of ['example.invalid', `${CLOUD_OPERATING_HOST}.evil.invalid`, `${CLOUD_OPERATING_HOST}.`, 'dental-clinic-mmaakk888.firebaseapp.com', '192.168.1.2']) {
+  for (const host of ['example.invalid', `${CLOUD_OPERATING_HOST}.evil.invalid`, `${CLOUD_OPERATING_HOST}.`, 'osama-clinic-38706.firebaseapp.com', '192.168.1.2']) {
     assert.equal(isCloudOperatingRuntime(host, 'https:'), false);
   }
   for (const protocol of ['', 'http:', 'file:', 'HTTPS:']) assert.equal(isCloudOperatingRuntime(CLOUD_OPERATING_HOST, protocol), false);

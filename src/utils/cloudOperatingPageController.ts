@@ -11,7 +11,7 @@ type AdditionalCapabilityKey = 'getContacts' | 'getPatients' | 'getClinical' | '
   | 'getAppointments' | 'getClinicSettings' | 'getProsthetics' | 'getExpenses' | 'getClinicSnapshot';
 export type CloudOperatingPageSession = CloudOperatingAuthSession & Partial<Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey>>;
 export type CloudOperatingAdditionalKind = 'appointments' | 'prosthetics' | 'expenses' | 'settings' | 'directory' | 'finance' | 'home' | 'export' | 'whatsapp' | 'transfer' | 'prescription';
-export interface CloudOperatingAdditionalWorkspace { canClose(): boolean; dispose(): void }
+export interface CloudOperatingAdditionalWorkspace { canClose(): boolean; canNavigate?(): boolean; dispose(): void }
 export type CloudOperatingAdditionalContext = Pick<CloudOperatingFirebaseSession, AdditionalCapabilityKey> & {
   readonly ownerUid: string; readonly isActive: () => boolean;
 };
@@ -141,7 +141,7 @@ export function createCloudOperatingPageController(
     if (!owned() || expected && workspace !== expected) return false;
     if (workspace) {
       let allowed = false;
-      try { allowed = workspace.canClose() === true; } catch { /* Fail closed. */ }
+      try { allowed = (workspaceSwitching && workspace.canNavigate ? workspace.canNavigate() : workspace.canClose()) === true; } catch { /* Fail closed. */ }
       if (!owned()) return false;
       if (!allowed) { publish({ ...state, error: CLINICAL_CLOSE_ERROR }); return false; }
     }
@@ -598,7 +598,7 @@ export function createCloudOperatingPageController(
       if (!stillOwned()) return false;
       const recovery = workspace.recovery.getState();
       if (!stillOwned()) return false;
-      if (current.draft || current.loading || recovery.loading || current.pendingOperationId || current.saveStatus !== 'idle') {
+      if (current.draft || !workspaceSwitching && (current.loading || recovery.loading) || current.pendingOperationId || current.saveStatus !== 'idle') {
         publish({ ...state, contacts: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }
@@ -706,7 +706,7 @@ export function createCloudOperatingPageController(
       if (!stillOwned()) return false;
       const recovery = workspace.recovery.getState();
       if (!stillOwned()) return false;
-      if (current.draft || current.loading || recovery.loading || current.pendingOperationId || current.saveStatus !== 'idle') {
+      if (current.draft || !workspaceSwitching && (current.loading || recovery.loading) || current.pendingOperationId || current.saveStatus !== 'idle') {
         publish({ ...state, patients: contactsState('open', CONTACTS_CLOSE_ERROR) });
         return false;
       }
@@ -819,7 +819,7 @@ export function createCloudOperatingPageController(
       if (!stillOwned()) return false;
       const visit = workspace.visit?.getState();
       if (!stillOwned()) return false;
-      if (file.draftDirty || file.loading || file.saveStatus !== 'idle' || file.pendingOperationId || recovery.loading || visit && visit.phase !== 'idle') {
+      if (file.draftDirty || !workspaceSwitching && (file.loading || recovery.loading) || file.saveStatus !== 'idle' || file.pendingOperationId || visit && visit.phase !== 'idle') {
         publish({ ...state, clinical: contactsState('open', CLINICAL_CLOSE_ERROR) });
         return false;
       }
@@ -902,7 +902,7 @@ export function createCloudOperatingPageController(
     if (workspace) {
       const current = workspace.getState();
       if (!stillOwned()) return false;
-      if (current.draft || current.loading || current.historyLoading || current.saveStatus !== 'idle' || current.pendingOperationId) {
+      if (current.draft || !workspaceSwitching && (current.loading || current.historyLoading) || current.saveStatus !== 'idle' || current.pendingOperationId) {
         publish({ ...state, catalog: contactsState('open', CLINICAL_CLOSE_ERROR) }); return false;
       }
     }

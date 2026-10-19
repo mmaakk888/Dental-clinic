@@ -1,7 +1,7 @@
 /** Actual release Rules acceptance, disposable hardcoded DEMO only. No IAM,
  * live project, owner credentials, activation or real clinic records. */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readCloudReleaseRules } from './read-cloud-release-rules.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getFirestore, connectFirestoreEmulator, doc, writeBatch, runTransaction, getDoc, collection, query, limit, getDocs, setLogLevel } from 'firebase/firestore/lite';
@@ -50,14 +50,7 @@ async function check(name:string,expected:boolean,state:Map<string,any>,writes:M
   try{const batch=writeBatch(db);for(const[key,value]of writes)value===null?batch.delete(doc(db,key)):batch.set(doc(db,key),value);await batch.commit();actual=true;}
   catch(e:any){if(e?.code!=='permission-denied'){console.log({diagnostic:name,code:e?.code,message:e?.message});throw e;}}
   finally{await deleteApp(app);}results.push({name,expected,actual});console.log(JSON.stringify({name,expected,actual}));}
-function compose(){let rules=readFileSync('firestore.release.rules','utf8');
-  if(rules.includes('function pr_preparedProsthetic'))return rules;
-  rules=rules.replace(": d.kind == 'appointment' ? d.command.createdAt==d.createdAt && preparedAppointment(d.command) : false;",": d.kind == 'appointment' ? d.command.createdAt==d.createdAt && preparedAppointment(d.command) : d.kind == 'prosthetic' ? d.command.createdAt==d.createdAt && pr_preparedProsthetic(d.command) : false;");
-  for(const[old,next]of [['clinicalAccountWrite(resource,request.resource.data,id)','pr_patientAccountWrite(resource,request.resource.data,id)'],['clinicalSessionWrite(resource,request.resource.data,id)','pr_patientSessionWrite(resource,request.resource.data,id)'],['clinicalCash(request.resource.data,id)','pr_patientCash(request.resource.data,id)']]){
-    const key=old.startsWith('clinicalCash')?'id':'request.resource.data.lastOperationId';rules=rules.replace(old,`(getAfter(intentPath(${key})).data.kind=='prosthetic'?${next}:${old})`);}
-  const fragment=readFileSync('rules/prosthetic.release.rules.fragment','utf8');
-  return rules.replace('    match /{document=**}',`${fragment}\n    match /clinics/main/labDefinitions/{id} { allow get: if owner() && uuid(id); allow list: if owner() && boundedQuery(); }\n    match /clinics/main/settings/prostheticRouting { allow get: if owner(); }\n    match /{document=**}`);}
-try{await admin(`/emulator/v1/projects/${PROJECT}:securityRules`,'PUT',{rules:{files:[{name:'prosthetic-combined.rules',content:compose()}]}});
+try{await admin(`/emulator/v1/projects/${PROJECT}:securityRules`,'PUT',{rules:{files:[{name:'prosthetic-combined.rules',content:readCloudReleaseRules()}]}});
   const first=await scenario('order',create()),many=await scenario('catalog300-routing100-cost100',create(id(11)),initial(300));
   const progress=await scenario('progress',{action:'progress',operationId:id(12),labId:LAB,expectedLabAccountRevision:1,createdAt:WHEN,caseId:id(10),expectedCaseRevision:1,status:'ready',note:'جاهزة'},first.after);
   const payment=await scenario('payment1',{action:'lab-payment',operationId:id(13),labId:LAB,expectedLabAccountRevision:2,createdAt:WHEN,date:DAY,note:'دفعة',allocations:[{caseId:id(10),expectedRevision:2,amountCents:1000}]},progress.after);

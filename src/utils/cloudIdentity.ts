@@ -1,4 +1,4 @@
-export const CLOUD_PROJECT_ID = 'dental-clinic-mmaakk888';
+export const CLOUD_PROJECT_ID = 'osama-clinic-38706';
 export const CLOUD_CLINIC_ID = 'main';
 
 export interface CloudOwnerIdentity {

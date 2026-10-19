@@ -6,6 +6,7 @@ import type { ProstheticRoutingSettings } from '../../utils/prostheticRouting';
 import './prostheticRouting.css';
 
 interface ProstheticRoutingManagementProps {
+  onDirtyChange?: (dirty: boolean) => void;
   value: ProstheticRoutingSettings;
   labs: Lab[];
   materials: string[];
@@ -26,7 +27,7 @@ const copyDraft = (current: ProstheticRoutingSettings): ProstheticRoutingSetting
 const money = (amount: number) => new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount);
 
 /** Private administration only. The parent must enforce owner/financial access. */
-export function ProstheticRoutingManagement({ value, labs, materials, onSave }: ProstheticRoutingManagementProps) {
+export function ProstheticRoutingManagement({ value, labs, materials, onSave, onDirtyChange }: ProstheticRoutingManagementProps) {
   const prefix = `prosthetic-routing-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [draft, setDraft] = useState(() => cloneProstheticRouting(value));
   const [saved, setSaved] = useState(() => cloneProstheticRouting(value));
@@ -41,6 +42,7 @@ export function ProstheticRoutingManagement({ value, labs, materials, onSave }: 
   draftRef.current = draft;
   savedRef.current = saved;
   const dirty = !equal(draft, saved);
+  useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     const incoming = cloneProstheticRouting(value);

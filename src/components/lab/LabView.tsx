@@ -32,6 +32,7 @@ interface LabViewProps {
   canViewFinancials?: boolean;
   canManagePrices?: boolean;
   onBulkPayment: (labId: string, amount: number) => void | Promise<void>;
+  onEditorChange?: (open: boolean) => void;
 }
 
 export const LabView: React.FC<LabViewProps> = ({
@@ -51,7 +52,8 @@ export const LabView: React.FC<LabViewProps> = ({
   onBackToHome,
   canViewFinancials = false,
   canManagePrices = false,
-  onBulkPayment
+  onBulkPayment,
+  onEditorChange
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const { saving, run: confirmSave } = useConfirmedAction();
@@ -74,6 +76,8 @@ export const LabView: React.FC<LabViewProps> = ({
   const [isProstheticOpen, setIsProstheticOpen] = useState(false);
   const [isCaseModalOpen, setIsCaseModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  React.useEffect(() => { onEditorChange?.(isLabModalOpen || isProstheticOpen || isCaseModalOpen || isPaymentModalOpen || !!bulkAmount);
+    return () => onEditorChange?.(false); }, [isLabModalOpen, isProstheticOpen, isCaseModalOpen, isPaymentModalOpen, bulkAmount, onEditorChange]);
 
   React.useEffect(() => {
     const isAnyModalOpen = isLabModalOpen || isCaseModalOpen || isPaymentModalOpen || isProstheticOpen;

@@ -1,5 +1,6 @@
 import React, { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowDown, ArrowUp, ArrowRight, Building2, Check, History, ImagePlus, Palette, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowRight, Building2, Check, History, ImagePlus, Palette, Pencil, Plus, RefreshCw, Settings2, Trash2, X, Layout, Pill, MessageCircle, Sliders, FileSpreadsheet, Download, Route } from 'lucide-react';
+import { SettingsSectionNavigation, type SettingsNavigationSection } from './SettingsSectionNavigation';
 import { parseCloudClinicLogoData, prepareCloudClinicSettingsCommand, MAX_CLOUD_CLINIC_LOGO_BYTES,
   type CloudClinicSettingsData, type CloudLabDefinitionData, type CloudSettingsTarget } from '../../utils/cloudClinicSettingsRepository';
 import type { CloudClinicSettingsWorkspaceController, CloudClinicSettingsWorkspaceDraft,
@@ -55,6 +56,7 @@ export function buildCloudSettingsEditorData(draft: CloudClinicSettingsWorkspace
 }
 export interface CloudClinicSettingsWorkspaceViewProps {
   state: CloudClinicSettingsWorkspaceState; section: CloudClinicSettingsSection; previewOnly?: boolean; disabled?: boolean;
+  onNavigate?(section: string): void;
   onSection(section: CloudClinicSettingsSection): void; onClose(): void; onLoad(): void; onBegin(): void;
   onUpdate(value: unknown, expected: CloudClinicSettingsWorkspaceDraft): void; onSave(expected: CloudClinicSettingsWorkspaceDraft): void;
   onCancel(expected: CloudClinicSettingsWorkspaceDraft): void; onRetry(): void; onCancelPending(): void;
@@ -66,6 +68,7 @@ export interface CloudClinicSettingsWorkspaceViewProps {
 /** Presentation only; preview masks even accidentally supplied data/callbacks. */
 export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorkspaceViewProps) {
   const prefix = useId(), latest = useRef(props); latest.current = props;
+  const [contentDevice, setContentDevice] = useState<'mobile' | 'desktop'>('mobile');
   const { state, section } = props, hidden = props.previewOnly || state.closed;
   const draft = hidden ? null : state.draft, source = hidden ? null : draft ? draft.data : state.snapshot?.data;
   const data = record(source), clinic = state.selection.target === 'clinicSettings' ? data : {};
@@ -90,13 +93,41 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
   const templates: any[] = Array.isArray(wa.templates) ? wa.templates : [], routes: any[] = Array.isArray(data.routes) ? data.routes : [];
   let logo: ReturnType<typeof parseCloudClinicLogoData> = null;
   if (!hidden && state.selection.target === 'clinicLogo') { try { logo = parseCloudClinicLogoData(source); } catch { /* Incomplete draft is not an image. */ } }
+  const selectSection = (key: string) => {
+    const current = latest.current;
+    if (!common() || current.state.saveStatus !== 'idle') return;
+    if (key === 'catalog' || key === 'transfer' || key === 'export' || key === 'whatsapp-manager') {
+      if (!current.state.draft && !current.state.pendingOperationId) current.onNavigate?.(key === 'whatsapp-manager' ? 'whatsapp' : key);
+      return;
+    }
+    const next = sections.find(([section]) => section === key)?.[0];
+    if (next && (!current.state.draft || targetFor(next) === current.state.selection.target)) current.onSection(next);
+  };
+  const navigationItems: SettingsNavigationSection[] = [
+    { key: 'identity', label: 'الهوية والمظهر', description: 'بيانات العيادة والشعار والألوان', group: 'appearance', icon: <Palette size={20} /> },
+    { key: 'content', label: 'المحتوى والترتيب', description: 'ترتيب الشريط وحجمه ونصوص الرئيسية', group: 'appearance', icon: <Layout size={20} /> },
+    ...(props.onNavigate ? [{ key: 'catalog', label: 'الخدمات والأسعار', description: 'قيمة الكشف وأسعار خدمات المرضى', group: 'practice', icon: <Sliders size={20} /> }] : []),
+    { key: 'labs', label: 'المعامل وأسعارها', description: 'تكلفة كل معمل بشكل مستقل', group: 'practice', icon: <Building2 size={20} /> },
+    { key: 'routing', label: 'توجيه التركيبات', description: 'المعمل الافتراضي لكل خدمة', group: 'practice', icon: <Route size={20} /> },
+    { key: 'medications', label: 'فهرس الأدوية', description: 'الأدوية المستخدمة في الروشتة', group: 'practice', icon: <Pill size={20} /> },
+    ...(props.onNavigate ? [{ key: 'whatsapp-manager', label: 'إدارة واتساب', description: 'جهات الاتصال والرسائل والحملات', group: 'practice', icon: <MessageCircle size={20} /> }] : []),
+    { key: 'whatsapp', label: 'قوالب واتساب', description: 'النصوص الجاهزة وبيانات التواصل', group: 'practice', icon: <MessageCircle size={20} /> },
+    ...(props.onNavigate ? [
+      { key: 'transfer', label: 'الاستيراد', description: 'ملفات المرضى وجهات الاتصال', group: 'data', icon: <FileSpreadsheet size={20} /> },
+      { key: 'export', label: 'التصدير', description: 'دليل الأرقام والبيانات التشغيلية', group: 'data', icon: <Download size={20} /> },
+    ] : []),
+  ].map(item => ({ ...item, disabled: !!draft && (!sections.some(([key]) => key === item.key) || targetFor(item.key as CloudClinicSettingsSection) !== state.selection.target) }));
   return <section className="cloud-catalog-workspace cloud-clinic-settings" dir="rtl" aria-labelledby={`${prefix}-title`}>
-    <header className="ccat-surface ccat-header"><div className="ccat-heading"><span className="ccat-heading-icon"><Settings2 aria-hidden="true" /></span><div><h2 id={`${prefix}-title`}>إعدادات العيادة</h2><p>إعدادات مترابطة ومحمية للمالك، دون أسعار أو حسابات من المتصفح.</p></div></div>
+    <header className="ccat-surface ccat-header"><div className="ccat-heading"><span className="ccat-heading-icon"><Settings2 aria-hidden="true" /></span><div><h2 id={`${prefix}-title`}>لوحة التحكم والإعدادات</h2><p>إعدادات العيادة، الخدمات والتواصل — محفوظة في حسابك السحابي.</p></div></div>
       <button type="button" className="ccat-button ccat-secondary" disabled={props.disabled || !hidden && (busy(state) || !!draft || !!state.pendingOperationId)} onClick={() => { const current = latest.current;
         if (!current.disabled && (current.previewOnly || current.state.closed || common() && !current.state.draft && !current.state.pendingOperationId)) current.onClose(); }}><ArrowRight size={18} />إلغاء وإغلاق</button></header>
-    <nav className="csettings-navigation" aria-label="أقسام إعدادات العيادة">{sections.map(([key, label]) => <button type="button" key={key} className={`ccat-button ${section === key ? 'ccat-primary' : 'ccat-secondary'}`}
-      aria-pressed={section === key} disabled={hidden || busy(state) || state.saveStatus !== 'idle' || !!draft && targetFor(key) !== state.selection.target}
-      onClick={() => { if (common() && latest.current.state.saveStatus === 'idle' && (!latest.current.state.draft || targetFor(key) === latest.current.state.selection.target)) latest.current.onSection(key); }}>{label}</button>)}</nav>
+    <div className="csettings-layout"><SettingsSectionNavigation sections={navigationItems} groups={[{ key: 'appearance', label: 'مظهر العيادة' }, { key: 'practice', label: 'الخدمات والتواصل' }, { key: 'data', label: 'البيانات والنظام' }]}
+      activeSection={section === 'appearance' || section === 'logo' ? 'identity' : section} disabled={hidden || busy(state) || state.saveStatus !== 'idle'} onSelect={selectSection} />
+    <div className="csettings-content settings-content-panel">
+      {['identity', 'appearance', 'logo'].includes(section) && <div className="csettings-identity-tabs" role="group" aria-label="الهوية والمظهر">
+        {([['identity', 'بيانات العيادة'], ['appearance', 'الألوان والخط'], ['logo', 'الشعار']] as const).map(([key, label]) => <button type="button" className={`ccat-button ${section === key ? 'ccat-primary' : 'ccat-secondary'}`} key={key} aria-pressed={section === key}
+          disabled={hidden || busy(state) || state.saveStatus !== 'idle' || !!draft && targetFor(key) !== state.selection.target} onClick={() => selectSection(key)}>{label}</button>)}
+      </div>}
     {hidden ? <p className="ccat-message ccat-warning">{props.previewOnly ? 'معاينة فارغة فقط — لا قراءة أو حفظ أو إعدادات افتراضية.' : 'أُغلقت مساحة الإعدادات وأُخفيت بياناتها.'}</p>
       : <><div className="ccat-actions"><button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle') latest.current.onLoad(); }}><RefreshCw size={18} />تحميل / تحديث القسم</button>
         <button type="button" className="ccat-button ccat-primary" disabled={disabled || !state.loaded || !!draft || targetFor(section) !== state.selection.target} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.loaded && latest.current.state.saveStatus === 'idle' && targetFor(latest.current.section) === latest.current.state.selection.target) latest.current.onBegin(); }}><Pencil size={18} />{state.snapshot ? 'تعديل القسم' : 'إعداد القسم صراحة'}</button>
@@ -105,7 +136,7 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
         {state.saveStatus !== 'idle' && <section className="ccat-message ccat-warning"><strong>{state.saveStatus === 'refresh-required' ? 'الحفظ مؤكد — التحديث بالقراءة فقط' : 'العملية الأصلية ثابتة حتى تأكيدها'}</strong>
           <bdi dir="ltr" className="ccat-operation">{state.pendingOperationId}</bdi><div className="ccat-actions"><button type="button" className="ccat-button ccat-primary" disabled={busy(state)} onClick={() => { if (common() && ['retry-required', 'refresh-required'].includes(latest.current.state.saveStatus)) latest.current.onRetry(); }}>إعادة التحقق</button>
             {state.saveStatus === 'retry-required' && <button type="button" className="ccat-button ccat-secondary" disabled={busy(state)} onClick={() => { if (common() && latest.current.state.saveStatus === 'retry-required') latest.current.onCancelPending(); }}>التحقق من الإلغاء</button>}</div></section>}
-        {!state.loaded && <p className="ccat-help">اضغط تحميل القسم؛ فتح مساحة الإعدادات لا يقرأ بيانات تلقائيًا.</p>}
+        {!state.loaded && <p className="ccat-help" role={state.loading ? 'status' : undefined}>{state.loading ? 'جارٍ تحميل إعدادات القسم من حسابك…' : 'اضغط تحميل القسم لقراءة إعداداته المحفوظة.'}</p>}
         {(state.loaded || section === 'labs') && <div className="ccat-surface csettings-editor">
           {section === 'identity' && <><h3>بيانات العيادة والتواصل</h3><div className="csettings-grid">{field('اسم العيادة', identity.clinicName, value => replacePart('identity', { clinicName: value }), false, { max: 100 })}
             {field('اسم الطبيب', identity.doctorName, value => replacePart('identity', { doctorName: value }), false, { max: 100 })}
@@ -119,7 +150,9 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
           {section === 'content' && <><h3>المحتوى وترتيب الشريط</h3><button type="button" className="ccat-button ccat-secondary" disabled={!editing} onClick={() => replacePart('content', {
             navigationLabels: { ...labels }, tiles: Object.fromEntries(navigation.map(key => [key, { title: labels[key], desc: '' }])), tabs: { info: 'البيانات', chart: 'الأسنان', sessions: 'الجلسات', finance: 'الحساب', lab: 'المعمل' } })}>تطبيق تسميات عربية مقترحة في المسودة</button>
             <div className="csettings-grid">{field('الوصف المحفوظ للرئيسية', content.homeSubtitle, value => replacePart('content', { homeSubtitle: value }), false, { max: 180 })}{field('النص المساعد', content.welcomeText, value => replacePart('content', { welcomeText: value }), false, { max: 180 })}</div>
-            {(['mobile', 'desktop'] as const).map(device => { const preferences = record(content[device]), order: string[] = Array.isArray(preferences.order) ? preferences.order : [];
+            <div className="csettings-identity-tabs" role="tablist" aria-label="إعدادات العرض حسب الجهاز">{(['mobile', 'desktop'] as const).map(device => <button type="button" role="tab" key={device} aria-selected={contentDevice === device} className={`ccat-button ${contentDevice === device ? 'ccat-primary' : 'ccat-secondary'}`}
+              disabled={disabled} onClick={() => { if (common() && latest.current.state.saveStatus === 'idle') setContentDevice(device); }}>{device === 'mobile' ? 'إعدادات الموبايل' : 'إعدادات الكمبيوتر'}</button>)}</div>
+            {([contentDevice] as const).map(device => { const preferences = record(content[device]), order: string[] = Array.isArray(preferences.order) ? preferences.order : [];
               const change = (patch: any) => replacePart('content', { [device]: { ...preferences, ...patch } });
               return <fieldset className="csettings-fieldset" key={device}><legend>{device === 'mobile' ? 'شريط الموبايل' : 'شريط الكمبيوتر'}</legend><div className="csettings-grid">{choice('الحجم', preferences.size, [['compact', 'صغير'], ['comfortable', 'مريح'], ['large', 'كبير']], value => change({ size: value }))}
                 {check('إظهار المسميات', preferences.showLabels, value => change({ showLabels: value }))}{device === 'mobile' && choice('عدد الروابط المباشرة', String(preferences.visibleCount ?? ''), [['3', '٣'], ['4', '٤']], value => change({ visibleCount: Number(value) }))}</div>
@@ -179,25 +212,27 @@ export function CloudClinicSettingsWorkspaceView(props: CloudClinicSettingsWorks
             <button type="button" className="ccat-button ccat-secondary" disabled={!editing} onClick={() => edit((current, expected) => current.onCancel(expected))}><X size={18} />إلغاء المسودة</button>
             {buildCloudSettingsEditorData(draft) === undefined && <p className="ccat-help">أكمل الحقول والروابط المطلوبة. السعر الفارغ مجهول، والصفر يُكتب صراحة.</p>}</footer>}
         </div>}
-        <section className="ccat-surface ccat-history"><div className="ccat-section-heading"><h3><History size={18} />استرجاع عمليات الإعدادات</h3><button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle') latest.current.onHistory(false); }}>تحميل سجل العمليات</button></div>
+        <details className="ccat-surface ccat-history csettings-recovery"><summary><History size={18} />استرجاع عمليات الإعدادات</summary><div className="ccat-section-heading"><p className="ccat-help">استخدمه لمتابعة عملية سابقة انقطع تأكيدها، وليس للتعديل اليومي.</p><button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle') latest.current.onHistory(false); }}>تحميل سجل العمليات</button></div>
           {state.history.map(intent => <article className="ccat-history-row" key={intent.operationId}><div><strong>{intent.status === 'prepared' ? 'محضرة' : intent.status === 'committed' ? 'منفذة — يمكن إعادة التحقق' : 'ملغاة'}</strong><time dateTime={intent.createdAt}>{intent.createdAt}</time><bdi dir="ltr" className="ccat-operation">{intent.operationId}</bdi></div>
             <button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft || intent.status === 'cancelled'} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle' && latest.current.state.history.includes(intent) && intent.status !== 'cancelled') latest.current.onResume(intent); }}>متابعة نفس العملية</button></article>)}
-          <p className="ccat-help">السجل المحمّل بترتيب المعرّف، وليس ترتيب الأحدث عالميًا. الاسترجاع لا ينشئ تعديلًا بديلًا ولا يعيد إعدادات تاريخية فوق الحالية.</p>{state.historyNextAfterId && <button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle') latest.current.onHistory(true); }}>المزيد من العمليات</button>}</section></>}
+          <p className="ccat-help">السجل المحمّل بترتيب المعرّف، وليس ترتيب الأحدث عالميًا. الاسترجاع لا ينشئ تعديلًا بديلًا ولا يعيد إعدادات تاريخية فوق الحالية.</p>{state.historyNextAfterId && <button type="button" className="ccat-button ccat-secondary" disabled={disabled || !!draft} onClick={() => { if (common() && !latest.current.state.draft && latest.current.state.saveStatus === 'idle') latest.current.onHistory(true); }}>المزيد من العمليات</button>}</details></>}
+    </div></div>
   </section>;
 }
 
 /** Root supplies the exact owner/view lease controller and owns its disposal. */
-export default function CloudClinicSettingsWorkspace({ controller, onClose, previewOnly = false, disabled = false }: {
-  controller: CloudClinicSettingsWorkspaceController; onClose(): void; previewOnly?: boolean; disabled?: boolean;
+export default function CloudClinicSettingsWorkspace({ controller, onClose, onNavigate, previewOnly = false, disabled = false }: {
+  controller: CloudClinicSettingsWorkspaceController; onClose(): void; onNavigate?(section: string): void; previewOnly?: boolean; disabled?: boolean;
 }) {
   const state = useSyncExternalStore(useCallback(notify => controller.subscribe(notify), [controller]), controller.getState, controller.getState);
   const [section, setSection] = useState<CloudClinicSettingsSection>('identity'), [uploadError, setUploadError] = useState('');
-  const latest = useRef({ controller, previewOnly, disabled, onClose, section }); latest.current = { controller, previewOnly, disabled, onClose, section };
+  const latest = useRef({ controller, previewOnly, disabled, onClose, onNavigate, section }); latest.current = { controller, previewOnly, disabled, onClose, onNavigate, section };
   const permitted = (expected?: CloudClinicSettingsWorkspaceDraft) => { const current = latest.current, state = current.controller.getState();
     return latest.current === current && current.controller === controller && !current.disabled && !current.previewOnly && !state.closed && !busy(state) && state.saveStatus === 'idle'
       && (expected === undefined || state.draft === expected); };
   const update = (data: unknown, expected: CloudClinicSettingsWorkspaceDraft) => { if (permitted(expected)) controller.updateDraft(data, expected); };
   return <>{uploadError && !previewOnly && !state.closed && <p role="alert" className="ccat-message ccat-error">{uploadError}</p>}<CloudClinicSettingsWorkspaceView state={state} section={section} previewOnly={previewOnly} disabled={disabled}
+    onNavigate={onNavigate ? next => { if (permitted() && controller.canClose()) latest.current.onNavigate?.(next); } : undefined}
     onSection={next => { if (!permitted()) return; const current = controller.getState(), target = targetFor(next); if (current.draft && target !== current.selection.target) return;
       setSection(next); setUploadError(''); if (target !== current.selection.target && target !== 'lab') void controller.load(target); }}
     onClose={() => { const lease = latest.current; if (lease.disabled || lease.controller !== controller) return;

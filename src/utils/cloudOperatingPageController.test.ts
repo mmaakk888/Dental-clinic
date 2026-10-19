@@ -1129,7 +1129,7 @@ test('checking preserves exact clinical lease, dirty editor and unresolved comma
   await logout; await h.controller.dispose();
 });
 
-test('clinical file or recovery reads block ordinary close and switching; logout safely abandons late reads', async () => {
+test('clinical reads block explicit close but ordinary navigation revokes their lease and rejects late results', async () => {
   for (const domain of ['file', 'recovery'] as const) {
     const gate = deferred(), started = deferred(), cap = clinicalCapability();
     const contacts = contactRepository(), patients = patientRepository();
@@ -1141,10 +1141,10 @@ test('clinical file or recovery reads block ordinary close and switching; logout
     const loading = domain === 'file' ? workspace.file.open(CLINICAL_PATIENT) : workspace.recovery.loadFirst();
     await started.promise;
     assert.equal(h.controller.closeClinical(workspace), false);
-    assert.equal(await h.controller.openContacts(), null);
-    assert.equal(await h.controller.openPatients(), null);
-    assert.equal(h.calls.includes('getContacts'), false);
-    assert.equal(h.calls.includes('getPatients'), false);
+    assert.ok(await h.controller.openContacts());
+    assert.equal(workspace.file.getState().closed, true);
+    assert.equal(workspace.recovery.getState().closed, true);
+    assert.equal(h.calls.includes('getContacts'), true);
     const logout = h.controller.signOut();
     assert.equal(workspace.file.getState().closed, true);
     assert.equal(workspace.recovery.getState().closed, true);

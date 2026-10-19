@@ -4,7 +4,7 @@
  * pnpm exec tsx scripts/test-cloud-settings-release-emulator.ts --demo-emulator
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readCloudReleaseRules } from './read-cloud-release-rules.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getFirestore, connectFirestoreEmulator, writeBatch, doc, getDoc, runTransaction, setLogLevel } from 'firebase/firestore/lite';
@@ -119,16 +119,7 @@ async function sdkAcceptance(initial:Awaited<ReturnType<typeof capture>>) {
   }finally{await deleteApp(second.app);}
 }
 try {
-  const fragment=readFileSync('rules/settings.release.rules.fragment','utf8');
-  let rules=readFileSync('firestore.release.rules','utf8');
-  if(!rules.includes('function st_preparedSettings(')){
-    rules=rules.replace("d.command.createdAt==d.createdAt && preparedAppointment(d.command) : false;",
-      "d.command.createdAt==d.createdAt && preparedAppointment(d.command)\n        : d.kind=='settings' ? d.command.createdAt==d.createdAt && st_preparedSettings(d.command) : false;");
-  assert.ok(rules.includes('&& st_preparedSettings(d.command)'));
-  // A replacement callback keeps Rules regex `$` characters literal; `$'`
-  // inside a regex must never interpolate JavaScript's original suffix.
-    rules=rules.replace('    match /{document=**} { allow read, write: if false; }',()=>`${fragment}\n    match /{document=**} { allow read, write: if false; }`);
-  }
+  const rules=readCloudReleaseRules();
   assert.ok(Buffer.byteLength(rules)<=256*1024,'combined Rules source budget');
   await admin(`/emulator/v1/projects/${PROJECT}:securityRules`,'PUT',{rules:{files:[{name:'firestore.rules',content:rules}]}});
   const ordinary=await capture(command('clinicSettings',data,1));

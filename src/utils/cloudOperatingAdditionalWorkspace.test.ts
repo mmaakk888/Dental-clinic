@@ -100,3 +100,20 @@ test('reentrant logout during canClose cannot falsely confirm closure or revive 
   assert.equal(h.page.getAdditionalWorkspace(), null); assert.equal(h.page.getState().auth.phase, 'signed-out');
   await h.page.dispose();
 });
+
+test('ordinary navigation can revoke a read-only workspace without treating it as an unsaved draft', async () => {
+  const h = fixture(); await h.login(); let disposed = 0;
+  const reading: CloudOperatingAdditionalWorkspace = { canClose: () => false, canNavigate: () => true, dispose: () => { disposed++; } };
+  await h.page.openAdditional('home', () => reading);
+  assert.equal(h.page.closeAdditional(reading), false, 'explicit close still obeys its ordinary guard');
+  const next = workspace(); assert.equal(await h.page.openAdditional('appointments', () => next), next);
+  assert.equal(disposed, 1); assert.equal(h.page.getState().error, ''); await h.page.dispose();
+});
+
+test('an actual draft/write cannot be abandoned through the separate read-navigation seam', async () => {
+  const h = fixture(); await h.login(); let disposed = 0;
+  const writing: CloudOperatingAdditionalWorkspace = { canClose: () => false, canNavigate: () => false, dispose: () => { disposed++; } };
+  await h.page.openAdditional('prosthetics', () => writing);
+  assert.equal(await h.page.openAdditional('appointments', () => workspace()), null);
+  assert.equal(h.page.getAdditionalWorkspace('prosthetics'), writing); assert.equal(disposed, 0); await h.page.dispose();
+});

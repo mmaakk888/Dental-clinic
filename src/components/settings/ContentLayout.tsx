@@ -12,6 +12,7 @@ import { getHomeLayout, HOME_SECTIONS } from '../../utils/homeLayout';
 import './contentLayout.css';
 
 interface ContentLayoutProps extends ContentDraft {
+  onDirtyChange?: (dirty: boolean) => void;
   clinicName: string;
   onSaveContent: (values: ContentDraft) => void | Promise<void>;
 }
@@ -75,7 +76,7 @@ export function ContentPreview({ draft, clinicName, mode, onModeChange }: { draf
   </section>;
 }
 
-export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: ContentLayoutProps) {
+export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent, onDirtyChange }: ContentLayoutProps) {
   const { showToast, askConfirm } = useToastAndConfirm();
   const id = `content-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [draft, setDraft] = useState(() => editableDraft({ labels, tileOrder }));
@@ -101,6 +102,7 @@ export function ContentLayout({ labels, tileOrder, clinicName, onSaveContent }: 
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const [barLayout, setBarLayout] = useState({ pinned: false, left: 0, width: 0, height: 0 });
   const isDirty = !equalDrafts(draft, saved);
+  useEffect(() => { onDirtyChange?.(isDirty); return () => onDirtyChange?.(false); }, [isDirty, onDirtyChange]);
 
   useEffect(() => {
     const incoming = editableDraft({ labels, tileOrder });

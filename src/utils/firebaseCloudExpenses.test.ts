@@ -12,7 +12,7 @@ const OP = '20000000-0000-4000-8000-000000000001';
 const OP2 = '20000000-0000-4000-8000-000000000002';
 const OTHER = '30000000-0000-4000-8000-000000000001';
 const UID = 'synthetic-expense-sdk-owner';
-const PROJECT = 'dental-clinic-mmaakk888';
+const PROJECT = 'osama-clinic-38706';
 const WHEN = '2026-10-12T00:00:00.000Z';
 const DATE = '2026-10-12';
 const path = (kind: string, id = OP) => `clinics/main/${kind}/${id}`;

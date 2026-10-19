@@ -77,7 +77,9 @@ function invoke(component: (props: any) => any, props: any, memory = slots()) {
 }
 function rendered(props: CloudClinicSettingsWorkspaceViewProps, memory = slots()) {
   const tree = invoke(View, props, memory), elements = all(tree);
-  const button = (label: string) => { const found = elements.find(item => item.type === 'button' && text(item) === label); assert.ok(found, label); return found; };
+  const navigation = elements.find(item => typeof item.type === 'function' && Array.isArray(item.props.sections) && typeof item.props.onSelect === 'function');
+  if (navigation) elements.push(...all(invoke(navigation.type as (props: any) => any, navigation.props)));
+  const button = (label: string) => { const found = elements.find(item => item.type === 'button' && (text(item) === label || item.props['aria-label'] === label)); assert.ok(found, label); return found; };
   const field = (label: string) => { const found = elements.find(item => item.type === 'label' && text(item).startsWith(label)); assert.ok(found, label);
     const input = all(found).find(item => ['input', 'textarea', 'select'].includes(item.type as string)); assert.ok(input, label); return input; };
   return { tree, elements, button, field, content: text(tree) };
@@ -109,7 +111,7 @@ const tick = async () => { await Promise.resolve(); await Promise.resolve(); awa
 
 test('settings workspace mount is inert and missing data is not seeded', () => {
   const h = harness(state()), html = renderToStaticMarkup(React.createElement(Workspace, { controller: h.controller, onClose() {} }));
-  assert.deepEqual(h.calls, []); assert.match(html, /فتح مساحة الإعدادات لا يقرأ بيانات تلقائيًا/);
+  assert.deepEqual(h.calls, []); assert.match(html, /اضغط تحميل القسم لقراءة إعداداته المحفوظة/);
   assert.doesNotMatch(html, /PRIVATE_|value="100"|value="#2563eb"|data:image|تم الحفظ/);
   assert.ok(Object.keys(compiled.metafile!.inputs).every(path => !/firebase|StorageService|localStorage|firebaseAuth/i.test(path)));
 });
@@ -127,11 +129,26 @@ test('preview and closed views mask supplied identity, cost, logo, history and e
   }
 });
 
-test('eight explicit sections; unloaded lab management remains reachable without beginning wrong target', () => {
+test('original grouped settings navigation keeps lab management reachable without beginning wrong target', () => {
   const h = viewProps({ section: 'labs' }), view = rendered(h.props);
-  for (const label of ['بيانات العيادة', 'المظهر', 'المحتوى والشريط', 'الأدوية', 'قوالب واتساب', 'المعامل وأسعارها', 'توجيه التركيبات', 'الشعار']) assert.ok(view.button(label));
+  for (const label of ['الهوية والمظهر', 'المحتوى والترتيب', 'فهرس الأدوية', 'قوالب واتساب', 'المعامل وأسعارها', 'توجيه التركيبات']) assert.ok(view.button(label));
   view.button('تحميل المعامل').props.onClick(); view.button('معمل جديد').props.onClick(); assert.deepEqual(h.calls, [['labs', false], ['new-lab']]);
   assert.equal(view.button('إعداد القسم صراحة').props.disabled, true);
+});
+
+test('settings external destinations use one grouped navigation and cannot discard a draft or bypass checking', () => {
+  const destinations: string[] = [], memory = slots(), h = viewProps({ onNavigate: section => destinations.push(section) });
+  const view = rendered(h.props, memory);
+  view.button('الخدمات والأسعار').props.onClick(); view.button('إدارة واتساب').props.onClick();
+  assert.deepEqual(destinations, ['catalog', 'whatsapp']);
+  h.props.state = state({ loaded: true, draft: draft() });
+  const editing = rendered(h.props, memory);
+  assert.equal(editing.button('الاستيراد').props.disabled, true);
+  editing.button('الاستيراد').props.onClick(); view.button('التصدير').props.onClick();
+  assert.deepEqual(destinations, ['catalog', 'whatsapp']);
+  h.props.state = state(); h.props.disabled = true; rendered(h.props, memory);
+  view.button('الخدمات والأسعار').props.onClick();
+  assert.deepEqual(destinations, ['catalog', 'whatsapp']);
 });
 
 test('blank required settings cannot save; choices remain explicit editable draft only', () => {
@@ -149,18 +166,24 @@ test('ordinary drafts preserve raw input and block close/read/history/target swi
   for (const label of ['إلغاء وإغلاق', 'تحميل / تحديث القسم', 'تحميل سجل العمليات', 'المعامل وأسعارها', 'توجيه التركيبات', 'الشعار']) {
     const button = view.button(label); assert.equal(button.props.disabled, true); button.props.onClick();
   }
-  assert.deepEqual(h.calls, []); view.button('المظهر').props.onClick(); assert.deepEqual(h.calls, [['section', 'appearance']]);
+  assert.deepEqual(h.calls, []); view.button('الألوان والخط').props.onClick(); assert.deepEqual(h.calls, [['section', 'appearance']]);
   view.button('إلغاء المسودة').props.onClick(); assert.equal(h.calls.at(-1)?.[1], raw);
 });
 
 test('content exposes independent mobile/desktop order and more only for mobile', () => {
   const data = settings(); data.content.desktop.order.reverse(); const raw = draft('clinicSettings', data);
-  const h = viewProps({ state: state({ loaded: true, draft: raw }), section: 'content' }), view = rendered(h.props);
+  const h = viewProps({ state: state({ loaded: true, draft: raw }), section: 'content' }), memory = slots(), view = rendered(h.props, memory);
   assert.match(h.html(), /شريط الموبايل|شريط الكمبيوتر|عدد الروابط المباشرة/);
   assert.equal(view.elements.filter(item => item.type === 'label' && text(item) === 'في المزيد').length, 6);
   const lists = view.elements.filter(item => item.type === 'fieldset');
   assert.equal(text(lists[0]).indexOf('المرضى') < text(lists[0]).indexOf('الإعدادات'), true);
-  assert.equal(text(lists[1]).indexOf('الإعدادات') < text(lists[1]).indexOf('المرضى'), true);
+  assert.equal(lists.length, 1);
+  view.button('إعدادات الكمبيوتر').props.onClick();
+  const desktop = rendered(h.props, memory), desktopLists = desktop.elements.filter(item => item.type === 'fieldset');
+  assert.equal(desktopLists.length, 1);
+  assert.equal(text(desktopLists[0]).indexOf('الإعدادات') < text(desktopLists[0]).indexOf('المرضى'), true);
+  assert.equal(desktop.elements.filter(item => item.type === 'label' && text(item) === 'في المزيد').length, 0);
+  assert.deepEqual(h.calls, [], 'changing the displayed device never saves or mutates the draft');
 });
 
 test('lab cost parsing preserves unknown/zero/exact Arabic cents and rejects unfinished or invalid prices', () => {

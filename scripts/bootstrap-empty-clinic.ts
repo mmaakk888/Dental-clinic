@@ -17,10 +17,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLOUD_PROJECT_ID } from '../src/utils/cloudIdentity';
-import { CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS, createCloudEmptyClinicBootstrap,
+import { CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS, CLOUD_BOOTSTRAP_DATABASE_LOCATION, createCloudEmptyClinicBootstrap,
   type CloudBootstrapAdapter, type CloudBootstrapAuthority } from '../src/utils/cloudEmptyClinicBootstrap';
 
-const quiet = { skipLog: { body: true, response: true } };
+/** Firebase CLI mutates each request options object (including POST body).
+ * Never reuse it for a subsequent GET or concurrent transaction request. */
+export const createTrustedBootstrapRequestOptions = () => ({ skipLog: { body: true, resBody: true } });
+const quiet = createTrustedBootstrapRequestOptions;
 function encode(value: unknown): object {
   if (value === null) return { nullValue: null };
   if (typeof value === 'string') return { stringValue: value };
@@ -88,11 +91,11 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
   const expectedRules = readFileSync(new URL('../firestore.membership.rules', import.meta.url), 'utf8');
   const authorizeBootstrap = async (): Promise<CloudBootstrapAuthority> => {
     const [billing, store, user, releases] = await Promise.all([
-      new Client({ urlPrefix: 'https://cloudbilling.googleapis.com', apiVersion: 'v1' }).get(`/projects/${project}/billingInfo`, quiet),
+      new Client({ urlPrefix: 'https://cloudbilling.googleapis.com', apiVersion: 'v1' }).get(`/projects/${project}/billingInfo`, quiet()),
       new FirestoreApi().getDatabase(project, '(default)'), findUser(project, undefined, undefined, ownerUid), rules.listAllReleases(project),
     ]);
     const claims = JSON.parse(user?.customAttributes || '{}');
-    if (billing.body.billingEnabled !== false || billing.body.billingAccountName || store.locationId !== 'europe-west1'
+    if (billing.body.billingEnabled !== false || billing.body.billingAccountName || store.locationId !== CLOUD_BOOTSTRAP_DATABASE_LOCATION
       || store.databaseEdition !== 'STANDARD' || store.freeTier !== true || store.deleteProtectionState !== 'DELETE_PROTECTION_ENABLED'
       || user.uid !== ownerUid || user.disabled === true || user.emailVerified !== true
       || claims.dentalClinicId !== 'main' || claims.dentalClinicRole !== 'owner') throw new Error();
@@ -100,7 +103,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
     if (!release) throw new Error();
     const source = await rules.getRulesetContent(release.rulesetName);
     if (source.length !== 1 || source[0].content !== expectedRules) throw new Error();
-    return { projectId: project, databaseId: '(default)', location: 'europe-west1', billingEnabled: false,
+    return { projectId: project, databaseId: '(default)', location: CLOUD_BOOTSTRAP_DATABASE_LOCATION, billingEnabled: false,
       membershipOnlyRules: true, ownerUid, ownerActive: true, ownerEmailVerified: true, ownerClaimsVerified: true };
   };
   if (mode === 'inspect') {
@@ -117,7 +120,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
   const adapter: CloudBootstrapAdapter = {
     authorizeBootstrap,
     runTransaction: async work => {
-      const begun = await client.post(`${documents}:beginTransaction`, { options: { readWrite: {} } }, quiet);
+      const begun = await client.post(`${documents}:beginTransaction`, { options: { readWrite: {} } }, quiet());
       const transaction = begun.body.transaction;
       if (typeof transaction !== 'string' || !transaction || transaction.length > 2048) throw new Error();
       const writes: object[] = []; let staged = false;
@@ -126,7 +129,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
           get: async target => {
             if (staged) throw new Error();
             let response;
-            try { response = await client.get(checkedPath(target), { ...quiet, queryParams: { transaction } }); }
+            try { response = await client.get(checkedPath(target), { ...quiet(), queryParams: { transaction } }); }
             catch (error: any) { if ((error.status ?? error.context?.response?.statusCode) === 404) return null; throw new Error(); }
             if (!response.body.fields) throw new Error();
             return decodeFields(response.body.fields);
@@ -136,7 +139,7 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
             const collectionId = target.split('/')[2];
             if (!CLOUD_BOOTSTRAP_EMPTY_COLLECTIONS.includes(collectionId as any)) throw new Error();
             const response = await client.post(`${documents}/clinics/main:runQuery`,
-              { structuredQuery: { from: [{ collectionId }], limit: 1 }, transaction }, quiet);
+              { structuredQuery: { from: [{ collectionId }], limit: 1 }, transaction }, quiet());
             if (!Array.isArray(response.body) || response.body.length > 2) throw new Error();
             const found = response.body.filter(item => item.document);
             if (found.length > 1 || found.some(item => typeof item.document.name !== 'string'
@@ -150,12 +153,12 @@ export async function runTrustedEmptyClinicBootstrap(argv: string[]) {
             writes.push({ update: { name: checkedPath(target).slice(1), fields: encoded.mapValue.fields }, currentDocument: { exists: false } });
           },
         });
-        await client.post(`${documents}:commit`, { transaction, writes }, quiet);
+        await client.post(`${documents}:commit`, { transaction, writes }, quiet());
         return result;
       } catch {
         // Rollback ends the read transaction, not an already-accepted commit.
         // The caller retains the original IDs and confirms by exact replay.
-        await client.post(`${documents}:rollback`, { transaction }, quiet).catch(() => undefined);
+        await client.post(`${documents}:rollback`, { transaction }, quiet()).catch(() => undefined);
         throw new Error('Trusted initialization reply could not be confirmed.');
       }
     },

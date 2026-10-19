@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, ClipboardList, Cloud, Database, Eye, FolderHeart, LoaderCircle, LogOut, RefreshCw, ShieldCheck, Tags, UsersRound } from 'lucide-react';
 import { ClinicLogo } from '../common/ClinicLogo';
+import { CloudOwnerLogin } from './CloudOwnerLogin';
 import CloudUnavailablePage from './CloudUnavailablePage';
 import { isCloudOperatingRequest } from '../../utils/clinicEntryRoute';
 import { CLOUD_PROJECT_ID } from '../../utils/cloudIdentity';
@@ -15,8 +16,10 @@ import { createCloudOperatingPageController, type CloudOperatingPageController,
   type CloudOperatingPageState } from '../../utils/cloudOperatingPageController';
 import { CLOUD_CATALOG_UI_STAGE, createCloudCatalogUiPreview } from '../../utils/cloudCatalogUiStage';
 import type { CloudCatalogWorkspaceController } from '../../utils/cloudCatalogWorkspaceController';
-import { CLOUD_COMPLETE_RELEASE_UI, createCloudReleaseWorkspace, type CloudReleaseWorkspace } from '../../utils/cloudReleaseWorkspaceFactories';
+import { CLOUD_COMPLETE_RELEASE_UI, createCloudReleaseWorkspace, reuseCloudOverviewTab, type CloudReleaseWorkspace } from '../../utils/cloudReleaseWorkspaceFactories';
+import type { CloudClinicOverviewTab } from '../../utils/cloudClinicOverviewController';
 import type { CloudShellBranding, CloudShellSection } from './CloudClinicShell';
+import { CloudClinicShell, CloudClinicClock } from './CloudClinicShell';
 import { CloudSelectedPatientDisplay, CloudSelectedPatientDisplayView } from '../patient/CloudSelectedPatientDisplay';
 import type { CloudOperatingOwner } from '../../utils/cloudOperatingAuth';
 
@@ -32,8 +35,6 @@ const CloudExpensesWorkspace = lazy(() => import('../summary/CloudExpensesWorksp
 const CloudClinicOverviewWorkspace = lazy(() => import('../summary/CloudClinicOverviewWorkspace').then(module => ({ default: module.CloudClinicOverviewWorkspace })));
 const CloudTransferWorkspace = lazy(() => import('../settings/CloudTransferWorkspace').then(module => ({ default: module.CloudTransferWorkspace })));
 const CloudWhatsAppWorkspace = lazy(() => import('../settings/CloudWhatsAppWorkspace').then(module => ({ default: module.CloudWhatsAppWorkspace })));
-const CloudClinicShell = lazy(() => import('./CloudClinicShell').then(module => ({ default: module.CloudClinicShell })));
-const CloudClinicClock = lazy(() => import('./CloudClinicShell').then(module => ({ default: module.CloudClinicClock })));
 type ContactsWorkspace = ReturnType<typeof createCloudContactWorkspaceController>;
 
 const INITIAL_STATE: CloudOperatingPageState = {
@@ -73,6 +74,12 @@ export default function CloudOperatingPage() {
   const [patientDisplay, setPatientDisplay] = useState(false);
   const [displayNotice, setDisplayNotice] = useState('');
   const [selectingWalkIn, setSelectingWalkIn] = useState(false);
+  const [overviewTab, setOverviewTab] = useState<CloudClinicOverviewTab>('home');
+  const [createPatientRequest, setCreatePatientRequest] = useState(0);
+  const [originalPatientId, setOriginalPatientId] = useState<string | undefined>(undefined);
+  const [initialSettingsSection, setInitialSettingsSection] = useState<'identity' | 'services' | 'whatsapp'>('identity');
+  const [initialPricingLabId, setInitialPricingLabId] = useState<string | undefined>();
+  const queuedNavigation = useRef<string | null>(null);
   const hasPreview = () => !!(previewRef.current || patientPreviewRef.current || clinicalPreviewRef.current || catalogPreviewRef.current);
 
   useEffect(() => {
@@ -87,6 +94,7 @@ export default function CloudOperatingPage() {
           if (lastOwner.current && lastOwner.current.uid !== next.auth.owner.uid) { setBranding(null); setPatientDisplay(false); }
           lastOwner.current = next.auth.owner;
         } else if (next.auth.phase !== 'checking') {
+          queuedNavigation.current = null;
           lastOwner.current = null; setBranding(null); setPatientDisplay(false); setDisplayNotice(''); setSelectingWalkIn(false);
         }
         // Temporary Auth checking keeps the same workspace lease. Actual
@@ -119,6 +127,12 @@ export default function CloudOperatingPage() {
       void controller.dispose().catch(() => undefined);
     };
   }, []);
+
+  useEffect(() => {
+    if (view.auth.phase === 'owner-checked' && !view.pending && !view.closing && queuedNavigation.current) {
+      const section = queuedNavigation.current; queuedNavigation.current = null; navigate(section);
+    }
+  }, [view]);
 
   useEffect(() => {
     if (!additional || !['home', 'directory', 'finance', 'export'].includes(additional.kind)) return;
@@ -216,6 +230,13 @@ export default function CloudOperatingPage() {
   }
 
   async function openPatients(create = false) {
+    if (CLOUD_COMPLETE_RELEASE_UI.available) {
+      await openAdditional('home', undefined, 'patients');
+      if (create && additionalRef.current && active.current?.getAdditionalWorkspace(additionalRef.current.kind) === additionalRef.current
+        && 'patientsBridge' in additionalRef.current && additionalRef.current.patientsBridge?.canClose()
+        && additionalRef.current.controller.getState().snapshot && additionalRef.current.controller.getState().tab === 'patients') setCreatePatientRequest(value => value + 1);
+      return;
+    }
     if (!CLOUD_PATIENTS_UI_STAGE.available) return;
     const controller = active.current;
     if (!controller || !validRoute() || hasPreview()) return;
@@ -248,6 +269,13 @@ export default function CloudOperatingPage() {
   }
 
   async function openClinical(patientRecordId?: string, startVisit = false) {
+    if (CLOUD_COMPLETE_RELEASE_UI.available && patientRecordId && !startVisit) {
+      await openAdditional('home', undefined, 'patient-file');
+      const current = additionalRef.current;
+      if (current && active.current?.getAdditionalWorkspace(current.kind) === current && 'patientFileBridge' in current
+        && current.controller.getState().tab === 'patient-file' && current.patientFileBridge?.canClose()) setOriginalPatientId(patientRecordId);
+      return;
+    }
     if (!CLOUD_CLINICAL_UI_STAGE.available) return;
     const controller = active.current;
     if (!controller || !validRoute() || hasPreview()) return;
@@ -302,19 +330,24 @@ export default function CloudOperatingPage() {
     } else if (active.current?.getCatalogWorkspace() === displayed && active.current.closeCatalog(displayed)) setCatalogWorkspace(null);
   }
 
-  async function openAdditional(kind: 'appointments' | 'settings' | 'prosthetics' | 'prescription' | 'expenses' | 'home' | 'directory' | 'finance' | 'export' | 'transfer' | 'whatsapp', patientRecordId?: string) {
+  async function openAdditional(kind: 'appointments' | 'settings' | 'prosthetics' | 'prescription' | 'expenses' | 'home' | 'directory' | 'finance' | 'export' | 'transfer' | 'whatsapp', patientRecordId?: string, tab?: CloudClinicOverviewTab) {
     if (!CLOUD_COMPLETE_RELEASE_UI.available || hasPreview()) return;
     const parent = active.current;
     if (!parent || !validRoute() || kind === 'prescription' && patientRecordId === undefined) return;
+    const parts = new Intl.DateTimeFormat('en', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const part = (type: string) => parts.find(item => item.type === type)?.value ?? '';
+    const today = `${part('year')}-${part('month')}-${part('day')}`;
+    const current = additionalRef.current;
+    if (current && parent.getAdditionalWorkspace(current.kind) === current && reuseCloudOverviewTab(current, tab ?? kind, today)) {
+      setOverviewTab((tab ?? kind) as CloudClinicOverviewTab); return;
+    }
     const opened = await parent.openAdditional(kind, context => createCloudReleaseWorkspace(context,
-      kind === 'appointments' || kind === 'home' || kind === 'directory' || kind === 'finance' || kind === 'export' ? { kind, initialDate: (() => {
-        const parts = new Intl.DateTimeFormat('en', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-        const part = (type: string) => parts.find(item => item.type === type)?.value ?? '';
-        return `${part('year')}-${part('month')}-${part('day')}`;
-      })() }
+      kind === 'appointments' || kind === 'home' || kind === 'directory' || kind === 'finance' || kind === 'export' ? { kind, initialDate: today }
         : kind === 'prescription' ? { kind, patientRecordId: patientRecordId! } : { kind }));
     if (!opened || active.current !== parent || !validRoute() || parent.getAdditionalWorkspace(kind) !== opened) return;
     additionalRef.current = opened; setAdditional(opened);
+    if (opened.kind === 'home' || opened.kind === 'directory' || opened.kind === 'finance' || opened.kind === 'export') { if (tab) opened.controller.setTab(tab); setOverviewTab(tab ?? opened.kind); }
+    if (opened.kind === 'settings' && !opened.controller.getState().loaded) await opened.controller.load('clinicSettings');
     if (opened.kind === 'prosthetics' && patientRecordId !== undefined) await opened.controller.beginOrder(patientRecordId);
     if (opened.kind === 'home' || opened.kind === 'directory' || opened.kind === 'finance' || opened.kind === 'export' || opened.kind === 'whatsapp') await opened.controller.refresh();
   }
@@ -326,17 +359,38 @@ export default function CloudOperatingPage() {
   function navigate(section: string) {
     const parent = active.current;
     if (!CLOUD_COMPLETE_RELEASE_UI.available || !parent || !validRoute() || hasPreview() || patientDisplay
-      || parent.getState().auth.phase !== 'owner-checked' || parent.getState().pending || parent.getState().closing) return;
+      || parent.getState().closing || parent.getState().cleanupFailed) return;
+    if (parent.getState().auth.phase === 'checking' || parent.getState().pending) { queuedNavigation.current = section; return; }
+    if (parent.getState().auth.phase !== 'owner-checked') return;
+    setCreatePatientRequest(0);
     setSelectingWalkIn(section === 'walk-in');
     if (section === 'patients-new') void openPatients(true);
     else if (section === 'patients') void openPatients();
+    else if (section === 'appointments') void openAdditional('home', undefined, 'appointments');
+    else if (section === 'settings' || section === 'catalog' || section === 'whatsapp' || section.startsWith('lab-prices:')) {
+      setInitialSettingsSection(section === 'settings' ? 'identity' : section === 'whatsapp' ? 'whatsapp' : 'services');
+      setInitialPricingLabId(section.startsWith('lab-prices:') ? section.slice('lab-prices:'.length) : undefined);
+      void openAdditional('home', undefined, 'settings');
+    }
     else if (section === 'contacts' || section === 'directory') void openAdditional('directory');
     else if (section === 'contact-edit') void openContacts();
     else if (section === 'walk-in') void openAdditional('directory');
-    else if (section === 'lab') void openAdditional('prosthetics');
+    else if (section === 'lab') void openAdditional('home', undefined, 'labs');
     else if (section === 'summary') void openAdditional('finance');
     else if (section === 'catalog') void openCatalog();
     else if (['home', 'appointments', 'settings', 'finance', 'export', 'transfer', 'expenses', 'whatsapp'].includes(section)) void openAdditional(section as 'home' | 'appointments' | 'settings' | 'finance' | 'export' | 'transfer' | 'expenses' | 'whatsapp');
+  }
+  async function signInAndOpenHome() {
+    const parent = active.current;
+    if (!parent || blocked || hasPreview() || !validRoute()) return;
+    const submittedPassword = password; setPassword('');
+    await parent.signIn(email, submittedPassword);
+    // This read follows the owner's explicit login submission. Never open a
+    // workspace after cancellation, unmount or a replacement Auth lifetime.
+    if (active.current !== parent || !validRoute()) return;
+    const state = parent.getState();
+    if (state.auth.phase !== 'owner-checked' || state.pending || state.closing || state.cleanupFailed) return;
+    await openAdditional('home');
   }
   function togglePatientDisplay() {
     const parent = active.current;
@@ -365,13 +419,13 @@ export default function CloudOperatingPage() {
 
   const workspaceContent = additional ? <Suspense fallback={<section role="status" className="rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7">جارٍ فتح القسم…</section>}>
     {additional.kind === 'appointments' ? <CloudAppointmentsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} />
-      : additional.kind === 'settings' ? <><div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">{([['catalog', 'الخدمات والأسعار'], ['transfer', 'الاستيراد'], ['export', 'التصدير'], ['contact-edit', 'إدارة الأرقام'], ['whatsapp', 'إدارة واتساب']] as const).map(([section, label]) => <button type="button" className="min-h-11 rounded-xl border border-slate-200 bg-white p-3 font-bold" disabled={runtimeBlocked} key={section} onClick={() => navigate(section)}>{label}</button>)}</div><CloudClinicSettingsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} /></>
+      : additional.kind === 'settings' ? <CloudClinicSettingsWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} onNavigate={navigate} disabled={runtimeBlocked} />
       : additional.kind === 'prosthetics' ? <CloudProstheticWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} />
       : additional.kind === 'expenses' ? <CloudExpensesWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} />
       : additional.kind === 'transfer' ? <CloudTransferWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} />
       : additional.kind === 'whatsapp' ? <CloudWhatsAppWorkspace controller={additional.controller} onClose={() => closeAdditional(additional)} onEditSettings={() => navigate('settings')} disabled={runtimeBlocked} />
       : additional.kind === 'prescription' ? <CloudPrescriptionWorkspace controller={additional.controller} patientRecordId={additional.patientRecordId} onClose={() => closeAdditional(additional)} disabled={runtimeBlocked} />
-      : <>{selectingWalkIn && additional.kind === 'directory' && <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 leading-7">اختر ملف المريض من البحث بالاسم أو الرقم لتسجيل زيارة بدون موعد. <button type="button" disabled={runtimeBlocked} className="min-h-11 font-bold text-indigo-700" onClick={() => navigate('patients-new')}>إنشاء ملف لمريض جديد</button></div>}<CloudClinicOverviewWorkspace controller={additional.controller} disabled={runtimeBlocked} onClose={() => closeAdditional(additional)} onOpenPatient={id => void openClinical(id, selectingWalkIn)} onNavigate={navigate} /></>}
+: <>{selectingWalkIn && overviewTab === 'directory' && <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 leading-7">اختر ملف المريض من البحث بالاسم أو الرقم لتسجيل زيارة بدون موعد. <button type="button" disabled={runtimeBlocked} className="min-h-11 font-bold text-indigo-700" onClick={() => navigate('patients-new')}>إنشاء ملف لمريض جديد</button></div>}<CloudClinicOverviewWorkspace controller={additional.controller} contactsBridge={additional.contactsBridge} patientsBridge={additional.patientsBridge} appointmentsBridge={additional.appointmentsBridge} labsBridge={additional.labsBridge} patientFileBridge={additional.patientFileBridge} selectedPatientRecordId={originalPatientId} settingsBridge={additional.settingsBridge} whatsAppBridge={additional.whatsAppBridge} initialSettingsSection={initialSettingsSection} initialPricingLabId={initialPricingLabId} createPatientRequest={createPatientRequest} disabled={runtimeBlocked} onClose={() => closeAdditional(additional)} onOpenPatient={id => void openClinical(id, selectingWalkIn)} onNavigate={navigate} /></>}
   </Suspense> : displayedCatalog ? <Suspense fallback={<p role="status">جارٍ فتح الخدمات والأسعار…</p>}>
     <CloudServiceCatalogWorkspace controller={displayedCatalog} onClose={() => closeCatalog(displayedCatalog)} previewOnly={catalogPreview !== null} disabled={catalogPreview === null && runtimeBlocked} />
   </Suspense> : displayedClinical ? <Suspense fallback={<p role="status">جارٍ فتح الملف السريري…</p>}>
@@ -386,36 +440,25 @@ export default function CloudOperatingPage() {
   </Suspense> : null;
 
   if (CLOUD_COMPLETE_RELEASE_UI.available && (owner || view.auth.phase === 'checking' && lastOwner.current)) {
+    const shownKind = additional && ['home', 'directory', 'finance', 'export'].includes(additional.kind) ? overviewTab : additional?.kind;
     const section: CloudShellSection = displayedPatients || displayedClinical ? 'patients' : displayedWorkspace ? 'contacts'
-      : additional?.kind === 'appointments' ? 'appointments' : additional?.kind === 'prosthetics' ? 'lab'
-      : additional?.kind === 'finance' || additional?.kind === 'expenses' ? 'summary' : additional?.kind === 'directory' ? 'contacts'
-      : additional?.kind === 'settings' || additional?.kind === 'transfer' || additional?.kind === 'export' || additional?.kind === 'whatsapp' || displayedCatalog ? 'settings' : 'home';
+      : shownKind === 'patients' || shownKind === 'patient-file' ? 'patients' : shownKind === 'appointments' ? 'appointments' : shownKind === 'labs' || additional?.kind === 'prosthetics' ? 'lab'
+      : shownKind === 'finance' || shownKind === 'expenses' ? 'summary' : shownKind === 'directory' ? 'contacts'
+      : shownKind === 'settings' || shownKind === 'transfer' || shownKind === 'export' || shownKind === 'whatsapp' || displayedCatalog ? 'settings' : 'home';
     return <Suspense fallback={<main dir="rtl" role="status" className="min-h-dvh bg-slate-50 p-6">جارٍ فتح مساحة العيادة…</main>}><CloudClinicShell branding={branding} section={section} accountEmail={owner?.email || ''} disabled={view.closing || view.cleanupFailed}
       checking={view.auth.phase !== 'owner-checked'} error={view.error || displayNotice || view.contacts.error || view.patients.error || view.clinical.error || view.catalog.error}
       patientDisplayActive={patientDisplay} onPatientDisplay={togglePatientDisplay}
-      patientDisplay={displayedClinical ? <CloudSelectedPatientDisplay controller={displayedClinical.file} /> : <CloudSelectedPatientDisplayView snapshot={null} />}
+      patientDisplay={displayedClinical ? <CloudSelectedPatientDisplay controller={displayedClinical.file} />
+        : <CloudSelectedPatientDisplayView snapshot={additional && 'patientFileBridge' in additional && overviewTab === 'patient-file'
+          ? additional.controller.getState().snapshot?.patients.find(row => row.patientRecordId === originalPatientId) ?? null : null} />}
       onNavigate={navigate} onSignOut={() => void leave(false)} onRefreshSession={() => void active.current?.refresh()}>
       {section === 'home' && <CloudClinicClock />}
       {workspaceContent || <section className="rounded-3xl border border-slate-200 bg-white p-6"><h1 className="text-xl font-extrabold">العيادة</h1><p className="my-3 leading-7">ابدأ العمل أو اختر قسمًا من الشريط. لا تُرفع أي بيانات محلية إلى حسابك.</p><button type="button" className="min-h-12 rounded-xl bg-indigo-600 px-5 py-3 font-bold text-white" disabled={blocked} onClick={() => navigate('home')}>ابدأ العمل</button></section>}
     </CloudClinicShell></Suspense>;
   }
-  if (CLOUD_COMPLETE_RELEASE_UI.available) return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-8 text-slate-900">
-    <section className="mx-auto w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-      <div className="mb-6 flex items-center gap-3"><ClinicLogo layout="icon-only" size="lg" showText={false}/><div><h1 className="text-xl font-extrabold">إدارة العيادة</h1><p className="mt-1 text-sm text-slate-500">دخول المالك</p></div></div>
-      {view.error && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-3 text-sm leading-7 text-rose-800">{view.error}</p>}
-      <form className="space-y-4" aria-busy={busy} onSubmit={event => {
-        event.preventDefault(); const parent = active.current;
-        if (!parent || blocked || hasPreview() || !validRoute()) return;
-        const submittedPassword = password; setPassword(''); void parent.signIn(email, submittedPassword);
-      }}>
-        <label className="block space-y-2"><span className="text-sm font-bold">البريد الإلكتروني</span><input name="email" type="email" dir="ltr" autoComplete="username" required maxLength={254} disabled={blocked} value={email} onChange={event => setEmail(event.target.value)} className="min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-base" /></label>
-        <label className="block space-y-2"><span className="text-sm font-bold">كلمة سر حساب الموقع</span><input name="password" type="password" autoComplete="current-password" required maxLength={4096} disabled={blocked} value={password} onChange={event => setPassword(event.target.value)} className="min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-base" /></label>
-        <button type="submit" disabled={blocked} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 font-bold text-white disabled:opacity-50">{busy ? <LoaderCircle size={20}/> : <ShieldCheck size={20}/>} {busy ? 'جارٍ التحقق…' : 'دخول العيادة'}</button>
-      </form>
-      {busy && <button type="button" disabled={view.closing || view.cleanupFailed} className="mt-3 min-h-11 w-full rounded-xl border border-slate-300 p-3 font-bold" onClick={() => void leave(false)}>{view.closing ? 'جارٍ إغلاق الجلسة…' : 'إلغاء وتسجيل الخروج'}</button>}
-      <p className="mt-5 text-xs leading-6 text-slate-500">اكتب كلمة سر الموقع، وليس حساب Google. الجلسة في الذاكرة فقط؛ لا تُحمّل بيانات المرضى قبل تسجيل الدخول.</p>
-    </section>
-  </main>;
+  if (CLOUD_COMPLETE_RELEASE_UI.available) return <CloudOwnerLogin email={email} password={password} busy={busy} blocked={blocked}
+    closing={view.closing} cleanupFailed={view.cleanupFailed} error={view.error} onEmail={setEmail} onPassword={setPassword}
+    onCancel={() => void leave(false)} onSubmit={() => void signInAndOpenHome()} />;
 
   return <main dir="rtl" className="min-h-dvh bg-slate-50 px-4 py-5 sm:px-6 sm:py-8 text-slate-900">
     <div className="mx-auto w-full max-w-5xl space-y-5 sm:space-y-7">

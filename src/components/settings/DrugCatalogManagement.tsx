@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, FileText, Pencil, Pill, Plus, Save, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import type { DrugCatalogItem } from '../../types';
 import { DRUG_FIELD_LIMITS, drugCatalogChanged, drugCatalogDraft, drugCatalogSnapshot, filterDrugCatalog, getDrugCategories, upsertDrugCatalogItem, validateDrugCatalogDraft } from '../../utils/drugCatalog';
@@ -9,7 +9,8 @@ import './drugCatalogManagement.css';
 
 export interface DrugCatalogManagementProps {
   drugCatalog: DrugCatalogItem[];
-  onSaveDrugCatalog: (items: DrugCatalogItem[]) => void;
+  onSaveDrugCatalog: (items: DrugCatalogItem[]) => void | Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface EditorState {
@@ -50,7 +51,7 @@ function DrugCatalogEditor({ editor, drugCatalog, onSaveDrugCatalog, onClose }: 
     setErrors(current => { const next = { ...current }; delete next[key]; return next; });
     setSaveError('');
   };
-  const save = (event: React.FormEvent) => {
+  const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy.current || conflict || discardPrompt) return;
     const checked = validateDrugCatalogDraft(draft, drugCatalog, editor.item?.id);
@@ -65,7 +66,7 @@ function DrugCatalogEditor({ editor, drugCatalog, onSaveDrugCatalog, onClose }: 
     try {
       const newId = `drug_${typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`}`;
       const next = upsertDrugCatalogItem(drugCatalog, checked.value, editor.item?.id, newId);
-      onSaveDrugCatalog(next);
+      await onSaveDrugCatalog(next);
       showToast(editor.item ? 'تم حفظ تعديلات الدواء.' : 'تمت إضافة الدواء إلى الفهرس.', 'success');
       onClose();
     } catch (error) {
@@ -105,13 +106,14 @@ function DrugCatalogEditor({ editor, drugCatalog, onSaveDrugCatalog, onClose }: 
   </div>;
 }
 
-export function DrugCatalogManagement({ drugCatalog, onSaveDrugCatalog }: DrugCatalogManagementProps) {
+export function DrugCatalogManagement({ drugCatalog, onSaveDrugCatalog, onDirtyChange }: DrugCatalogManagementProps) {
   const { askConfirm, showToast } = useToastAndConfirm();
   const id = `drug-catalog-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string | null>(null);
   const [sort, setSort] = useState<DrugCatalogSort>('name');
   const [editor, setEditor] = useState<EditorState | null>(null);
+  useEffect(() => { onDirtyChange?.(!!editor); return () => onDirtyChange?.(false); }, [editor, onDirtyChange]);
   const [saveError, setSaveError] = useState('');
   const latest = useRef({ drugCatalog, onSaveDrugCatalog });
   latest.current = { drugCatalog, onSaveDrugCatalog };
@@ -127,14 +129,14 @@ export function DrugCatalogManagement({ drugCatalog, onSaveDrugCatalog }: DrugCa
   const remove = (item: DrugCatalogItem) => {
     const baseline = drugCatalogSnapshot(drugCatalog);
     setSaveError('');
-    askConfirm({ title: `حذف «${item.name}» من الفهرس؟`, message: 'لن يظهر هذا الدواء في قائمة الاختيار للروشتات الجديدة. الروشتات المحفوظة وبيانات المرضى لن تُحذف أو تتغير.', confirmLabel: 'حذف من الفهرس', tone: 'danger', onConfirm: () => {
+    askConfirm({ title: `حذف «${item.name}» من الفهرس؟`, message: 'لن يظهر هذا الدواء في قائمة الاختيار للروشتات الجديدة. الروشتات المحفوظة وبيانات المرضى لن تُحذف أو تتغير.', confirmLabel: 'حذف من الفهرس', tone: 'danger', onConfirm: async () => {
       const current = latest.current;
       if (drugCatalogChanged(baseline, current.drugCatalog)) {
         setSaveError('تغيّرت قائمة الأدوية قبل تأكيد الحذف. راجع القائمة ثم أعد المحاولة.');
         return;
       }
       try {
-        current.onSaveDrugCatalog(current.drugCatalog.filter(entry => entry.id !== item.id));
+        await current.onSaveDrugCatalog(current.drugCatalog.filter(entry => entry.id !== item.id));
         showToast('تم حذف الدواء من الفهرس فقط.', 'success');
       } catch (error) {
         setSaveError(error instanceof Error ? error.message : 'تعذّر حذف الدواء. القائمة كما هي؛ حاول مرة أخرى.');

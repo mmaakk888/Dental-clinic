@@ -30,10 +30,10 @@ export const INITIAL_EXPENSES: Expense[] = [
 export const DEFAULT_WHATSAPP_SETTINGS: WhatsappSettings = {
   apiKey: '',
   webhookUrl: '',
-  senderNumber: '01012345678',
-  autoConfirmOnAppt: true,
-  autoRemind24h: true,
-  autoPostOpOnAttended: true,
+  senderNumber: '',
+  autoConfirmOnAppt: false,
+  autoRemind24h: false,
+  autoPostOpOnAttended: false,
   templates: {
     reminderTomorrow: 'أهلاً بك أ. {patientName}، نود تذكيرك بموعدك يوم {date} الساعة {time} في {clinicName}. يسعدنا حضورك!',
     newAppt: 'أهلاً بك أ. {patientName}، تم حجز موعد جديد لك يوم {date} الساعة {time} في {clinicName}.',
@@ -82,7 +82,7 @@ export const DEFAULT_UI_LABELS: UILabels = {
   welcomeText: 'أهلاً بك يا دكتور، اختر القسم المطلوب للمتابعة',
   tiles: {
     patients: { title: 'فهرس الحالات', desc: 'إدارة ملفات المرضى، السجل الطبي والمالي' },
-    contacts: { title: 'جهات الاتصال', desc: 'أسماء وأرقام بدون ملفات، وربط الأرقام بالملفات الموجودة' },
+    contacts: { title: 'جهات الاتصال', desc: 'كل أرقام العيادة، مع توضيح الأرقام المرتبطة بملفات المرضى' },
     appointments: { title: 'جدول المواعيد', desc: 'تنظيم الحجوزات اليومية والمتابعات' },
     lab: { title: 'حسابات المعمل', desc: 'متابعة أعمال التركيبات، الفواتير والأرباح' },
     summary: { title: 'الملخص المالي', desc: 'تقارير الإيرادات، التحصيل والمستحقات' },

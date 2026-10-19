@@ -9,7 +9,7 @@ import { prepareCloudClinicSettingsCommand } from './cloudClinicSettingsReposito
 // Synthetic SDK composition only, not live Auth/Rules/visual/device acceptance.
 const UUID = '10000000-0000-4000-8000-000000000001', OP = '20000000-0000-4000-8000-000000000001';
 const LAB = '30000000-0000-4000-8000-000000000001', MATERIAL = '40000000-0000-4000-8000-000000000001';
-const UID = 'synthetic-settings-sdk-owner', PROJECT = 'dental-clinic-mmaakk888', WHEN = '2026-10-12T00:00:00.000Z';
+const UID = 'synthetic-settings-sdk-owner', PROJECT = 'osama-clinic-38706', WHEN = '2026-10-12T00:00:00.000Z';
 const ROUTING = 'clinics/main/settings/prostheticRouting', SETTINGS = 'clinics/main/settings/clinicSettings';
 const INTENT = `clinics/main/operationIntents/${OP}`, RECEIPT = `clinics/main/settingsOperations/${OP}`;
 let output: ReturnType<typeof build> | undefined, rawOutput: ReturnType<typeof build> | undefined;
@@ -129,8 +129,8 @@ test('settings SDK import and capability construction never authenticate, read r
 test('factory rejects external host wrong/default/setup app emulator absent user and mismatched project before SDK imports', async () => {
   // HTTP and missing protocol are never approved production runtimes, even
   // after the central release gate permits the exact HTTPS hostname.
-  for (const options of [{ hostname: 'dental-clinic-mmaakk888.web.app', protocol: 'http:' },
-    { hostname: 'dental-clinic-mmaakk888.web.app' }, { hostname: '127.0.0.1.evil.invalid' }, { appName: '[DEFAULT]' },
+  for (const options of [{ hostname: 'osama-clinic-38706.web.app', protocol: 'http:' },
+    { hostname: 'osama-clinic-38706.web.app' }, { hostname: '127.0.0.1.evil.invalid' }, { appName: '[DEFAULT]' },
     { appName: `clinic-setup-${UUID}` }, { appName: `clinic-operating-${UUID}\n` }, { projectId: 'wrong-project' },
     { authDomain: 'wrong.invalid' }, { emulator: true }, { missingUser: true }]) {
     const h = await harness(options); await assert.rejects(h.capability(), safe); assert.deepEqual(h.calls, []);

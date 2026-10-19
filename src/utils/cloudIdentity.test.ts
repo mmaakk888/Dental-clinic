@@ -35,7 +35,7 @@ function assertRejected(input: unknown): void {
 }
 
 test('cloud identity constants target only the new clinic project', () => {
-  assert.equal(CLOUD_PROJECT_ID, 'dental-clinic-mmaakk888');
+  assert.equal(CLOUD_PROJECT_ID, 'osama-clinic-38706');
   assert.equal(CLOUD_CLINIC_ID, 'main');
 });
 
@@ -79,9 +79,11 @@ for (const [name, claim, value] of [
   ['missing subject', 'sub', undefined],
   ['numeric subject', 'sub', 1],
   ['other project', 'aud', 'other-synthetic-project'],
+  ['previous project audience', 'aud', 'dental-clinic-mmaakk888'],
   ['array audience', 'aud', [CLOUD_PROJECT_ID]],
   ['missing audience', 'aud', undefined],
   ['other issuer', 'iss', 'https://securetoken.google.com/other-synthetic-project'],
+  ['previous project issuer', 'iss', 'https://securetoken.google.com/dental-clinic-mmaakk888'],
   ['lookalike issuer', 'iss', `https://securetoken.google.com.attacker.invalid/${CLOUD_PROJECT_ID}`],
   ['issuer trailing slash', 'iss', `https://securetoken.google.com/${CLOUD_PROJECT_ID}/`],
   ['missing issuer', 'iss', undefined],

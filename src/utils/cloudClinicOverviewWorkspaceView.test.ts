@@ -45,7 +45,7 @@ test('SSR constructor/mount remain inert and do not initialize any data adapter'
 test('home has clear complete snapshot date, cash-not-profit labels and existing quick routes', async () => {
   const h = await view(), html = h.html(); assert.match(html, /آخر نسخة مؤكدة/); assert.match(html, /بتوقيت القاهرة/);
   assert.match(html, /ليس صافي الربح/); assert.match(html, /ملف مريض جديد/); assert.match(html, /زيارة بدون موعد/);
-  assert.match(html, /الاستيراد والتصدير/); assert.match(html, /رسائل واتساب/); assert.match(html, /6?15\.00|615\.00/);
+  assert.match(html, /الاستيراد والتصدير/); assert.match(html, /رسائل واتساب/); assert.match(html, /750\.00 ج.م/);
   assert.doesNotMatch(html, /synthetic-whole-clinic-owner|lastOperationId|password/);
 });
 test('directory shows public file number with exact internal callback and manual call/WhatsApp links', async () => {
@@ -95,6 +95,6 @@ test('protected home layout hides/reorders sections without mutating any setting
   snapshot.settings.clinicSettings.data.content.homeLayout.sectionOrder = ['schedule', 'metrics', 'actions', 'followUp'];
   snapshot.settings.clinicSettings.data.content.homeLayout.hiddenSections = ['actions'];
   h.props.state = { ...h.props.state, snapshot };
-  const html = h.html(); assert.doesNotMatch(html, /الوصول السريع/); assert.ok(html.indexOf('مواعيد الفترة') < html.indexOf('التحصيل الفعلي'));
+  const html = h.html(); assert.doesNotMatch(html, /إجراءات اليوم/); assert.ok(html.indexOf('جدول اليوم') < html.indexOf('تحصيل اليوم'));
   assert.deepEqual(snapshot.settings.clinicSettings.data.content.homeLayout.hiddenSections, ['actions']);
 });

@@ -1,7 +1,7 @@
 /** Actual engine checks for the expense fragment. Disposable loopback DEMO
  * only, no IAM, live project, real accounts, billing or clinic data. */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readCloudReleaseRules } from './read-cloud-release-rules.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { Bytes, connectFirestoreEmulator, getFirestore, doc, writeBatch, runTransaction, getDoc, setLogLevel } from 'firebase/firestore/lite';
@@ -53,12 +53,7 @@ function data(count:number,changes:Partial<CloudExpenseData>={}):CloudExpenseDat
 const create=(n:number,count:number,changes:Partial<CloudExpenseData>={},paidCents=0):CloudExpenseCommand=>({action:'create',operationId:id(n),recordId:id(100+n),expectedRevision:0,createdAt:WHEN,data:data(count,changes),paidCents});
 const only=process.argv.includes('--sdk-only')?'__sdk_only__':process.argv.find(v=>v.startsWith('--only='))?.slice(7);
 try {
-  let rules=readFileSync('firestore.release.rules','utf8');const fragment=readFileSync('rules/expense.release.rules.fragment','utf8');
-  if(!rules.includes('function ex_preparedExpense(')) {const start=rules.indexOf('function commandValid(d)'),end=rules.indexOf('function coupledIntent',start);
-    assert.ok(start>=0 && end>start);const block=rules.slice(start,end),updated=block.replace(/: false;\s*}/,
-      ": d.kind == 'expense' ? d.command.createdAt==d.createdAt && ex_preparedExpense(d.command) : false;\n    }");
-    assert.notEqual(updated,block);rules=rules.slice(0,start)+updated+rules.slice(end);
-    rules=rules.replace('    match /{document=**}',()=>`${fragment}\n    match /{document=**}`);}
+  const rules=readCloudReleaseRules();
   await admin(`/emulator/v1/projects/${PROJECT}:securityRules`,'PUT',{rules:{files:[{name:'firestore.release.rules',content:rules}]}});
   const scenarios=[];for(const count of[0,1,4,5,16,20].filter(count=>!only||count<=1||only===`create${count}`))scenarios.push(await scenario(`create${count}`,create(10+count,count,{},count?1:2000)));
   const duplicateData=data(20);duplicateData.items=duplicateData.items.map(row=>({...row,name:'خامة مشتركة'}));

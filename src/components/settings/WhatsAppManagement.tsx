@@ -6,8 +6,8 @@ import { getPatientFinancialSummary } from '../../utils/financials';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { WhatsAppCampaigns } from './WhatsAppCampaigns';
 import { ClinicContacts } from './ClinicContacts';
-import { prepareFreshWhatsAppAction, type WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
-import { Storage } from '../../utils/storage';
+import { prepareFreshWhatsAppAction, type WhatsAppSendAuthorization, type ProtectedWhatsAppActions } from '../../utils/whatsappSafety';
+import { useProtectedWhatsAppAction } from '../../hooks/useProtectedWhatsAppAction';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import './WhatsAppManagement.css';
@@ -26,6 +26,10 @@ interface Props {
   onSaveWhatsappSettings: (settings: WhatsappSettings) => void | Promise<void>;
   appointments?: Appointment[];
   canViewPatientFinance?: boolean;
+  cloudActions?: ProtectedWhatsAppActions;
+  readSettings?: () => WhatsappSettings;
+  onDirtyChange?: (dirty: boolean) => void;
+  onContactEditorChange?: (open: boolean) => void;
 }
 type TemplateKey = keyof WhatsappSettings['templates'];
 type Section = 'templates' | 'individual' | 'contacts' | 'campaigns' | 'connection';
@@ -53,7 +57,7 @@ const isDateValid = (value: string) => {
 const isTimeValid = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const normalizeSearch = (value: string) => value.toLowerCase().replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
 
-export function WhatsAppManagement({ clinicName, whatsappSettings, patients, contacts, canManageContacts = false, initialSection = 'templates', onSaveContact, onDeleteContact, onOpenPatient, onAuthorizeSend, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false }: Props) {
+export function WhatsAppManagement({ clinicName, whatsappSettings, patients, contacts, canManageContacts = false, initialSection = 'templates', onSaveContact, onDeleteContact, onOpenPatient, onAuthorizeSend, onSaveWhatsappSettings, appointments = [], canViewPatientFinance = false, cloudActions, readSettings, onDirtyChange, onContactEditorChange }: Props) {
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const [section, setSection] = useState<Section>(initialSection);
@@ -126,6 +130,8 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
   const [manualImagePreview, setManualImagePreview] = useState('');
   const individualImageRef = useRef<HTMLInputElement>(null);
   const [individualNotice, setIndividualNotice] = useState('');
+  const authorizeProtected = useProtectedWhatsAppAction(cloudActions, setIndividualNotice);
+  useEffect(() => { onDirtyChange?.(changed || !!patientId); return () => onDirtyChange?.(false); }, [changed, patientId, onDirtyChange]);
   useEffect(() => {
     if (!manualImage) { setManualImagePreview(''); return; }
     const source = URL.createObjectURL(manualImage);
@@ -169,8 +175,9 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
   const manualReady = Boolean(patient && validPhone && manualText.trim() && !hasIncompleteText && appointmentReady && hasCampaignConsent && financeAllowed && manualLinkValid);
   const authorizeIndividualAction = () => {
     if (!patient) throw new Error('اختر المريض أولًا.');
-    return prepareFreshWhatsAppAction({ templateName: manualKey, rawTemplate: manualRaw, editedText: manualEdited, values: manualValues, phone: patient.mobile,
-      canViewPatientFinance, isCampaign: false, link: manualLink, appointmentReady }, Storage.getWhatsappSettingsFresh, onAuthorizeSend);
+    const input = { templateName: manualKey, rawTemplate: manualRaw, editedText: manualEdited, values: manualValues, phone: patient.mobile,
+      canViewPatientFinance, isCampaign: false, link: manualLink, appointmentReady };
+    return cloudActions ? authorizeProtected({ ...input, patientFileNo: patient.id }) : prepareFreshWhatsAppAction(input, readSettings ?? (() => { throw Error('تعذر قراءة أحدث إعدادات واتساب.'); }), onAuthorizeSend);
   };
   const selectPatient = (item: Patient) => { setPatientId(item.id); setPatientSearch(''); setAppointmentId('manual'); setManualDate(''); setManualTime(''); setManualEdited(null); setManualImage(null); setManualLink(''); if (individualImageRef.current) individualImageRef.current.value = ''; setIndividualNotice(''); };
   const clearPatient = () => { setPatientId(''); setManualEdited(null); setAppointmentId('manual'); setManualDate(''); setManualTime(''); setManualLink(''); setManualImage(null); if (individualImageRef.current) individualImageRef.current.value = ''; setIndividualNotice(''); };
@@ -223,8 +230,8 @@ export function WhatsAppManagement({ clinicName, whatsappSettings, patients, con
         </div></div>
     </div>
 
-    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} onOpenCampaigns={() => setSection('campaigns')} /></div>
-    <div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} contacts={contacts} settings={draft} clinicName={clinicName} onAuthorizeSend={onAuthorizeSend} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
+    <div hidden={section !== 'contacts'} className="wa-section-content"><ClinicContacts contacts={contacts} patients={patients} canManageContacts={canManageContacts} onSave={onSaveContact} onDelete={onDeleteContact} onOpenPatient={onOpenPatient} onOpenCampaigns={() => setSection('campaigns')} onEditorChange={onContactEditorChange} /></div>
+<div hidden={section !== 'campaigns'} className="wa-section-content"><WhatsAppCampaigns patients={patients} contacts={contacts} settings={draft} clinicName={clinicName} onAuthorizeSend={onAuthorizeSend} cloudActions={cloudActions} readSettings={readSettings} onSave={async next => { await onSaveWhatsappSettings({ ...whatsappSettings, campaignConsent: next.campaignConsent }); setDraft(current => ({ ...current, campaignConsent: next.campaignConsent })); }} /></div>
     <div hidden={section !== 'connection'} className="wa-panel wa-section-content"><div className="wa-panel-heading"><div><h3>الربط والقدرات المستقبلية</h3><p>الوضع اليدوي يعمل الآن. الخيارات الآلية تحتاج خدمة خلفية موثوقة قبل تفعيلها.</p></div><span className="wa-status-pending"><Plug size={15} /> غير متصل</span></div><div className="wa-capability-grid">{[
       { title: 'تذكيرات المواعيد', detail: 'جدولة التذكير للمرضى بعد ربط خدمة الإرسال والتحقق من الموافقات.' }, { title: 'حملات مجدولة', detail: 'إرسال منظم مع حد للرسائل وإلغاء الحملة؛ غير متاح في الوضع اليدوي.' }, { title: 'تتبع الرسائل', detail: 'حالات الإرسال والتسليم من ردود الخدمة الفعلية، لا من مجرد فتح واتساب.' }, { title: 'وسائط مرفقة', detail: 'إرسال الصور والمرفقات عبر الخدمة بعد إعداد آمن، ومراجعة المستلم.' },
     ].map(item => <article key={item.title}><LockKeyhole size={20} /><h4>{item.title}</h4><p>{item.detail}</p><span>يتطلب الربط · غير مفعّل</span></article>)}</div><p className="wa-context-note"><Info size={17} /> مفاتيح الاتصال لا تُحفظ داخل واجهة المتصفح. لا يفعّل حفظ الرسائل أي إرسال تلقائي أو اشتراك.</p><button type="button" className="wa-button wa-button-secondary wa-back-to-manual" onClick={() => setSection('individual')}><MessageCircle size={17} /> استخدام الفتح اليدوي الآن</button></div>

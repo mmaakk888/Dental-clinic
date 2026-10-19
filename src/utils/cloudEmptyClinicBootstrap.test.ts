@@ -18,8 +18,8 @@ const command = () => ({ operationId: OP, routingOperationId: OP2, settingsOpera
 const path = (collection: string, id: string) => `clinics/main/${collection}/${id}`;
 const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: CloudBootstrapError['code']) => (value: unknown) => value instanceof CloudBootstrapError && value.code === expected;
-const authority = (): CloudBootstrapAuthority => ({ projectId: 'dental-clinic-mmaakk888', databaseId: '(default)',
-  location: 'europe-west1', billingEnabled: false, membershipOnlyRules: true, ownerUid: OWNER,
+const authority = (): CloudBootstrapAuthority => ({ projectId: 'osama-clinic-38706', databaseId: '(default)',
+  location: 'nam5', billingEnabled: false, membershipOnlyRules: true, ownerUid: OWNER,
   ownerActive: true, ownerEmailVerified: true, ownerClaimsVerified: true });
 function harness() {
   const docs = new Map<string, any>([[path('members', OWNER), { schemaVersion: 1, clinicId: 'main', uid: OWNER,
@@ -157,6 +157,7 @@ test('partial or mutated seed history and a different initialization command fai
 });
 test('wrong project/database/region/billing/Rules or noncanonical owner never starts seeding', async () => {
   for (const patch of [{ projectId: 'zippy-dispatcher-m1ttq' }, { databaseId: 'other' }, { location: 'us-central1' },
+    { location: 'europe-west1' }, { projectId: 'dental-clinic-mmaakk888' },
     { billingEnabled: true }, { membershipOnlyRules: false }, { ownerUid: '' }, { ownerActive: false },
     { ownerEmailVerified: false }, { ownerClaimsVerified: false }, { credential: 'never-accepted' }]) {
     const h = harness(); h.current.value = { ...authority(), ...patch };

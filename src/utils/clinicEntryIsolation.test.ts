@@ -23,7 +23,7 @@ function buildEntry(stage: 'source' | 'closed' | 'qualified' = 'source') { retur
     builder.onLoad({ filter: /.*/, namespace: 'synthetic-boundary' }, () => ({
       contents: 'export function ErrorBoundary() { return null; }', loader: 'js',
     }));
-    builder.onLoad({ filter: /index\.css$/ }, () => ({ contents: '', loader: 'js' }));
+    builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }));
   } }] }); }
 const compiledEntry = buildEntry();
 
@@ -58,9 +58,9 @@ test('actual entry resolves before loading App and follows central readiness for
   for (const [hostname, search, protocol, expected] of [
     ['127.0.0.1', '', 'http:', 'local'], ['localhost', '?x=1', 'http:', 'local'],
     ['127.0.0.1', '?firebase-setup=1', 'http:', 'setup'], ['127.0.0.1', '?clinic-cloud=1', 'http:', 'operating'],
-    ['dental-clinic-mmaakk888.web.app', '', 'https:', CLOUD_COMPLETE_RELEASE_UI.available ? 'operating' : 'blocked'],
-    ['dental-clinic-mmaakk888.web.app', '?clinic-cloud=1', 'https:', CLOUD_COMPLETE_RELEASE_UI.available ? 'operating' : 'blocked'],
-    ['dental-clinic-mmaakk888.web.app', '', 'http:', 'blocked'], ['foreign.example.invalid', '?clinic-cloud=1', 'https:', 'blocked'],
+    ['osama-clinic-38706.web.app', '', 'https:', CLOUD_COMPLETE_RELEASE_UI.available ? 'operating' : 'blocked'],
+    ['osama-clinic-38706.web.app', '?clinic-cloud=1', 'https:', CLOUD_COMPLETE_RELEASE_UI.available ? 'operating' : 'blocked'],
+    ['osama-clinic-38706.web.app', '', 'http:', 'blocked'], ['foreign.example.invalid', '?clinic-cloud=1', 'https:', 'blocked'],
     ['localhost', '?firebase-setup=1&clinic-cloud=1', 'http:', 'blocked'],
     ['localhost', '?clinic-cloud=1&clinic-cloud=1', 'http:', 'blocked'],
     ['localhost', '?firebase-setup=0', 'http:', 'blocked'], ['localhost', '?clinic-cloud=%FF', 'http:', 'blocked'],
@@ -73,12 +73,12 @@ test('explicit closed and qualified test builds preserve entry isolation without
   for (const stage of ['closed', 'qualified'] as const) {
     const compiled = await buildEntry(stage);
     for (const search of ['', '?clinic-cloud=1', '?release=1&enabled=true&clinic-cloud=1']) {
-      await assertEntry(compiled, 'dental-clinic-mmaakk888.web.app', search, 'https:', stage === 'qualified' ? 'operating' : 'blocked');
+      await assertEntry(compiled, 'osama-clinic-38706.web.app', search, 'https:', stage === 'qualified' ? 'operating' : 'blocked');
     }
     for (const search of ['?firebase-setup=1', '?clinic-cloud=1&clinic-cloud=1', '?clinic-cloud=%FF']) {
-      await assertEntry(compiled, 'dental-clinic-mmaakk888.web.app', search, 'https:', 'blocked');
+      await assertEntry(compiled, 'osama-clinic-38706.web.app', search, 'https:', 'blocked');
     }
-    await assertEntry(compiled, 'dental-clinic-mmaakk888.web.app', '', 'http:', 'blocked');
+    await assertEntry(compiled, 'osama-clinic-38706.web.app', '', 'http:', 'blocked');
     await assertEntry(compiled, 'foreign.example.invalid', '?clinic-cloud=1', 'https:', 'blocked');
   }
 });

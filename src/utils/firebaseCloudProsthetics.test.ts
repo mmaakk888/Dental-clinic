@@ -9,7 +9,7 @@ import { runInNewContext } from 'node:vm';
 const APP_ID = '10000000-0000-4000-8000-000000000001', PATIENT = '10000000-0000-4000-8000-000000000002';
 const LAB = '10000000-0000-4000-8000-000000000003', SERVICE = '10000000-0000-4000-8000-000000000004', MATERIAL = '10000000-0000-4000-8000-000000000005';
 const OP = '20000000-0000-4000-8000-000000000001', OP2 = '20000000-0000-4000-8000-000000000002';
-const UID = 'synthetic-prosthetic-sdk-owner', PROJECT = 'dental-clinic-mmaakk888', WHEN = '2026-10-12T00:00:00.000Z', DAY = '2026-10-12';
+const UID = 'synthetic-prosthetic-sdk-owner', PROJECT = 'osama-clinic-38706', WHEN = '2026-10-12T00:00:00.000Z', DAY = '2026-10-12';
 const path = (kind: string, id: string | number = OP) => `clinics/main/${kind}/${id}`;
 let bundle: ReturnType<typeof build> | undefined, rawBundle: ReturnType<typeof build> | undefined;
 function compiled(raw = false) {

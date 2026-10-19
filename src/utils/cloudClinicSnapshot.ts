@@ -10,6 +10,7 @@ import { parseCloudExpenseRecord, parseCloudExpensePayment, parseCloudMaterialBa
   parseCloudMaterialUsage, cloudMaterialId, cloudMaterialIdV2 } from './cloudExpenseRepository';
 import { cloudSupplierInvoiceIdentityV2 } from './cloudExpenseInventoryProofs';
 import { normalizeContactPhone } from './clinicContacts';
+import { CLOUD_PROJECT_ID } from './cloudIdentity';
 
 const parsers = { patientProfiles: parseCloudPatientRecord, patientAccounts: parseCloudClinicalAccount,
   patientSessions: parseCloudClinicalSession, patientReceipts: parseCloudClinicalReceipt, contactRecords: parseCloudContactRecord,
@@ -19,6 +20,18 @@ const parsers = { patientProfiles: parseCloudPatientRecord, patientAccounts: par
   materialUsages: parseCloudMaterialUsage, patientFiles: parseFileIndex };
 export type CloudSnapshotCollection = keyof typeof parsers;
 export const CLOUD_SNAPSHOT_COLLECTIONS = Object.freeze(Object.keys(parsers) as CloudSnapshotCollection[]);
+// Bound network work on phones. Each collection still pages sequentially and
+// every response must match the one server readTime before totals are shown.
+export const CLOUD_SNAPSHOT_READ_CONCURRENCY = 4;
+async function readSnapshotGroups<T>(items: readonly T[], read: (item: T) => Promise<void>) {
+  let cursor = 0, failed = false;
+  await Promise.all(Array.from({ length: Math.min(CLOUD_SNAPSHOT_READ_CONCURRENCY, items.length) }, async () => {
+    while (!failed && cursor < items.length) {
+      const item = items[cursor++];
+      try { await read(item); } catch (error) { failed = true; throw error; }
+    }
+  }));
+}
 export const CLOUD_SNAPSHOT_LIMITS = Object.freeze({ pageSize: 50, perCollection: 20_000, totalRecords: 100_000, totalBytes: 64 * 1024 * 1024, responseBytes: 4 * 1024 * 1024 });
 export interface CloudPatientFileIndex { schemaVersion: 1; clinicId: 'main'; fileNo: number; recordId: string }
 export interface CloudPatientFileCounter { schemaVersion: 1; clinicId: 'main'; lastFileNo: number; lastOperationId: string | null }
@@ -94,7 +107,7 @@ export function decodeFirestoreSnapshotValue(value: unknown): unknown {
   }
   try { return decode(value, 0); } catch { return fail(); }
 }
-const documentRoot = 'projects/dental-clinic-mmaakk888/databases/(default)/documents/clinics/main';
+const documentRoot = `projects/${CLOUD_PROJECT_ID}/databases/(default)/documents/clinics/main`;
 /** Parses one bounded runQuery response. Probe results are never published.
  * At fixed readTime, EVERY response must confirm that same instant; increasing
  * stream times are accepted only during the discarded initial probe. */
@@ -154,7 +167,7 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
       const readTime = probe.readTime; let count = 0, byteLength = 0;
       const result: CloudClinicDirectorySnapshot = { readTime, patientProfiles: [], contactRecords: [] };
       const fileNos = new Set<number>(), contactPhones = new Set<string>();
-      for (const collection of ['patientProfiles', 'contactRecords'] as const) {
+      await readSnapshotGroups(['patientProfiles', 'contactRecords'] as const, async collection => {
         const records: any[] = []; let afterId: string | null = null;
         do {
           const input = { collection, documentId: null, afterId, limit: CLOUD_SNAPSHOT_LIMITS.pageSize, readTime };
@@ -182,7 +195,7 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
           afterId = page.nextAfterId;
         } while (afterId !== null);
         result[collection] = records;
-      }
+      });
       assert(); return freeze(result);
     } catch { return fail(); }
   }, async readFull(): Promise<CloudClinicSnapshot> {
@@ -191,7 +204,8 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
       const call = async <T>(work: () => Promise<T>) => { assert(); const value = await work(); assert(); return value; };
       const probe = parseCloudSnapshotQueryResponse(await call(() => adapter.probeReadTime()), { collection: 'settings', documentId: 'serviceCatalog', afterId: null, limit: 1 });
       const readTime = probe.readTime; let count = 0, byteLength = 0;
-      const all: Record<string, any[]> = {};
+      // Stable public key order is independent of network completion order.
+      const all: Record<string, any[]> = Object.fromEntries(CLOUD_SNAPSHOT_COLLECTIONS.map(collection => [collection, []]));
       async function query(collection: CloudSnapshotQuery['collection'], documentId: string | null, afterId: string | null, limit: number) {
         const value = parseCloudSnapshotQueryResponse(await call(() => adapter.query({ collection, documentId, afterId, limit, readTime })), { collection, documentId, afterId, limit, readTime });
         byteLength += new TextEncoder().encode(JSON.stringify(value.records)).byteLength; count += value.records.length;
@@ -208,7 +222,7 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
         if (page.records.length > 1 || page.records.length === 1 && page.records[0].id !== id) fail();
         const value = page.records[0]?.data ?? null; privateRows.set(key, value); return value;
       }
-      for (const collection of CLOUD_SNAPSHOT_COLLECTIONS) {
+      await readSnapshotGroups(CLOUD_SNAPSHOT_COLLECTIONS, async collection => {
         const records: unknown[] = []; let afterId: string | null = null, seenRecords = 0;
         do { const page = await query(collection, null, afterId, 50);
           for (const row of page.records) {
@@ -229,14 +243,18 @@ export function createCloudClinicSnapshotReader(adapter: CloudClinicSnapshotAdap
           }
           if (records.length > CLOUD_SNAPSHOT_LIMITS.perCollection) fail(); afterId = page.nextAfterId;
         } while (afterId !== null); all[collection] = records;
-      }
+      });
       const records = all as CloudClinicSnapshot['records'];
       async function singleton(collection: 'settings' | 'counters', documentId: string) { const page = await query(collection, documentId, null, 1);
         if (page.records.length !== 1 || page.records[0].id !== documentId) fail(); return page.records[0].data; }
-      const counter = parseCounter(await singleton('counters', 'patientFiles'));
-      const settings = { serviceCatalog: parseCloudServiceCatalogRecord(await singleton('settings', 'serviceCatalog')),
-        clinicSettings: parseCloudClinicSettingsRecord(await singleton('settings', 'clinicSettings')),
-        prostheticRouting: parseCloudProstheticRouting(await singleton('settings', 'prostheticRouting')) };
+      const [counterValue, serviceCatalogValue, clinicSettingsValue, prostheticRoutingValue] = await Promise.all([
+        singleton('counters', 'patientFiles'), singleton('settings', 'serviceCatalog'),
+        singleton('settings', 'clinicSettings'), singleton('settings', 'prostheticRouting'),
+      ]);
+      const counter = parseCounter(counterValue);
+      const settings = { serviceCatalog: parseCloudServiceCatalogRecord(serviceCatalogValue),
+        clinicSettings: parseCloudClinicSettingsRecord(clinicSettingsValue),
+        prostheticRouting: parseCloudProstheticRouting(prostheticRoutingValue) };
       const profiles = new Map(records.patientProfiles.map(row => [row.recordId, row])), accounts = new Map(records.patientAccounts.map(row => [row.patientId, row]));
       const files = new Map(records.patientFiles.map(row => [row.fileNo, row]));
       if (files.size !== records.patientFiles.length || files.size !== profiles.size || Math.max(0, ...files.keys()) !== counter.lastFileNo) fail();

@@ -46,9 +46,14 @@ export function getWhatsAppDraftTemplate(templateName: string, settings: Whatsap
   return templateName === 'reminderTomorrow' ? stored.replace('غداً {date}', 'يوم {date}') : stored;
 }
 
-interface WhatsAppActionInput extends MessageSafetyInput {
+export interface WhatsAppActionInput extends MessageSafetyInput {
   link: string;
   appointmentReady: boolean;
+}
+export interface ProtectedWhatsAppAction extends WhatsAppActionInput { patientFileNo: string | null }
+export interface ProtectedWhatsAppActions {
+  prepare(input: ProtectedWhatsAppAction): Promise<void>;
+  consume(input: ProtectedWhatsAppAction): { phone: string; text: string } | null;
 }
 
 /** Run synchronously at the open/share click, never from a rendered `ready` snapshot. */

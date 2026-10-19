@@ -16,6 +16,7 @@ export interface ClinicContactsProps {
   onOpenPatient?: (patientId: string) => void;
   canManageContacts?: boolean;
   onOpenCampaigns?: () => void;
+  onEditorChange?: (open: boolean) => void;
 }
 
 type ContactFilter = 'all' | 'without-file' | 'with-file';
@@ -105,7 +106,7 @@ function ContactEditor({ original, contacts, patientPhoneIndex, onSave, onClose,
   </div>;
 }
 
-export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPatient, canManageContacts = false, onOpenCampaigns }: ClinicContactsProps) {
+export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPatient, canManageContacts = false, onOpenCampaigns, onEditorChange }: ClinicContactsProps) {
   const id = `clinic-contacts-${useId().replace(/[^\w-]/g, '')}`;
   const { showToast, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -114,6 +115,7 @@ export function ClinicContacts({ contacts, patients, onSave, onDelete, onOpenPat
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [page, setPage] = useState(0);
   const [editor, setEditor] = useState<{ original?: ClinicContact } | null>(null);
+  useEffect(() => { onEditorChange?.(!!editor); return () => onEditorChange?.(false); }, [editor, onEditorChange]);
   const patientPhoneIndex: PhoneDirectoryIndex<Patient> = useMemo(() => createPhoneDirectoryIndex(patients), [patients]);
   const rows = useMemo(() => buildClinicContactDirectory(contacts, patients).sort((left, right) => nameCollator.compare(left.name, right.name)), [contacts, patients]);
   const searched = useMemo(() => {

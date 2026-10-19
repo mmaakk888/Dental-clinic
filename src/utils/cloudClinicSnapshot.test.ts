@@ -92,7 +92,8 @@ test('initial increasing probe read times are accepted but its catalog data is d
 });
 test('later page timestamp drift or wrong project/path/cursor cannot publish a partial snapshot', async () => {
   for (const mutate of [(value: any[]) => { value[0].readTime = '2026-10-13T00:00:00.999999Z'; },
-    (value: any[]) => { value[0].document.name = value[0].document.name.replace('dental-clinic-mmaakk888', 'foreign-project'); },
+    (value: any[]) => { value[0].document.name = value[0].document.name.replace('osama-clinic-38706', 'foreign-project'); },
+    (value: any[]) => { value[0].document.name = value[0].document.name.replace('osama-clinic-38706', 'dental-clinic-mmaakk888'); },
     (value: any[]) => { value[0].document.name += '/child/hidden'; }]) {
     const h = await makeClinicSnapshotFixture(); const query = h.adapter.query;
     h.adapter.query = async input => { const value = await query(input); if (input.collection === 'patientProfiles') mutate(value as any); return value; };

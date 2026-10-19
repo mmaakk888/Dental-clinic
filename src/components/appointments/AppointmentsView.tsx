@@ -21,6 +21,8 @@ interface AppointmentsViewProps {
   onSaveAppointment: (appt: Omit<Appointment, 'id'> & { id?: string }) => void | Promise<void>;
   onUpdateApptStatus: (apptId: string, status: AppointmentStatus) => void | Promise<void>;
   onBackToHome: () => void;
+  onEditorChange?: (open: boolean) => void;
+  localAuditEnabled?: boolean;
 }
 
 function getWeekDays(referenceDate: Date) {
@@ -69,7 +71,9 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   onSelectPatient,
   onSaveAppointment,
   onUpdateApptStatus,
-  onBackToHome
+  onBackToHome,
+  onEditorChange,
+  localAuditEnabled = true
 }) => {
   const { showToast, validationFail, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -96,6 +100,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  React.useEffect(() => { onEditorChange?.(isModalOpen || !!statusModalAppt); return () => onEditorChange?.(false); }, [isModalOpen, statusModalAppt, onEditorChange]);
   const bookingDialogRef = useAppointmentDialog(isModalOpen, () => { if (!saving) setIsModalOpen(false); });
 
   // Form State
@@ -242,7 +247,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
       status: 'scheduled'
     });
 
-    logAuditAction({
+    if (localAuditEnabled) logAuditAction({
       userName: 'العيادة',
       userRole: 'موظف',
       action: 'create',

@@ -59,3 +59,9 @@
   .home-workspace { animation: none; }
   .home-action-button { transition: none; }
 }
+
+.cloud-home-dashboard { padding-block-start: 0; }
+.cloud-home-dashboard button:disabled { opacity: .5; cursor: wait; transform: none; }
+.cloud-home-details { border: 1px solid #e2e8f0; border-radius: 14px; padding: 8px 14px; background: #fff; }
+.cloud-home-details summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 13px; color: #64748b; font-weight: 700; }
+.cloud-home-error { padding: 12px; border: 1px solid #fecdd3; border-radius: 12px; color: #9f1239; background: #fff1f2; }

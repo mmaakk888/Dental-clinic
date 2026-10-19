@@ -12,6 +12,7 @@ import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePati
 import { getHomeClockDisplay } from '../../utils/homeClock';
 import { useHomeClock } from '../../hooks/useHomeClock';
 import { getHomeLayout } from '../../utils/homeLayout';
+import { DashboardActionButton, DashboardMetricCard as MetricCard, type DashboardTone as Tone } from './DashboardPrimitives';
 import './HomeView.css';
 
 interface HomeViewProps {
@@ -37,16 +38,6 @@ interface HomeViewProps {
   onOpenPayment?: () => void;
 }
 
-type Tone = 'indigo' | 'emerald' | 'amber' | 'rose' | 'purple' | 'teal';
-const tones: Record<Tone, { icon: string; hover: string }> = {
-  indigo: { icon: 'bg-indigo-100 text-indigo-700', hover: 'hover:border-indigo-300' },
-  emerald: { icon: 'bg-emerald-100 text-emerald-700', hover: 'hover:border-emerald-300' },
-  amber: { icon: 'bg-amber-100 text-amber-700', hover: 'hover:border-amber-300' },
-  rose: { icon: 'bg-rose-100 text-rose-700', hover: 'hover:border-rose-300' },
-  purple: { icon: 'bg-purple-100 text-purple-700', hover: 'hover:border-purple-300' },
-  teal: { icon: 'bg-teal-100 text-teal-700', hover: 'hover:border-teal-300' },
-};
-
 const numberFormat = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
 const money = (value: number, hidden: boolean) => hidden
   ? '••••••'
@@ -55,21 +46,6 @@ const money = (value: number, hidden: boolean) => hidden
 const EMPTY_PATIENTS: Patient[] = [];
 const EMPTY_APPOINTMENTS: Appointment[] = [];
 const EMPTY_EXPENSES: Expense[] = [];
-
-const MetricCard: React.FC<{
-  title: string; value: string | number; note: string; icon: React.ReactNode;
-  tone: Tone; onClick?: () => void;
-}> = ({ title, value, note, icon, tone, onClick }) => {
-  const content = <>
-    <span aria-hidden="true" className={'dashboard-icon ' + tones[tone].icon}>{icon}</span>
-    <span className="mt-4 block text-2xl font-black text-slate-950 sm:text-3xl">{value}</span>
-    <span className="mt-1 block text-sm font-extrabold text-slate-800">{title}</span>
-    <span className="mt-1 block text-xs font-medium text-slate-500">{note}</span>
-  </>;
-  return onClick
-    ? <button type="button" onClick={onClick} className={'dashboard-card text-start ' + tones[tone].hover}>{content}</button>
-    : <div className="dashboard-card text-start">{content}</div>;
-};
 
 export const HomeView: React.FC<HomeViewProps> = React.memo(({
   activeLabCount, labels,
@@ -196,11 +172,8 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
       {key === 'actions' && actions.length > 0 && <section className="home-actions-panel" data-home-section="actions" aria-labelledby="home-actions-title">
         <div className="home-section-heading"><h2 id="home-actions-title">إجراءات اليوم</h2><p>اختصارات حسب صلاحيات حسابك</p></div>
         <div className="home-action-grid">
-          {actions.map(action => <button key={action.id} type="button" className={`home-action-button home-action-${action.id}`}
-            onClick={action.run} aria-haspopup={action.dialog ? 'dialog' : undefined}>
-            <span aria-hidden="true" className={`home-action-icon ${tones[action.tone].icon}`}>{action.icon}</span>
-            <strong>{action.title}</strong><small>{action.note}</small>
-          </button>)}
+          {actions.map(action => <DashboardActionButton key={action.id} className={`home-action-${action.id}`}
+            title={action.title} note={action.note} icon={action.icon} tone={action.tone} dialog={action.dialog} onClick={action.run!} />)}
         </div>
       </section>}
 

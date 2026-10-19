@@ -26,7 +26,7 @@ test('foreign entries never select App or SDK preparation even with valid HTTPS 
 });
 
 test('actual approved HTTPS route follows only central source readiness, never local App or setup', () => {
-  const host = 'dental-clinic-mmaakk888.web.app';
+  const host = 'osama-clinic-38706.web.app';
   for (const search of ['', '?other=ok', '?clinic-cloud=1']) {
     assert.equal(resolveClinicEntry(host, search, 'https:'), CLOUD_COMPLETE_RELEASE_UI.available ? 'operating' : 'blocked');
     assert.equal(isCloudOperatingRequest(host, search, 'https:'), CLOUD_COMPLETE_RELEASE_UI.available);
@@ -45,7 +45,7 @@ test('historical closed source fixture stays blocked even when URL flags try to 
   const module = { exports: {} as any };
   runInNewContext(output.outputFiles[0].text, { module, exports: module.exports, URLSearchParams });
   for (const search of ['', '?clinic-cloud=1', '?clinic-cloud=1&release=1&enabled=true']) {
-    assert.equal(module.exports.resolveClinicEntry('dental-clinic-mmaakk888.web.app', search, 'https:'), 'blocked');
+    assert.equal(module.exports.resolveClinicEntry('osama-clinic-38706.web.app', search, 'https:'), 'blocked');
   }
   assert.equal(module.exports.resolveClinicEntry('localhost', '', 'http:'), 'local');
 });

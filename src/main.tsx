@@ -3,6 +3,10 @@ import {createRoot} from 'react-dom/client';
 import { ErrorBoundary } from './components/common/ErrorBoundary.tsx';
 import { resolveClinicEntry } from './utils/clinicEntryRoute';
 import './index.css';
+import './components/home/HomeView.css';
+import './components/common/HeaderNavbar.css';
+import './components/auth/CloudClinicShell.css';
+import './components/navigation/dockAppearance.css';
 
 // Resolve before App import: neither preparation nor a closed external entry
 // may initialize local accounts or hydrate clinical/financial records.

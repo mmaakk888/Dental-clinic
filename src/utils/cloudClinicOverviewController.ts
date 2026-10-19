@@ -4,7 +4,7 @@ import { CloudClinicOverviewError, filterCloudOverviewDirectory, packageCloudOve
   validateCloudOverviewDay, validateCloudOverviewRange, type CloudClinicOverviewProjection, type CloudOverviewDirectoryFilter,
   type CloudOverviewExportFormat, type CloudOverviewRange } from './cloudClinicOverviewProjection';
 
-export type CloudClinicOverviewTab = 'home' | 'directory' | 'finance' | 'export';
+export type CloudClinicOverviewTab = 'home' | 'directory' | 'patients' | 'patient-file' | 'appointments' | 'labs' | 'settings' | 'finance' | 'export';
 export interface CloudClinicOverviewState {
   tab: CloudClinicOverviewTab; range: Readonly<CloudOverviewRange>; directoryQuery: string; directoryFilter: CloudOverviewDirectoryFilter;
   directoryLimit: number; cashLimit: number; snapshot: CloudClinicSnapshot | null; projection: CloudClinicOverviewProjection | null;
@@ -68,7 +68,9 @@ export function createCloudClinicOverviewController(options: CloudClinicOverview
         if (ticket !== sequence) throw new CloudClinicOverviewError();
         const projection = projectCloudClinicOverview(snapshot, state.range); assert();
         let logo: string | null = null;
-        if (options.getSettings) {
+        // The coherent snapshot already contains the complete settings record.
+        // Only an actual logo needs this separately protected/fenced image read.
+        if (options.getSettings && snapshot.settings.clinicSettings.data.identity.logoRecordId !== null) {
           const settings = await options.getSettings(); assert();
           const raw = await settings.repository.get(); assert();
           if (!raw || JSON.stringify(parseCloudClinicSettingsRecord(raw)) !== JSON.stringify(snapshot.settings.clinicSettings)) throw new CloudClinicOverviewError();
@@ -93,7 +95,7 @@ export function createCloudClinicOverviewController(options: CloudClinicOverview
       }
     },
     setTab(tab: CloudClinicOverviewTab) { return change(() => {
-      if (!['home', 'directory', 'finance', 'export'].includes(tab)) throw new CloudClinicOverviewError(); return { tab };
+      if (!['home', 'directory', 'patients', 'patient-file', 'appointments', 'labs', 'settings', 'finance', 'export'].includes(tab)) throw new CloudClinicOverviewError(); return { tab };
     }); },
     setRange(range: CloudOverviewRange) { return change(() => {
       const checked = validateCloudOverviewRange(range);

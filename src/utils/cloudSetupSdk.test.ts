@@ -4,7 +4,7 @@ import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import type { CloudSetupSession } from './cloudAuthSetup';
 
-const PROJECT_ID = 'dental-clinic-mmaakk888';
+const PROJECT_ID = 'osama-clinic-38706';
 const SYNTHETIC_UID = 'synthetic-owner-uid';
 const SYNTHETIC_EMAIL = 'owner@example.invalid';
 const SYNTHETIC_PASSWORD = 'synthetic-password-only';

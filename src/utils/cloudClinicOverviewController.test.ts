@@ -134,9 +134,10 @@ test('protected configured logo is read explicitly and fenced without loading in
 });
 
 test('a changed protected branding revision never publishes a mismatched overview/header', async () => {
-  const h = await harness(); const settings = structuredClone(h.snapshot.settings.clinicSettings); settings.revision++;
+  const h = await harness(), snapshot = structuredClone(h.snapshot); snapshot.settings.clinicSettings.data.identity.logoRecordId = 'clinicLogo';
+  const settings = structuredClone(snapshot.settings.clinicSettings); settings.revision++;
   const controller = createCloudClinicOverviewController({ initialDate: DAY, isActive: () => true,
-    getSnapshot: async () => ({ readFull: async () => h.snapshot }), getSettings: async () => ({ repository: {
+    getSnapshot: async () => ({ readFull: async () => snapshot }), getSettings: async () => ({ repository: {
       get: async () => settings, getLogo: async () => { throw new Error('MUST_NOT_READ'); } } }) });
   assert.equal(await controller.refresh(), false); assert.equal(controller.getState().snapshot, null); assert.equal(controller.getState().logo, null);
 });

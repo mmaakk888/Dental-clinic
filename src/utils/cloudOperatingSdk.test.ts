@@ -8,7 +8,7 @@ import type { FirebaseCloudAppointmentsCapability } from './firebaseCloudAppoint
 import { prepareCloudIntentCommand, type CloudOperationKind } from './cloudOperationIntent';
 import { CLOUD_COMPLETE_RELEASE_UI } from './cloudReleaseReadiness';
 
-const PROJECT = 'dental-clinic-mmaakk888';
+const PROJECT = 'osama-clinic-38706';
 const INSTANCE = '00000000-0000-4000-8000-000000000001';
 const EMAIL = 'owner@example.invalid';
 const UID = 'synthetic-owner';

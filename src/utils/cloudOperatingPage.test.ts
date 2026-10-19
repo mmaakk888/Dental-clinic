@@ -81,13 +81,13 @@ test('operating page independently blocks external, malformed, conflicting and d
 });
 
 test('actual operating component follows real central readiness on approved HTTPS, never on HTTP or a foreign host', () => {
-  const html = renderAt('dental-clinic-mmaakk888.web.app', '', 'https:', CloudOperatingPage);
+  const html = renderAt('osama-clinic-38706.web.app', '', 'https:', CloudOperatingPage);
   if (CLOUD_COMPLETE_RELEASE_UI.available) {
     assert.match(html, /<form|دخول العيادة/u); assert.match(html, /type="password"/u);
   } else {
     assert.doesNotMatch(html, /<form|type="password"/u);
   }
-  for (const [host, protocol] of [['dental-clinic-mmaakk888.web.app','http:'],['foreign.example.invalid','https:']]) {
+  for (const [host, protocol] of [['osama-clinic-38706.web.app','http:'],['foreign.example.invalid','https:']]) {
     assert.doesNotMatch(renderAt(host, '?clinic-cloud=1', protocol, CloudOperatingPage), /<form|type="password"/u);
   }
 });
@@ -105,14 +105,14 @@ test('qualified actual operating component accepts only the approved HTTPS entry
       builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }));
     } }] });
   for (const [hostname, protocol, search, approved] of [
-    ['dental-clinic-mmaakk888.web.app', 'https:', '', true],
-    ['dental-clinic-mmaakk888.web.app', 'https:', '?clinic-cloud=1', true],
-    ['dental-clinic-mmaakk888.web.app', 'http:', '', false],
+    ['osama-clinic-38706.web.app', 'https:', '', true],
+    ['osama-clinic-38706.web.app', 'https:', '?clinic-cloud=1', true],
+    ['osama-clinic-38706.web.app', 'http:', '', false],
     ['foreign.example.invalid', 'https:', '?clinic-cloud=1', false],
-    ['dental-clinic-mmaakk888.web.app.evil.invalid', 'https:', '', false],
-    ['dental-clinic-mmaakk888.web.app', 'https:', '?firebase-setup=1', false],
-    ['dental-clinic-mmaakk888.web.app', 'https:', '?clinic-cloud=1&clinic-cloud=1', false],
-    ['dental-clinic-mmaakk888.web.app', 'https:', '?clinic-cloud=%FF', false],
+    ['osama-clinic-38706.web.app.evil.invalid', 'https:', '', false],
+    ['osama-clinic-38706.web.app', 'https:', '?firebase-setup=1', false],
+    ['osama-clinic-38706.web.app', 'https:', '?clinic-cloud=1&clinic-cloud=1', false],
+    ['osama-clinic-38706.web.app', 'https:', '?clinic-cloud=%FF', false],
   ] as const) {
     let forbiddenAccess = 0;
     const deny = () => { forbiddenAccess++; throw new Error('No SDK, local records, session, requests or navigation during SSR.'); };

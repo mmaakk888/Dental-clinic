@@ -47,6 +47,10 @@ interface PatientsViewProps {
   labCases?: LabCase[];
   isPrivacyMode?: boolean;
   currentUser?: User | null;
+  /** Cloud entry supplies presentation capabilities, never a fabricated local User. */
+  capabilities?: { viewBalances: boolean; editPatients: boolean; manageAppointments: boolean; deletePatients: boolean; viewPatients: boolean };
+  createRequest?: number;
+  onEditorChange?: (open: boolean) => void;
   onSelectPatient: (patientId: string, origin: NavigationOrigin) => void;
   onSavePatient: (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string) => string | void | Promise<string | void>;
   onDeletePatient: (patientId: string) => void | Promise<void>;
@@ -87,6 +91,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   labCases = emptyLabCases,
   isPrivacyMode = true,
   currentUser,
+  capabilities,
+  createRequest = 0,
+  onEditorChange,
   onSelectPatient,
   onSavePatient,
   onDeletePatient,
@@ -95,7 +102,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 }: PatientsViewProps) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
-  const canViewRemainingBalance = canPerformAction(currentUser ?? null, 'view_remaining_balance');
+  const canViewRemainingBalance = capabilities ? capabilities.viewBalances : canPerformAction(currentUser ?? null, 'view_remaining_balance');
   
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -229,6 +236,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     onSelectPatient(typeof actualFileNo === 'string' ? actualFileNo : savedFileNo, 'patients');
     });
   };
+
+  useEffect(() => { onEditorChange?.(isModalOpen || !!quickApptPatient); return () => onEditorChange?.(false); }, [isModalOpen, quickApptPatient, onEditorChange]);
+  useEffect(() => { if (createRequest > 0) handleOpenAddModal(); }, [createRequest]);
 
   const handleDelete = (p: Patient, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -375,9 +385,9 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
     });
   }, [directoryIndex, deferredSearchQuery, activeFilter, patientMetrics, canViewRemainingBalance, sortOrder]);
 
-  const canEditPatient = canPerformAction(currentUser ?? null, 'edit_patient');
-  const canBookAppointment = Boolean(onSaveAppointment) && canPerformAction(currentUser ?? null, 'manage_appointments');
-  const canDeletePatient = canPerformAction(currentUser ?? null, 'delete_patient');
+  const canEditPatient = capabilities ? capabilities.editPatients : canPerformAction(currentUser ?? null, 'edit_patient');
+  const canBookAppointment = Boolean(onSaveAppointment) && (capabilities ? capabilities.manageAppointments : canPerformAction(currentUser ?? null, 'manage_appointments'));
+  const canDeletePatient = capabilities ? capabilities.deletePatients : canPerformAction(currentUser ?? null, 'delete_patient');
   const openQuickAppointment = (patient: Patient) => {
     setActiveBottomSheetPatient(null);
     setQuickApptDate(clinicToday());
@@ -416,7 +426,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
           </div>
         </div>
         <div className="patients-page-actions">
-          {onOpenContacts && canPerformAction(currentUser ?? null, 'view_patients') && <button type="button" onClick={onOpenContacts} className="patients-secondary-button" title="أسماء وأرقام بدون ملفات مرضى"><ContactRound aria-hidden="true" /><span>جهات الاتصال</span></button>}
+          {onOpenContacts && (capabilities ? capabilities.viewPatients : canPerformAction(currentUser ?? null, 'view_patients')) && <button type="button" onClick={onOpenContacts} className="patients-secondary-button" title="أسماء وأرقام بدون ملفات مرضى"><ContactRound aria-hidden="true" /><span>جهات الاتصال</span></button>}
           {canEditPatient && <button type="button" onClick={handleOpenAddModal} className="patients-add-button"><UserPlus /><span>إضافة مريض</span></button>}
         </div>
       </header>

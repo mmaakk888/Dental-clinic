@@ -8,6 +8,7 @@
     "build": "vite build && node scripts/build-server.mjs && node scripts/precompress-assets.mjs",
     "start": "node scripts/start-server.mjs",
     "preview": "vite preview",
+    "preview:local": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "clean": "node scripts/clean-build.mjs",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=3 --test-timeout=180000 src/utils/*.test.ts src/components/appointments/*.test.ts server/*.test.ts"

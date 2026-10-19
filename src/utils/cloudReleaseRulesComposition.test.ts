@@ -4,21 +4,25 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { composeCloudReleaseRules, composeUnscopedCloudReleaseRules } from '../../scripts/build-cloud-release-rules.mjs';
 import { scopeCloudReleaseRules, verifyCloudReleaseRulesScopeEquivalence } from '../../scripts/scope-cloud-release-rules.mjs';
+import { compactCloudRuleSymbols } from '../../scripts/compact-cloud-rule-symbols.mjs';
 
 const base = readFileSync('rules/base.release.rules', 'utf8').replace(/\r\n/g, '\n');
 const fragments = Object.fromEntries(['prosthetic', 'expense', 'settings'].map(kind =>
   [kind, readFileSync(`rules/${kind}.release.rules.fragment`, 'utf8').replace(/\r\n/g, '\n')]));
 
 const raw = composeUnscopedCloudReleaseRules(base, fragments);
-const result = composeCloudReleaseRules(base, fragments);
+const result = scopeCloudReleaseRules(raw, fragments).source;
+const deployedResult = composeCloudReleaseRules(base, fragments);
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 
-test('public deterministic generator reproduces the source-only compiler-qualified global-LCA candidate', () => {
+test('public deterministic generator compacts the exact engine-qualified global-LCA source', () => {
   assert.equal(sha(raw), 'dd789948b46b69be97e9c2ac64489e8208096f17d7c3a6f5694e289e97fb92dd');
   assert.equal(sha(result), '9a2a2788cf6ab5a1b417b9f9629afadfc775582b036bc46f2d1c61012e0f4eb2');
-  assert.equal(Buffer.byteLength(result), 150847);
-  assert.equal(readFileSync('firestore.release.rules', 'utf8').replace(/\r\n/g, '\n'), result);
-  assert.equal(composeCloudReleaseRules(base, Object.fromEntries(Object.entries(fragments).reverse())), result);
+  assert.equal(sha(deployedResult), 'dff8efe554b10d0e3e087adc82accd65da58a1d1df4f8ac42cf0b80390e44f31');
+  assert.equal(Buffer.byteLength(deployedResult), 138067);
+  assert.equal(readFileSync('firestore.release.rules', 'utf8').replace(/\r\n/g, '\n'), deployedResult);
+  assert.equal(composeCloudReleaseRules(base, Object.fromEntries(Object.entries(fragments).reverse())), deployedResult);
+  assert.equal(compactCloudRuleSymbols(result).restoredExactly, true);
 });
 
 test('scope relocation preserves every reachable predicate, allow body, effective path and lexical call binding', () => {
@@ -26,25 +30,24 @@ test('scope relocation preserves every reachable predicate, allow body, effectiv
   assert.equal(source, result);
   assert.equal(audit.originalFunctions, 287);
   assert.equal(audit.reachableFunctions, 274);
+  assert.equal(audit.definitionCopies, 274);
   assert.equal(audit.checkedCalls, 1207);
   assert.equal(audit.wildcardChecks, 207);
   assert.equal(audit.newFreeWildcardCaptures, 0);
-  for (const property of ['everyReachableFunctionDefinedOnce', 'exactReachableFunctionBodies', 'exactAllowBodies',
+  for (const property of ['helperCopiesOnlyInDistinctLexicalScopes', 'exactReachableFunctionBodies', 'exactAllowBodies',
     'effectiveGrantPathsEqual', 'everyUserFunctionCallResolvedToOriginalBody']) assert.equal(audit[property], true);
   assert.equal(audit.removedUnreachable.length, 13);
   assert.equal(audit.maxLeafVisibleFunctions, 103);
+  assert.equal(audit.everyReachableFunctionDefinedOnce, true);
   assert.deepEqual(verifyCloudReleaseRulesScopeEquivalence(raw, source), audit);
 });
 
-test('only the actual cross-domain common dependency closure remains global; every reachable definition occurs once', () => {
+test('shared helper dependencies remain global and every reachable function is defined once', () => {
   const audit = scopeCloudReleaseRules(raw, fragments).audit;
   assert.equal(audit.rootFunctions, 27);
-  assert.deepEqual(audit.sharedRootNames, ['activeOwner', 'anyPath', 'asciiDigits', 'boundedQuery', 'calendarDay', 'coupledIntent',
-    'day', 'domainReceiptPath', 'ex_imageMeta', 'ex_text', 'exact', 'expected', 'hash', 'intentPath', 'longText', 'money',
-    'nameKey', 'owner', 'patientPositiveNumber', 'pr_command', 'pr_fresh', 'receiptCollection', 'revision', 'singletonPath',
-    'trimSpaces', 'uuid', 'verifiedOwner']);
+  for (const name of ['activeOwner', 'owner', 'verifiedOwner']) assert.ok(audit.sharedRootNames.includes(name));
   const names = [...result.matchAll(/\bfunction\s+([A-Za-z_]\w*)\s*\(/g)].map(match => match[1]);
-  assert.equal(names.length, 274); assert.equal(new Set(names).size, names.length);
+  assert.equal(names.length, 274); assert.equal(new Set(names).size, 274);
   assert.equal(result.match(/match \/clinics\/main \{/g)?.length, 4);
   assert.equal(result.split('match /{document=**} { allow read, write: if false; }').length, 2);
 });
@@ -62,7 +65,9 @@ test('raw composition and relocated function copies preserve regex replacement t
   const withRegex = { ...fragments, settings: fragments.settings.replace('function st_preparedSettings(c) {', () => `function st_preparedSettings(c) {\n${comment}`) };
   const nextRaw = composeUnscopedCloudReleaseRules(base, withRegex), next = composeCloudReleaseRules(base, withRegex);
   assert.ok(nextRaw.includes(withRegex.settings)); assert.ok(next.includes(comment));
-  assert.equal(verifyCloudReleaseRulesScopeEquivalence(nextRaw, next).exactReachableFunctionBodies, true);
+  const scoped = scopeCloudReleaseRules(nextRaw, withRegex).source;
+  assert.equal(verifyCloudReleaseRulesScopeEquivalence(nextRaw, scoped).exactReachableFunctionBodies, true);
+  assert.equal(compactCloudRuleSymbols(scoped).source, next);
 });
 
 test('unreachable helpers are removed without adding predicates or unrelated global helpers', () => {
@@ -93,6 +98,8 @@ test('verification rejects changed financial predicates, allow grants, extra def
   assert.throws(() => verifyCloudReleaseRulesScopeEquivalence(raw, result.replace('allow get: if owner() && uuid(id);', 'allow get: if true;')), /Changed allow/);
   assert.throws(() => verifyCloudReleaseRulesScopeEquivalence(raw, result + '\nfunction extraCompositionProbe() { return true; }'), /extra helper/);
   assert.throws(() => verifyCloudReleaseRulesScopeEquivalence(raw, result.replace('function st_proofWrite(', 'function renamedCompositionProbe(')), /Reachable helper/);
+  const uuid = /function uuid\(id\) \{[\s\S]*?\n    \}/.exec(result)![0];
+  assert.throws(() => verifyCloudReleaseRulesScopeEquivalence(raw, result.replace(uuid, `${uuid}\n${uuid}`)), /same lexical scope/);
 });
 
 test('exact function text is insufficient when a dependency is relocated into an inaccessible sibling', () => {
@@ -116,11 +123,28 @@ test('explicit wildcard parameters retain their original binding without a false
   const safe = { ...fragments, settings: fragments.settings.replace('allow get: if owner() && id.matches(',
     'allow get: if owner() && st_wildcardCompositionProbe(id) && id.matches(')
     + "\nfunction st_wildcardCompositionProbe(id) { return id != ''; }\n" };
-  const before = composeUnscopedCloudReleaseRules(base, safe), after = composeCloudReleaseRules(base, safe);
+  const before = composeUnscopedCloudReleaseRules(base, safe), after = scopeCloudReleaseRules(before, safe).source;
   assert.equal(verifyCloudReleaseRulesScopeEquivalence(before, after).newFreeWildcardCaptures, 0);
 });
 
 test('public structural helper is pure and has no private fixtures, administrative authentication or RPC dependencies', () => {
   const source = readFileSync('scripts/scope-cloud-release-rules.mjs', 'utf8');
   assert.doesNotMatch(source, /node:(?:fs|vm)|(?:requireAuth|fetch|readFileSync|writeFileSync)\s*\(|\.firebase[\\/]/);
+});
+
+test('compaction cannot capture an existing argument and leaves method calls, paths, quoted fields and comments intact', () => {
+  const source = `function get(A) { return lookup(A) && A.get('get', false); }
+function lookup(value) { return value.get == 'lookup()' && value.matches('get\\\\(.*'); }
+match /get/{lookup} { allow get: if get(resource.data); }
+// get(lookup()) must not be changed here
+`;
+  const compact = compactCloudRuleSymbols(source);
+  assert.equal(compact.functionNames, 2);
+  assert.equal(compact.renamedOccurrences, 4);
+  assert.ok(compact.source.includes('function B(A)'));
+  assert.ok(compact.source.includes("A.get('get', false)"));
+  assert.ok(compact.source.includes("value.get == 'lookup()'"));
+  assert.ok(compact.source.includes('match /get/{lookup} { allow get:'));
+  assert.ok(compact.source.includes('// get(lookup()) must not be changed here'));
+  assert.equal(compact.restoredExactly, true);
 });

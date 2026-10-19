@@ -4,12 +4,15 @@ import { parseCloudOperationIntent, prepareCloudIntentCommand } from './cloudOpe
 import { CLOUD_PROSTHETIC_ROUTING_PATH, CLOUD_CLINIC_SETTINGS_PATH, parseCloudProstheticRouting, parseCloudClinicSettingsRecord, prepareCloudClinicSettingsCommand } from './cloudClinicSettingsRepository';
 import { createCloudInitialClinicSettings } from './cloudInitialClinicSettings';
 
+/** Exact provisioned location accepted by the owner for the replacement project. */
+export const CLOUD_BOOTSTRAP_DATABASE_LOCATION = 'nam5';
+
 /** Trusted administrative initialisation only. Never imported by an app entry,
  * supplied to a browser data capability or used as a migration/reset action.
  * The IAM adapter must verify the actual owner, free-plan database and exact
  * membership-only deployed Rules before calling this transaction. */
 export interface CloudBootstrapAuthority {
-  projectId: typeof CLOUD_PROJECT_ID; databaseId: '(default)'; location: 'europe-west1';
+  projectId: typeof CLOUD_PROJECT_ID; databaseId: '(default)'; location: typeof CLOUD_BOOTSTRAP_DATABASE_LOCATION;
   billingEnabled: false; membershipOnlyRules: true; ownerUid: string;
   ownerActive: true; ownerEmailVerified: true; ownerClaimsVerified: true;
 }
@@ -81,7 +84,7 @@ function command(value: unknown): CloudBootstrapCommand {
 function authority(value: unknown): CloudBootstrapAuthority {
   const item = fields(value, ['projectId', 'databaseId', 'location', 'billingEnabled', 'membershipOnlyRules', 'ownerUid',
     'ownerActive', 'ownerEmailVerified', 'ownerClaimsVerified']);
-  if (item.projectId !== CLOUD_PROJECT_ID || item.databaseId !== '(default)' || item.location !== 'europe-west1'
+  if (item.projectId !== CLOUD_PROJECT_ID || item.databaseId !== '(default)' || item.location !== CLOUD_BOOTSTRAP_DATABASE_LOCATION
     || item.billingEnabled !== false || item.membershipOnlyRules !== true || !actor(item.ownerUid)
     || item.ownerActive !== true || item.ownerEmailVerified !== true || item.ownerClaimsVerified !== true) unavailable();
   return item as unknown as CloudBootstrapAuthority;

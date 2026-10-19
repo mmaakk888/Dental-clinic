@@ -1,0 +1,49 @@
+.csettings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.csettings-content { display: grid; gap: 16px; min-width: 0; }
+.cloud-clinic-settings { --ccat-accent: var(--primary, #4f46e5); }
+.cloud-clinic-settings .csettings-grid { align-items: start; }
+.settings-section-navigation { min-width: 0; }
+.csettings-sidebar { display: none; }
+.csettings-identity-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.cloud-clinic-settings .ccat-header { border-radius: 18px; box-shadow: 0 3px 12px rgb(23 38 42 / 4%); }
+.cloud-clinic-settings .ccat-heading-icon { background: #eef2ff; color: #4f46e5; }
+.cloud-clinic-settings .ccat-surface { border-color: #e2e8f0; }
+.cloud-clinic-settings .csettings-editor { border-radius: 24px; padding: clamp(16px, 2.5vw, 28px); }
+.cloud-clinic-settings .csettings-editor > h3 { font-size: 19px; color: #17262a; line-height: 1.6; }
+.cloud-clinic-settings .csettings-field { align-content: start; font-weight: 650; color: #475569; }
+.cloud-clinic-settings .csettings-field :is(input, select, textarea) { font-weight: 500; color: #17262a; }
+.cloud-clinic-settings .csettings-save { position: sticky; bottom: 100px; padding: 12px; border: 1px solid #dce4e0; border-radius: 16px; background: rgb(255 255 255 / 97%); box-shadow: 0 4px 18px rgb(23 38 42 / 7%); }
+.csettings-recovery { min-width: 0; }
+.csettings-recovery > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; color: #64748b; font-size: 14px; font-weight: 700; }
+.csettings-recovery[open] > summary { margin-bottom: 12px; }
+.settings-section-navigation button:disabled { opacity: .5; cursor: not-allowed; }
+.settings-section-navigation .settings-picker-options button { font: inherit; text-align: start; }
+@media (min-width: 1024px) {
+  .csettings-layout { grid-template-columns: 270px minmax(0, 1fr); gap: 24px; }
+  .settings-section-navigation { position: sticky; top: 16px; }
+  .csettings-sidebar { display: block; max-height: calc(100dvh - 130px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border: 1px solid #e2e8f0; border-radius: 24px; background: #fff; box-shadow: 0 3px 12px rgb(23 38 42 / 4%); }
+  .csettings-sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 14px; border-bottom: 1px solid #f1f5f9; }
+  .csettings-sidebar-heading > span { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 800; color: #334155; }
+  .csettings-sidebar-heading small { padding: 3px 8px; border-radius: 20px; background: #eef2ff; color: #4338ca; font-size: 11px; }
+  .csettings-sidebar-group > h3 { margin: 14px 10px 5px; font-size: 11px; font-weight: 750; color: #64748b; }
+  .csettings-sidebar-group > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 68px; padding: 10px; border: 0; border-radius: 16px; background: #fff; text-align: start; color: #475569; cursor: pointer; transition: background-color 140ms ease, color 140ms ease; }
+  .csettings-sidebar-group > button[aria-current='page'] { background: var(--primary, #4f46e5); color: white; box-shadow: 0 4px 12px rgb(79 70 229 / 16%); }
+  .csettings-sidebar-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 12px; background: #f1f5f9; color: #64748b; }
+  .csettings-sidebar-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .csettings-sidebar-copy strong, .csettings-sidebar-copy small { display: block; }
+  .csettings-sidebar-copy strong { font-size: 14px; font-weight: 750; line-height: 1.6; }
+  .csettings-sidebar-copy small { margin-top: 3px; font-size: 10px; line-height: 1.7; }
+  .csettings-sidebar-group > button[aria-current='page'] .csettings-sidebar-icon { background: rgb(255 255 255 / 15%); color: #fff; }
+  .csettings-sidebar-group > button[aria-current='page'] small { color: #c7d2fe; }
+  .csettings-sidebar-group > button:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; }
+}
+@media (hover: hover) {
+  .csettings-sidebar-group > button:not([aria-current='page']):not(:disabled):hover { background: #f1f5f9; color: #0f172a; }
+}
+@media (max-width: 1023px) {
+  .cloud-clinic-settings .csettings-layout { gap: 14px; }
+  .cloud-clinic-settings .csettings-identity-tabs > button { flex: 1 1 85px; font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .csettings-sidebar-group > button { transition: none; }
+}

@@ -11,6 +11,8 @@ import type { ProstheticRoutingSettings } from '../../utils/prostheticRouting';
 import './serviceCatalogManagement.css';
 
 export interface ServiceCatalogManagementProps extends ServiceCatalogValues {
+  onDirtyChange?: (dirty: boolean) => void;
+  onRelatedDirtyChange?: (section: string, dirty: boolean) => void;
   canManagePrices: boolean;
   onSaveServiceCatalog: (values: ServiceCatalogValues) => void | Promise<void>;
   labs: Lab[];
@@ -77,7 +79,7 @@ function ServiceNameEditor({ editor, values, onChange, onClose }: {
 }
 
 export function ServiceCatalogManagement({ serviceTypes, crownPrices, clinicalPrices, examinationFee, canManagePrices, onSaveServiceCatalog,
-  labs, canViewLabCosts, canManageLabPrices, onSaveLabPricing, initialPricingLabId, prostheticRouting, onSaveProstheticRouting }: ServiceCatalogManagementProps) {
+  labs, canViewLabCosts, canManageLabPrices, onSaveLabPricing, initialPricingLabId, prostheticRouting, onSaveProstheticRouting, onDirtyChange, onRelatedDirtyChange }: ServiceCatalogManagementProps) {
   const { showToast, askConfirm } = useToastAndConfirm();
   const id = `service-catalog-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [draft, setDraft] = useState(() => cloneServiceCatalog({ serviceTypes, crownPrices, clinicalPrices, examinationFee }));
@@ -101,6 +103,7 @@ export function ServiceCatalogManagement({ serviceTypes, crownPrices, clinicalPr
   const saveBarRef = useRef<HTMLElement>(null);
   const [bar, setBar] = useState({ pinned: false, left: 0, width: 0, height: 0 });
   const dirty = snapshot(draft) !== snapshot(saved);
+  useEffect(() => { onDirtyChange?.(dirty || !!editor); return () => onDirtyChange?.(false); }, [dirty, editor, onDirtyChange]);
 
   useEffect(() => {
     if (initialPricingLabId) setSection('labs');
@@ -230,9 +233,9 @@ export function ServiceCatalogManagement({ serviceTypes, crownPrices, clinicalPr
     </div>
     <div hidden={section !== 'labs'} className="sc-lab-pricing-panel">
       {canViewLabCosts ? <LabPricingManagement labs={labs} canViewLabCosts={canViewLabCosts} canManageLabPrices={canManageLabPrices}
-        onSaveLabPricing={onSaveLabPricing} initialLabId={initialPricingLabId === '*' ? undefined : initialPricingLabId} />
+        onSaveLabPricing={onSaveLabPricing} initialLabId={initialPricingLabId === '*' ? undefined : initialPricingLabId} onDirtyChange={value => onRelatedDirtyChange?.('lab-prices', value)} />
         : <section className="sc-section-card" aria-label="أسعار المعامل"><h3>أسعار المعامل</h3><p className="sc-alert"><LockKeyhole aria-hidden="true" />عرض تكلفة المعامل غير متاح لحسابك أو في وضع الخصوصية الحالي.</p></section>}
     </div>
-    {canRoute && section === 'routing' && <ProstheticRoutingManagement value={prostheticRouting!} labs={labs} materials={Object.keys(saved.crownPrices)} onSave={onSaveProstheticRouting!} />}
+    {canRoute && section === 'routing' && <ProstheticRoutingManagement value={prostheticRouting!} labs={labs} materials={Object.keys(saved.crownPrices)} onSave={onSaveProstheticRouting!} onDirtyChange={value => onRelatedDirtyChange?.('routing', value)} />}
   </section>;
 }

@@ -8,7 +8,7 @@ const ID = '10000000-0000-4000-8000-000000000001';
 const OP = '20000000-0000-4000-8000-000000000001';
 const UID = 'synthetic-owner';
 const TIME = '2026-10-12T10:00:00.000Z';
-const project = 'dental-clinic-mmaakk888';
+const project = 'osama-clinic-38706';
 const entry = 'src/utils/firebaseCloudContacts.ts';
 const bundle = build({ entryPoints: [entry], bundle: true, write: false, metafile: true, platform: 'node', format: 'cjs',
   external: ['firebase/*'], supported: { 'dynamic-import': false }, logLevel: 'silent' });

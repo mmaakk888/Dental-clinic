@@ -230,7 +230,7 @@ test('checking preserves the exact catalog lease/draft; unresolved saves block c
   assert.equal(h.controller.getCatalogWorkspace(), null); await logout; await h.controller.dispose();
 });
 
-test('catalog document or history reads block all ordinary closes/switches; logout abandons late results without publishing', async () => {
+test('catalog reads block explicit close but navigation safely abandons late results without publishing', async () => {
   for (const domain of ['load', 'history'] as const) {
     const cap = catalogCapability(), other = otherCapabilities(), gate = deferred(), started = deferred();
     const h = fixture({ getServiceCatalog: async () => cap.capability, getContacts: async () => other.contacts,
@@ -239,8 +239,8 @@ test('catalog document or history reads block all ordinary closes/switches; logo
     cap.hooks.read = async () => { started.resolve(); await gate.promise; };
     const loading = domain === 'load' ? workspace.load() : workspace.loadHistory(); await started.promise;
     assert.equal(h.controller.closeCatalog(workspace), false);
-    assert.equal(await h.controller.openContacts(), null); assert.equal(await h.controller.openPatients(), null); assert.equal(await h.controller.openClinical(), null);
-    for (const method of ['getContacts', 'getPatients', 'getClinical']) assert.equal(h.calls.includes(method), false);
+    assert.ok(await h.controller.openContacts()); assert.equal(workspace.getState().closed, true);
+    assert.equal(h.calls.includes('getContacts'), true);
     const logout = h.controller.signOut(); assert.equal(workspace.getState().closed, true); gate.resolve(); await loading; await logout;
     assert.equal(workspace.getState().snapshot, null); assert.deepEqual(workspace.getState().history, []); await h.controller.dispose();
   }

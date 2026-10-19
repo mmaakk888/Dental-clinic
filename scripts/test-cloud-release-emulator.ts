@@ -6,7 +6,7 @@
  * contacting/resetting the emulator or claiming Rules-engine acceptance.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readCloudReleaseRules } from './read-cloud-release-rules.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectFirestoreEmulator, getFirestore, doc, getDoc, collection, getDocs, query, where, orderBy,
@@ -358,7 +358,7 @@ try {
       expensePreparationRequests: selected.reduce((sum, s) => sum + (s.expensePreparations?.length ?? 0), 0),
       testedDomains: [...new Set(selected.map(s => s.kind))], emulatorRequests: 0, rulesEngineAccepted: false, completeRelease: false }));
   } else {
-  await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.release.rules', content: readFileSync('firestore.release.rules', 'utf8') }] } });
+  await admin(`/emulator/v1/projects/${PROJECT}:securityRules`, 'PUT', { rules: { files: [{ name: 'firestore.release.rules', content: readCloudReleaseRules() }] } });
   for (const s of selected) {
     await check(`${s.name}:prepared-journal-create`, true, new Map([...(s.preparationBefore ?? s.before)].filter(([key]) => key !== path('operationIntents', s.command.operationId))),
       new Map([[path('operationIntents', s.command.operationId), s.before.get(path('operationIntents', s.command.operationId))]]));

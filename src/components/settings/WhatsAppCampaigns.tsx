@@ -5,10 +5,10 @@ import { extraMessageTemplates, fillMessageTemplate } from '../../utils/whatsapp
 import { campaignRecipientCanReceive, campaignRecipientLabel, campaignRecipients, matchesCampaignRecipient } from '../../utils/campaigns';
 import { WhatsAppComposer } from '../patient/WhatsAppComposer';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
-import type { WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
+import type { WhatsAppSendAuthorization, ProtectedWhatsAppActions } from '../../utils/whatsappSafety';
 import './WhatsAppManagement.css';
 
-interface Props { patients: Patient[]; contacts?: ClinicContact[]; settings: WhatsappSettings; clinicName: string; onSave: (settings: WhatsappSettings) => void | Promise<void>; onAuthorizeSend?: (request: WhatsAppSendAuthorization) => void }
+interface Props { patients: Patient[]; contacts?: ClinicContact[]; settings: WhatsappSettings; clinicName: string; onSave: (settings: WhatsappSettings) => void | Promise<void>; onAuthorizeSend?: (request: WhatsAppSendAuthorization) => void; cloudActions?: ProtectedWhatsAppActions; readSettings?: () => WhatsappSettings }
 type CampaignStep = 'audience' | 'message' | 'review';
 const normalizeDigits = (value: string) => value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) - (digit <= '٩' ? 0x0660 : 0x06f0)));
 const steps: Array<{ key: CampaignStep; title: string; description: string }> = [
@@ -17,7 +17,7 @@ const steps: Array<{ key: CampaignStep; title: string; description: string }> = 
   { key: 'review', title: 'المراجعة', description: 'فتح واتساب لكل مستلم' },
 ];
 
-export function WhatsAppCampaigns({ patients, contacts = [], settings, clinicName, onSave, onAuthorizeSend }: Props) {
+export function WhatsAppCampaigns({ patients, contacts = [], settings, clinicName, onSave, onAuthorizeSend, cloudActions, readSettings }: Props) {
   const { askConfirm } = useToastAndConfirm();
   const consentBusy = useRef(false);
   const [savingConsent, setSavingConsent] = useState(false);
@@ -211,6 +211,6 @@ export function WhatsAppCampaigns({ patients, contacts = [], settings, clinicNam
       <div className="wa-stage-actions"><button type="button" className="wa-button wa-button-plain" onClick={() => goToStep('message')}><ArrowRight size={17} /> تعديل الرسالة</button><span className="wa-field-help">الصورة والنص والاختيارات تخص إعداد هذه الحملة.</span></div>
     </div>}
     {notice && <p role="status" className="wa-inline-notice">{notice}</p>}
-    {current && <WhatsAppComposer key={current.phone} campaignRecipient={current} settings={settings} clinicName={clinicName} onAuthorizeSend={onAuthorizeSend} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
+    {current && <WhatsAppComposer key={current.phone} campaignRecipient={current} settings={settings} clinicName={clinicName} onAuthorizeSend={onAuthorizeSend} cloudActions={cloudActions} readSettings={readSettings} onClose={() => setActive(null)} campaign={{ template: kind, message, link, attachment, onOpened: () => setOpened(ids => ids.includes(current.phone) ? ids : [...ids, current.phone]) }} />}
   </section>;
 }

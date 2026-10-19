@@ -28,6 +28,7 @@ import { PatientFinancialOverview } from './PatientFinancialOverview';
 import { DEFAULT_EXAMINATION_FEE, getClinicalServicePrice, getServiceGroup, parseCatalogPrice } from '../../utils/serviceCatalog';
 import { buildAppointmentReminderText, cleanEgyptianPhone } from '../../utils/whatsappUtils';
 import { normalizeContactPhone } from '../../utils/clinicContacts';
+import type { ProtectedWhatsAppActions } from '../../utils/whatsappSafety';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
 import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
 import { getPatientCollectionPresentation, getPatientSessionReceiptLimit } from '../../utils/patientCollection';
@@ -74,6 +75,11 @@ interface PatientFileViewProps {
   onDeleteAppointment?: (apptId: string) => void | Promise<void>;
   onAuthorizeWhatsappSend?: (request: { isCampaign: boolean; requiresFinance: boolean }) => void;
   onAuthorizePrint?: () => void;
+  onPrepareOutput?: () => Promise<void>;
+  prescriptionHeader?: { doctorName: string; phone: string; address: string };
+  onEditorChange?: (open: boolean) => void;
+  readWhatsappSettings?: () => WhatsappSettings;
+  cloudWhatsAppActions?: ProtectedWhatsAppActions;
   onBack: () => void;
 }
 
@@ -102,6 +108,11 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   onDeleteAppointment,
   onAuthorizeWhatsappSend,
   onAuthorizePrint,
+  onPrepareOutput,
+  prescriptionHeader,
+  onEditorChange,
+  readWhatsappSettings,
+  cloudWhatsAppActions,
   onBack
 }) => {
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
@@ -312,6 +323,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       document.body.classList.remove('modal-open');
     };
   }, [isServiceModalOpen, isProstheticOpen, isPaymentModalOpen, isApptModalOpen, isEditPatientModalOpen, toothSheetId]);
+  useEffect(() => { onEditorChange?.(isServiceModalOpen || isProstheticOpen || isPaymentModalOpen || isApptModalOpen || isEditPatientModalOpen || !!toothSheetId || isWhatsAppOpen);
+    return () => onEditorChange?.(false); }, [isServiceModalOpen, isProstheticOpen, isPaymentModalOpen, isApptModalOpen, isEditPatientModalOpen, toothSheetId, isWhatsAppOpen, onEditorChange]);
 
   const handleOpenAddApptModal = (apptToEdit?: Appointment) => {
     if (!canManageAppointments) return;
@@ -667,7 +680,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   return (
     <div className="patient-file font-tajawal antialiased text-slate-800" dir="rtl">
       {canEditPatients && isProstheticOpen && onSaveProstheticOrder && <ProstheticOrderForm patient={patient} crownPrices={crownPrices} examinationFee={configuredExamFee} initialToothId={prostheticTooth} canRegisterPayment={canRegisterPayment} onSave={onSaveProstheticOrder} onClose={() => setIsProstheticOpen(false)} />}
-      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={canRevealRemainingBalance} onAuthorizeSend={onAuthorizeWhatsappSend} onClose={() => setIsWhatsAppOpen(false)} />}
+      {canUseWhatsApp && isWhatsAppOpen && <WhatsAppComposer key={patient.id} patient={patient} appointments={appointments} settings={whatsappSettings} clinicName={clinicName} canViewPatientFinance={canRevealRemainingBalance} onAuthorizeSend={onAuthorizeWhatsappSend} readSettings={readWhatsappSettings} cloudActions={cloudWhatsAppActions} onClose={() => setIsWhatsAppOpen(false)} />}
 
       <div className="patient-file-overview">
       <header className="patient-file-header">
@@ -1183,6 +1196,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               onAuthorizeWhatsappSend={onAuthorizeWhatsappSend}
               canPrint={capabilities?.exportData === true && !isPrivacyMode}
               onAuthorizePrint={onAuthorizePrint}
+              onPrepareOutput={onPrepareOutput}
+              prescriptionHeader={prescriptionHeader}
             />
           )}
 

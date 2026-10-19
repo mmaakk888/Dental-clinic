@@ -7,6 +7,7 @@ import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import './labPricingManagement.css';
 
 export interface LabPricingManagementProps {
+  onDirtyChange?: (dirty: boolean) => void;
   labs: Lab[];
   canViewLabCosts: boolean;
   canManageLabPrices: boolean;
@@ -47,6 +48,8 @@ function AuthorizedLabPricingManagement(props: LabPricingManagementProps) {
   const receivedLab = labs.find(lab => lab.id === selectedId);
   const draft = drafts.get(selectedId);
   const dirty = !!draft && isDirty(draft);
+  const anyDirty = [...drafts.values()].some(isDirty);
+  useEffect(() => { props.onDirtyChange?.(anyDirty); return () => props.onDirtyChange?.(false); }, [anyDirty, props.onDirtyChange]);
   const conflict = !!draft && (!receivedLab || snapshotLab(receivedLab) !== snapshotLab(draft.baseline));
   const editable = canManageLabPrices && !conflict && !saving;
 

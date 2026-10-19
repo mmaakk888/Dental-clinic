@@ -6,6 +6,7 @@ import { createCloudExpenseRepository, cloudMaterialIdV2 } from '../cloudExpense
 import { createCloudAppointmentRepository } from '../cloudAppointmentRepository';
 import type { CloudClinicSettingsData } from '../cloudClinicSettingsRepository';
 import type { CloudSnapshotQuery } from '../cloudClinicSnapshot';
+import { CLOUD_PROJECT_ID } from '../cloudIdentity';
 
 // TEST FIXTURES ONLY. Never imported by application/runtime entry points.
 export const SNAPSHOT_OWNER = 'synthetic-whole-clinic-owner';
@@ -32,7 +33,7 @@ export function encodeSnapshotValue(value: any): any {
   return { mapValue: { fields: Object.fromEntries(Object.entries(value).map(([key, value]) => [key, encodeSnapshotValue(value)])) } };
 }
 export function snapshotRestDocument(collection: string, id: string | number, data: unknown) {
-  return { name: `projects/dental-clinic-mmaakk888/databases/(default)/documents/clinics/main/${collection}/${id}`, fields: encodeSnapshotValue(data).mapValue.fields };
+  return { name: `projects/${CLOUD_PROJECT_ID}/databases/(default)/documents/clinics/main/${collection}/${id}`, fields: encodeSnapshotValue(data).mapValue.fields };
 }
 export async function makeClinicSnapshotFixture(full = true) {
   const envelope = (recordId: string, data: unknown) => ({ schemaVersion: 1, clinicId: 'main', recordId, revision: 1, lastOperationId: snapshotId(999), data });

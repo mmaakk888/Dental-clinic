@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Appointment, Patient, WhatsappSettings } from '../../types';
 import { cleanEgyptianPhone, extraMessageTemplates, format12HourAr, formatArabicDate, getWhatsAppUrl } from '../../utils/whatsappUtils';
 import { getPatientFinancialSummary } from '../../utils/financials';
-import { getWhatsAppDraftTemplate, prepareFreshWhatsAppAction, prepareSafeWhatsAppMessage, whatsAppComposerContextKey, type WhatsAppSendAuthorization } from '../../utils/whatsappSafety';
+import { getWhatsAppDraftTemplate, prepareFreshWhatsAppAction, prepareSafeWhatsAppMessage, whatsAppComposerContextKey, type WhatsAppSendAuthorization, type ProtectedWhatsAppActions } from '../../utils/whatsappSafety';
+import { useProtectedWhatsAppAction } from '../../hooks/useProtectedWhatsAppAction';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import type { CampaignRecipient } from '../../utils/campaigns';
-import { Storage } from '../../utils/storage';
 
 interface CommonProps {
   key?: string;
@@ -13,6 +13,8 @@ interface CommonProps {
   clinicName: string;
   onClose: () => void;
   onAuthorizeSend?: (request: WhatsAppSendAuthorization) => void;
+  readSettings?: () => WhatsappSettings;
+  cloudActions?: ProtectedWhatsAppActions;
 }
 interface CampaignDraft {
   template: 'greeting' | 'offer';
@@ -63,6 +65,7 @@ function WhatsAppComposerBody(props: Props) {
   const [link, setLink] = useState(campaign?.link ?? '');
   const [attachment, setAttachment] = useState<File | null>(campaign?.attachment ?? null);
   const [notice, setNotice] = useState('');
+  const authorizeProtected = useProtectedWhatsAppAction(props.cloudActions, setNotice);
   const [sharing, setSharing] = useState(false);
   const sharingRef = useRef(false);
   const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', ...(canViewPatientFinance && !campaign ? { accountBalance: 'الرصيد المتبقي' } : {}), postOp: 'تعليمات عامة',
@@ -91,10 +94,11 @@ function WhatsAppComposerBody(props: Props) {
   let validLink = !link.trim();
   try { const url = new URL(link.trim()); validLink = ['https:', 'http:'].includes(url.protocol) && Boolean(url.hostname) && !/\s/.test(link.trim()); } catch { /* Optional blank links remain valid. */ }
   const ready = validPhone && !missingDate && !unfinished && validLink && !!message.trim() && safety.financeAllowed && safety.consentAllowed && !safety.unsupportedVariables.length;
-  const authorizeAction = () => prepareFreshWhatsAppAction({
+  const authorizeAction = () => { const input = {
     templateName: template, rawTemplate: raw, editedText: edited, values, phone: recipient.mobile,
     canViewPatientFinance, isCampaign: Boolean(campaign), link, appointmentReady: !missingDate,
-  }, Storage.getWhatsappSettingsFresh, props.onAuthorizeSend);
+  }; return props.cloudActions ? authorizeProtected({ ...input, patientFileNo: patient?.id ?? null })
+    : prepareFreshWhatsAppAction(input, props.readSettings ?? (() => { throw Error('تعذر قراءة أحدث إعدادات واتساب.'); }), props.onAuthorizeSend); };
   return <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
     <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تجهيز رسالة واتساب" onKeyDown={e => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }

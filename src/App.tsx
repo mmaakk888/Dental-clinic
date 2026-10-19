@@ -1280,6 +1280,7 @@ export function AppContent() {
                 clinicLogo={clinicLogo}
                 whatsappSettings={whatsappSettings}
                 onAuthorizeWhatsappSend={authorizeWhatsappSend}
+                readWhatsappSettings={Storage.getWhatsappSettingsFresh}
                 drugCatalog={drugCatalog}
                 isPrivacyMode={isPrivacyMode || !canPerformAction(currentUser, 'view_patient_finance')}
                 capabilities={{
@@ -1423,6 +1424,7 @@ export function AppContent() {
                 canManageLabPrices={canPerformAction(currentUser, 'manage_prices') && canPerformAction(currentUser, 'view_lab_costs') && !isPrivacyMode}
                 onSaveWhatsappSettings={handleSaveWhatsappSettings}
                 onAuthorizeWhatsappSend={authorizeWhatsappSend}
+                readWhatsappSettings={Storage.getWhatsappSettingsFresh}
                 onSaveContact={handleSaveContact}
                 onDeleteContact={handleDeleteContact}
                 onImportContacts={handleImportContacts}
@@ -1559,7 +1561,7 @@ export default function App() {
     return <main dir="rtl" className="min-h-screen grid place-items-center bg-slate-50 p-6">
       <section role="alert" className="max-w-lg rounded-2xl border bg-white p-6 text-center space-y-3">
         <h1 className="text-xl font-bold">التشغيل الحالي محلي فقط</h1>
-        <p>حماية بيانات العيادة عبر الإنترنت تحتاج إكمال Firebase Authentication وقواعد الوصول أولًا. لم يتم تحميل ملفات المرضى أو فتح حساب محلي على هذا الرابط.</p>
+        <p>حماية بيانات العيادة عبر الإنترنت تحتاج خادمًا موثوقًا للحسابات وقاعدة البيانات والصلاحيات أولًا، ولا تتطلب شركة استضافة بعينها. لم يتم تحميل ملفات المرضى أو فتح حساب محلي على هذا الرابط.</p>
         <p className="text-sm text-slate-600">افتح المعاينة على نفس الجهاز من 127.0.0.1 أو localhost.</p>
       </section>
     </main>;
