@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, LabService, Patient, ClinicContact, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
 import { Storage as BrowserStorage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS, WHATSAPP_SETTINGS_STORAGE_KEY, PRIVACY_MODE_STORAGE_KEY, PROSTHETIC_ROUTING_STORAGE_KEY } from './utils/storage';
 import type {PortableRuntime} from './portable/runtime';
@@ -104,7 +104,13 @@ function ModalOpeningPlaceholder({ onClose }: { onClose: () => void }) {
 export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
   const Storage = runtime?.storage ?? BrowserStorage;
   useVisibleViewport();
-  const { showToast, cancelConfirm } = useToastAndConfirm();
+  const { showToast, cancelConfirm, askConfirm } = useToastAndConfirm();
+  const rxDirty=useRef(false);
+  const handleRxDirtyChange=useCallback((dirty:boolean)=>{rxDirty.current=dirty;},[]);
+  const navigateWithRxGuard=useCallback((next:()=>void)=>{
+    if(!rxDirty.current){next();return;}
+    askConfirm({title:'روشتة غير محفوظة',message:'احفظ الروشتة من قسم الروشتات قبل المغادرة، أو أكّد تجاهل المسودة. النسخ المحفوظة لن تتغير.',confirmLabel:'تجاهل المسودة والمغادرة',tone:'warning',onConfirm:()=>{rxDirty.current=false;next();}});
+  },[askConfirm]);
   useEffect(() => {
     const notifyFailure = () => showToast('تعذر حفظ آخر تعديل على الجهاز. احتفظ بالصفحة مفتوحة وصدّر نسخة احتياطية قبل إغلاقها.', 'error', { duration: 12000 });
     window.addEventListener(STORAGE_FAILURE_EVENT, notifyFailure);
@@ -436,13 +442,15 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
   });
 
   const handleNavigateWithSubTab = useCallback((view: ActiveView, subTab?: string) => {
+    navigateWithRxGuard(()=>{
     setActiveView(view === 'secretary-desk' ? 'home' : view);
     if (view === 'settings') setInitialWhatsAppSection('templates');
     if (subTab) {
       setActiveSubTab(subTab);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
+    });
+  }, [navigateWithRxGuard]);
 
   const handleCloseAddExpenseModal = useCallback(() => {
     setIsAddExpenseModalOpen(false);
@@ -624,14 +632,16 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
 
   // Navigation handlers
   const handleNavigate = useCallback((view: ActiveView) => {
-    setActiveView(view === 'secretary-desk' ? 'home' : view);
-  }, []);
+    navigateWithRxGuard(()=>setActiveView(view === 'secretary-desk' ? 'home' : view));
+  }, [navigateWithRxGuard]);
 
   const handleSelectPatient = useCallback((patientId: string, origin: NavigationOrigin) => {
+    navigateWithRxGuard(()=>{
     setSelectedPatientId(patientId);
     setNavigationOrigin(origin);
     setActiveView('patient-file');
-  }, []);
+    });
+  }, [navigateWithRxGuard]);
 
   // Patient Actions
   const handleSavePatient = async (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string, baseline?: Patient) => {
@@ -689,6 +699,15 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
       };
       }) };
     });
+  };
+
+  const handleCompleteTreatment = (patientId:string,sessionId:string,completed:boolean) => {
+    if(runtime)return runtime.action('visit.complete',{patientId,sessionId,completed});
+    throw new Error('إغلاق العلاج متاح في نسخة PHP المتصلة بالخادم.');
+  };
+  const handleSavePrescription = (patientId:string,value:import('./types').PrescriptionDraft) => {
+    if(runtime)return runtime.action('rx.save',{patientId,value});
+    throw new Error('حفظ الروشتة يحتاج اتصالًا بخادم العيادة.');
   };
 
   const handleSaveProstheticOrder = (input: ProstheticOrderInput) => {
@@ -827,8 +846,8 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
     });
   };
 
-  const handleAddLabCasePayment = (caseId: string, amount: number) => {
-    if (runtime) return runtime.action('lab.payment', {caseId, amount});
+  const handleAddLabCasePayment = (caseId: string, amount: number, date=localDateISO(),note='') => {
+    if (runtime) return runtime.action('lab.payment', {caseId, amount,date,note});
     const amountCents = labMoneyCents(amount);
     if (amountCents <= 0) throw new Error('أدخل مبلغًا صحيحًا للمعمل.');
     const receiptId = crypto.randomUUID();
@@ -843,14 +862,14 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
       return {
         ...c,
         labPaid: newPaid,
-        paymentsLog: [...(c.paymentsLog || []), { id: receiptId, amount: amountCents / 100, date: localDateISO(), createdAt, recordedBy: currentUser!.id }]
+        paymentsLog: [...(c.paymentsLog || []), { id: receiptId, amount: amountCents / 100, date, note,createdAt, recordedBy: currentUser!.id }]
       };
     }) };
     });
   };
 
-  const handleLabBulkPayment = (labId: string, amount: number) => {
-    if (runtime) return runtime.action('lab.payment', {labId, amount});
+  const handleLabBulkPayment = (labId: string, amount: number,date=localDateISO(),note='دفعة مجمعة للمعمل') => {
+    if (runtime) return runtime.action('lab.payment', {labId, amount,date,note});
     const receiptId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     return commitDomain(['manage_lab', 'view_lab_costs'], data => {
@@ -859,7 +878,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
         const allocation = allocations.find(a => a.caseId === c.id);
         return allocation ? { ...c, labPaid: (labMoneyCents(c.labPaid) + labMoneyCents(allocation.amount)) / 100,
           paymentsLog: [...(c.paymentsLog || []), { id: receiptId, amount: allocation.amount,
-            date: localDateISO(), createdAt, recordedBy: currentUser!.id, note: 'دفعة مجمعة للمعمل' }]
+            date, createdAt, recordedBy: currentUser!.id, note }]
         } : c;
       }) };
     });
@@ -1217,7 +1236,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
   const now = new Date();
   const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const todayApptCount = useMemo(() => appointments.filter(a => a.date === todayISO).length, [appointments, todayISO]);
-  const activeLabCount = useMemo(() => labCases.filter(c => c.status !== 'completed').length, [labCases]);
+  const activeLabCount = useMemo(() => labCases.filter(c => !['completed','delivered'].includes(c.status)).length, [labCases]);
 
   // Gatekeeper: If no authenticated user, show ONLY full-screen login interface
   if (!currentUser) {
@@ -1292,6 +1311,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
           {activeView === 'patients' && (
             canAccessView(currentUser, 'patients') ? (
               <PatientsView
+                nextFileNo={runtime?.nextFileNo()}
                 contacts={contacts}
                 patients={filePatients}
                 appointments={appointments}
@@ -1350,6 +1370,9 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
                 }}
                 onAuthorizePrint={authorizePrescriptionPrint}
                 onSaveSession={handleSaveSession}
+                onCompleteTreatment={runtime ? handleCompleteTreatment : undefined}
+                onSavePrescription={runtime ? handleSavePrescription : undefined}
+                onRxDirtyChange={handleRxDirtyChange}
                 onSaveProstheticOrder={canPerformAction(currentUser, 'add_session') ? handleSaveProstheticOrder : undefined}
                 onAddPaymentInstallment={handleAddPaymentInstallment}
                 onUpdatePatient={async (data, baseline) => { await handleSavePatient(data, data.id, baseline); }}
@@ -1357,7 +1380,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
                 onSaveAppointment={handleSaveAppointment}
                 onUpdateApptStatus={handleUpdateApptStatus}
                 onDeleteAppointment={handleDeleteAppointment}
-                onBack={() => handleNavigateWithSubTab(navigationOrigin === 'contacts' ? 'contacts' : navigationOrigin === 'appointments' ? 'appointments' : 'patients')}
+                onBack={() => handleNavigateWithSubTab(navigationOrigin === 'contacts' ? 'contacts' : navigationOrigin === 'appointments' ? 'appointments' : navigationOrigin === 'lab' ? 'lab' : 'patients')}
               />
             ) : (
               <PermissionDeniedCard title="ملف المريض" onBackToHome={() => handleNavigateWithSubTab('home')} />
@@ -1395,6 +1418,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
                 onSaveLabCase={handleSaveLabCase}
                 onUpdateLabCase={handleUpdateLabCase}
                 onAddLabCasePayment={handleAddLabCasePayment}
+                onOpenPatient={patientId=>handleSelectPatient(patientId,'lab')}
                 onBulkPayment={handleLabBulkPayment}
                 onManageLabPrices={canAccessView(currentUser, 'settings') ? handleOpenLabPricing : undefined}
                 onBackToHome={() => handleNavigateWithSubTab('home')}
@@ -1538,6 +1562,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
         {/* Quick Walk-in Visit Modal */}
         {isWalkInModalOpen && homeActionAccess.walkIn && (
           <QuickWalkInModal
+            nextFileNo={runtime?.nextFileNo()}
             isOpen={isWalkInModalOpen}
             onClose={() => setIsWalkInModalOpen(false)}
             patients={filePatients}

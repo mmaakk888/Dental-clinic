@@ -25,11 +25,11 @@
 .lab-inline-link { display: block; color: #155e57; font-weight: 800; }
 .lab-disclosure > summary, .lab-reservation > summary { padding: 12px; cursor: pointer; font-size: 13px; font-weight: 800; color: #174b47; }
 .lab-disclosure > summary { padding: 14px 16px; }
-.lab-view .clinic-modal-panel { padding: 20px; border-radius: 20px; }
+.lab-view .clinic-modal-panel:not(.prosthetic-order-dialog) { padding: 20px; border-radius: 20px; }
 @media (max-width: 480px) {
-  .lab-view > div:first-child > div:last-child { flex-wrap: wrap; width: 100%; }
-  .lab-view > div:first-child > div:last-child > button { flex: 1 1 auto; }
-  .lab-view .clinic-modal-panel { padding: 16px; }
+  .lab-view > .lab-page-header > div:last-child { flex-wrap: wrap; width: 100%; }
+  .lab-view > .lab-page-header > div:last-child > button { flex: 1 1 auto; }
+  .lab-view .clinic-modal-panel:not(.prosthetic-order-dialog) { padding: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .lab-overview-card { transition: none; } }
 

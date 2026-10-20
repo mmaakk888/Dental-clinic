@@ -8,6 +8,12 @@ final class Store {
     private function table(string $value):string {if(!in_array($value,['dc_patients','dc_visits','dc_receipts','dc_contacts','dc_appointments','dc_labs','dc_lab_cases','dc_expenses','dc_material_usages'],true))reject();return $value;}
     public function patient(string $file):array {$r=$this->db->one('SELECT * FROM dc_patients WHERE (file_no=? OR id=?) AND archived=0',[$file,$file]);if(!$r)reject('ملف المريض غير موجود.',404);return $r;}
     public function profile(array $p):array {$d=decode($p['payload']);$d['id']=$p['file_no'];return $d;}
+    public function nextFileNo():string {
+        $last=(int)$this->db->get('lastFileNo',0);
+        foreach($this->db->q('SELECT file_no FROM dc_patients')->fetchAll() as $existing){$n=digits($existing['file_no']);if(ctype_digit($n)&&strlen(ltrim($n,'0'))<=10)$last=max($last,(int)$n);}
+        if($last<0||$last>=2000000000)reject('عداد الملفات غير صالح أو بلغ الحد؛ راجعه قبل الإنشاء.');
+        return (string)($last+1);
+    }
     /** A billing/clinical identity, NOT a numbered paper file. Reuse the existing
      * relational ledger without consuming lastFileNo. The opaque key is never
      * presented as a file number or included in the numbered-file directory. */
@@ -34,6 +40,11 @@ final class Store {
     }
     public function snapshot(array $user):array {
         $settings=$this->db->get('settings',[]);$patients=$this->fullPatients();$labs=$this->rows('dc_labs');$cases=$this->rows('dc_lab_cases');$expenses=$this->rows('dc_expenses');$usages=$this->rows('dc_material_usages');$contacts=$this->rows('dc_contacts');$appointments=$this->rows('dc_appointments');
+        // Stored names are historical snapshots; contact actions always use the live identity.
+        $identities=[];foreach($patients as $person)$identities[$person['id']]=$person;
+        foreach($appointments as &$a)if(isset($identities[$a['patientId']??''])){$p=$identities[$a['patientId']];$a['patientName']=$p['name'];$a['mobile']=$p['mobile'];}unset($a);
+        foreach($cases as &$c)if(isset($identities[$c['patientId']??'']))$c['patientName']=$identities[$c['patientId']]['name'];unset($c);
+        $labNames=[];foreach($labs as $lab)$labNames[$lab['id']]=$lab['name'];foreach($cases as &$c)if(isset($labNames[$c['labId']??'']))$c['labName']=$labNames[$c['labId']];unset($c);
         foreach($cases as &$case)if(!empty($case['linkedSessionId'])){$v=$this->db->one('SELECT total_cents,historical_paid_cents FROM dc_visits WHERE id=?',[$case['linkedSessionId']]);$paid=$this->db->one('SELECT COALESCE(SUM(amount_cents),0) AS n FROM dc_receipts WHERE visit_id=?',[$case['linkedSessionId']]);if(!$v)reject('تركيبة بلا جلسة مرتبطة؛ راجع تقرير النقل.',409);$case['patientTotal']=(int)$v['total_cents']/100;$case['patientPaid']=((int)$paid['n']+(int)$v['historical_paid_cents'])/100;}unset($case);
         $users=array_map(fn($r)=> (new Auth($this->db,['app_url'=>'']))->profile($r),$this->db->q('SELECT * FROM dc_users')->fetchAll());
         // No supplier costs, private routing, expense ledgers, user hashes or API keys reach reception clients.
@@ -48,13 +59,13 @@ final class Store {
         }
         $settings['labs']=$labs;
         if(isset($settings['whatsappSettings'])){unset($settings['whatsappSettings']['apiKey'],$settings['whatsappSettings']['webhookUrl']);$settings['whatsappSettings']['apiKey']='';$settings['whatsappSettings']['webhookUrl']='';}
-        return ['schemaVersion'=>1,'revision'=>$this->db->get('revision',0),'user'=>$user,'users'=>$users,'domain'=>['patients'=>$patients,'contacts'=>$contacts,'appointments'=>$appointments,'labCases'=>$cases,'expenses'=>$expenses,'materialUsages'=>$usages],'settings'=>$settings];
+        return ['schemaVersion'=>1,'revision'=>$this->db->get('revision',0),'user'=>$user,'users'=>$users,'domain'=>['patients'=>$patients,'contacts'=>$contacts,'appointments'=>$appointments,'labCases'=>$cases,'expenses'=>$expenses,'materialUsages'=>$usages,'nextFileNo'=>$this->nextFileNo()],'settings'=>$settings];
     }
     public function saveProfile(array $input,?string $original=null):string {
         $name=text($input['name']??'',200);if($name==='')reject('اسم المريض مطلوب.');$rawPhone=text($input['mobile']??'',60);if($rawPhone!==''&&!phone($rawPhone))reject('رقم الهاتف غير صالح.');$age=$input['age']??0;if(!is_int($age)||$age<0||$age>120)reject('العمر غير صالح.');
         if($original!==null){$row=$this->patient($original);if(!empty(decode($row['payload'])['withoutFile']))reject('هذا سجل زيارة بدون ملف؛ لا يُمنح رقمًا من تعديل بيانات ملف.');$recordId=$row['id'];$file=$row['file_no'];}
-        else{$last=(int)$this->db->get('lastFileNo',0);foreach($this->db->q('SELECT file_no FROM dc_patients')->fetchAll() as $existing){$n=digits($existing['file_no']);if(ctype_digit($n)&&strlen(ltrim($n,'0'))<=10)$last=max($last,(int)$n);}$requested=$input['id']??null;
-            if($last<0||$last>=2000000000)reject('عداد الملفات غير صالح أو بلغ الحد؛ راجعه قبل الإنشاء.');$file=(string)($last+1);if($requested!==null&&$requested!==''&&(string)$requested!==$file)reject('تغيّر رقم الملف التالي؛ حدّث القائمة قبل الإضافة.',409);$recordId=uuid();$this->db->set('lastFileNo',$last+1);}
+        else{$file=$this->nextFileNo();$requested=$input['id']??null;
+            if($requested!==null&&$requested!==''&&(string)$requested!==$file)reject('تغيّر رقم الملف التالي؛ حدّث القائمة قبل الإضافة.',409);$recordId=uuid();$this->db->set('lastFileNo',(int)$file);}
         $prior=$original!==null?decode($row['payload']):[];
         $profile=array_merge($prior,['id'=>$file,'name'=>$name,'mobile'=>$rawPhone,'age'=>$age,'gender'=>text($input['gender']??'',16),'firstVisit'=>array_key_exists('firstVisit',$input)?($input['firstVisit']!==''?day($input['firstVisit']):''):($prior['firstVisit']??date('Y-m-d')),'notes'=>text($input['notes']??''),'allergy'=>text($input['allergy']??'')]);
         if($original!==null)$this->db->q('UPDATE dc_patients SET name=?,phone=?,payload=?,revision=revision+1 WHERE id=?',[$name,phone($rawPhone),json($profile),$recordId]);

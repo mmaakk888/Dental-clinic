@@ -1,5 +1,5 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Patient, DrugCatalogItem, PrescriptionItem } from '../../types';
+import { Patient, DrugCatalogItem, PrescriptionItem, PrescriptionDraft, SavedPrescription } from '../../types';
 import { Printer, Copy, MessageCircle, Plus, Trash2, FileText, Edit3, Settings, Search, ImageDown, Share2 } from 'lucide-react';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { cleanEgyptianPhone, getWhatsAppUrl } from '../../utils/whatsappUtils';
@@ -8,8 +8,13 @@ import { renderPrescriptionImage, sharePrescriptionImage } from '../../utils/pre
 import { filterDrugCatalog } from '../../utils/drugCatalog';
 import { createPrescriptionDocument } from './PrescriptionDocument';
 import './patientClinicalTools.css';
+import {useConfirmedAction} from '../common/useConfirmedAction';
+import {localDateISO} from '../appointments/appointmentScheduling';
+import {prescriptionDraftSignature} from '../../utils/prescriptionRecords';
 
 interface PrescriptionAndInstructionsViewProps {
+  onSavePrescription?: (patientId:string,value:PrescriptionDraft)=>Promise<string>;
+  onDirtyChange?: (dirty:boolean)=>void;
   patient: Patient;
   clinicName: string;
   clinicLogo: string | null;
@@ -35,8 +40,11 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   onAuthorizeWhatsappSend,
   onPrepareOutput,
   prescriptionHeader,
+  onSavePrescription,
+  onDirtyChange,
 }) => {
-  const { showToast } = useToastAndConfirm();
+  const { showToast,askConfirm } = useToastAndConfirm();
+  const {saving,run}=useConfirmedAction();
 
   // Active Tab: Prescription or Post-Op
   const [subTab, setSubTab] = useState<'prescription' | 'instructions'>('prescription');
@@ -62,6 +70,31 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   const [rxPhone, setRxPhone] = useState(prescriptionHeader?.phone ?? '');
   const [rxAddress, setRxAddress] = useState(prescriptionHeader?.address ?? '');
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
+  const [rxDate,setRxDate]=useState(localDateISO);
+  const [rxSession,setRxSession]=useState('');
+  const draft:PrescriptionDraft={date:rxDate,sessionId:rxSession||null,diagnosis,items:rxItems,instructions:doctorNotes,header:{doctorTitle:rxDocTitle,doctorName:rxDocName,doctorEnglish:rxDocEnglish,specialty1:rxSpecialty1,specialty2:rxSpecialty2,phone:rxPhone,address:rxAddress}};
+  const signature=prescriptionDraftSignature(draft),initialSignature=useRef<string|null>(null);
+  if(initialSignature.current===null)initialSignature.current=signature;
+  const [savedSignature,setSavedSignature]=useState('');
+  const dirty=signature!==(savedSignature||initialSignature.current)||!!(customDrugName||customDosage||customDuration);
+  useEffect(()=>{onDirtyChange?.(dirty);},[dirty,onDirtyChange]);
+  useEffect(()=>()=>onDirtyChange?.(false),[onDirtyChange]);
+  useEffect(()=>{if(!dirty)return;const guard=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard);},[dirty]);
+  const loadDraft=(value:PrescriptionDraft)=>{
+    setSubTab('prescription');
+    setRxDate(value.date);setRxSession(value.sessionId||'');setDiagnosis(value.diagnosis);setRxItems(value.items.map(i=>({...i})));setDoctorNotes(value.instructions);
+    setRxDocTitle(value.header.doctorTitle);setRxDocName(value.header.doctorName);setRxDocEnglish(value.header.doctorEnglish);setRxSpecialty1(value.header.specialty1);setRxSpecialty2(value.header.specialty2);setRxPhone(value.header.phone);setRxAddress(value.header.address);
+    setCustomDrugName('');setCustomDosage('');setCustomDuration('');setSavedSignature(prescriptionDraftSignature(value));
+  };
+  const openSaved=(value:SavedPrescription)=>{
+    const open=()=>loadDraft(value);
+    if(dirty)askConfirm({title:'استبدال المسودة غير المحفوظة؟',message:'ستُعرض الروشتة المحفوظة؛ لم نحذف أو نغيّر أي نسخة سابقة.',confirmLabel:'عرض الروشتة المحفوظة',tone:'warning',onConfirm:open});else open();
+  };
+  const savePrescription=()=>{
+    if(!onSavePrescription||!rxItems.length||rxItems.some(i=>!i.drugName.trim())){showToast('أضف الأدوية وراجع أسماءها أولًا.','warning');return;}
+    if(customDrugName||customDosage||customDuration){showToast('أضف الدواء المخصص إلى الروشتة أو امسح مسودته قبل الحفظ.','warning');return;}
+    void run(async()=>{await onSavePrescription(patient.id,draft);},()=>{setSavedSignature(signature);showToast('حُفظت نسخة مؤرخة من الروشتة في ملف المريض.','success');});
+  };
   // Native share/window.open require the current user gesture on iPhone.
   // Never await a network authorization immediately before invoking them.
   const nativeOutputApproval = useRef<{ key: string; until: number } | null>(null);
@@ -197,7 +230,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     catch { showToast('تعذّرت الطباعة؛ راجع صلاحية الحساب والجلسة.', 'error'); }
   };
 
-  const todayDateStr = new Date().toLocaleDateString('ar-EG', {
+  const todayDateStr = new Date(`${rxDate}T12:00:00`).toLocaleDateString('ar-EG', {
     year: 'numeric',
     month: 'numeric',
     day: 'numeric'
@@ -323,6 +356,12 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
           </div>
         )}
       </div>
+
+      <section className="rx-card print:hidden space-y-3" aria-label="حفظ الروشتة وسجلها">
+        <div className="flex flex-wrap items-end gap-3"><label className="text-sm flex-1 min-w-0">تاريخ الروشتة<input type="date" aria-label="تاريخ الروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxDate} onChange={e=>setRxDate(e.target.value)} disabled={saving}/></label><label className="text-sm flex-1 min-w-0">الجلسة المرتبطة (اختياري)<select aria-label="الجلسة المرتبطة بالروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxSession} onChange={e=>setRxSession(e.target.value)} disabled={saving}><option value="">روشتة عامة للمريض</option>{patient.sessions.map(s=><option key={s.id} value={s.id}>{s.date} · {s.type}</option>)}</select></label></div>
+        <div className="flex flex-wrap gap-2 items-center"><span role="status" className="text-sm text-slate-600">{dirty?'مسودة غير محفوظة':'لا توجد تغييرات غير محفوظة'}</span>{onSavePrescription&&<button type="button" className="rx-primary-button" disabled={saving||!rxItems.length||!dirty} onClick={savePrescription}>{saving?'جارٍ الحفظ…':'حفظ نسخة في الملف'}</button>}<button type="button" className="rx-secondary-button" disabled={saving} onClick={()=>{const reset=()=>loadDraft({...draft,date:localDateISO(),sessionId:null,diagnosis:'',items:[],instructions:''});if(dirty)askConfirm({title:'بدء روشتة جديدة؟',message:'تجاهل المسودة الحالية فقط؛ الروشتات المحفوظة لا تتغير.',confirmLabel:'مسودة جديدة',onConfirm:reset});else reset();}}>مسودة جديدة</button></div>
+        <details><summary className="min-h-11 cursor-pointer text-sm font-bold">الروشتات المحفوظة ({patient.prescriptions?.length||0})</summary>{patient.prescriptions?.length?<div className="grid gap-2">{patient.prescriptions.map(rx=><button type="button" key={rx.id} disabled={saving} className="rx-secondary-button justify-between" onClick={()=>openSaved(rx)}><bdi>{rx.date}</bdi><span>{rx.items.length} دواء · عرض الروشتة</span></button>)}</div>:<p className="text-sm text-slate-500">بعد مراجعة الأدوية اضغط «حفظ نسخة في الملف» لتقدر ترجع لها بعد مغادرة الصفحة.</p>}</details>
+      </section>
 
       {/* Template Data Editor Drawer */}
       {isTemplateEditorOpen && subTab === 'prescription' && (

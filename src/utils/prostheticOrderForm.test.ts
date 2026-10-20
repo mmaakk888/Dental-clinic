@@ -188,7 +188,7 @@ test('valid zero price is not replaced and invalid catalog prices are excluded r
 test('modal CSS confines scrolling, wraps narrow-screen content and respects reduced motion', () => {
   const css = readFileSync(new URL('../components/ProstheticOrderForm.css', import.meta.url), 'utf8');
   assert.match(css, /width: min\(100%, 44rem\)/); assert.match(css, /max-height: min\(92dvh, 60rem\)/);
-  assert.match(css, /\.prosthetic-order-body[^}]+min-height: 0; overflow-y: auto/);
+  assert.match(css, /\.prosthetic-order-body[^}]+min-height: 0;[^}]+overflow-y: auto/);
   assert.match(css, /@media \(max-width: 480px\)/); assert.match(css, /grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(css, /min-height: 44px/); assert.match(css, /font-size: 1rem/); assert.match(css, /overflow-wrap: anywhere/);
   assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /animation: none !important/);

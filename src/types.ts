@@ -114,6 +114,19 @@ export interface Prescription {
   instructions?: string;
 }
 
+export interface SavedPrescription {
+  id: string;
+  date: string;
+  createdAt?: string;
+  recordedBy?: string;
+  sessionId?: string | null;
+  diagnosis: string;
+  items: PrescriptionItem[];
+  instructions: string;
+  header: {doctorTitle:string;doctorName:string;doctorEnglish:string;specialty1:string;specialty2:string;phone:string;address:string};
+}
+export type PrescriptionDraft = Omit<SavedPrescription,'id'|'createdAt'|'recordedBy'>;
+
 export interface DrugCatalogItem {
   id: string;
   name: string;
@@ -165,6 +178,8 @@ export interface SessionServiceItem {
 }
 
 export interface Session {
+  treatmentCompletedAt?: string;
+  treatmentCompletedBy?: string;
   /** Imported paid balance without a dated receipt; never counted as today's cash. */
   legacyOpeningPaid?: number;
   id: string;
@@ -216,6 +231,7 @@ export interface GeneralPayment {
 }
 
 export interface Patient {
+  prescriptions?: SavedPrescription[];
   id: string; // File Number e.g. "101"
   withoutFile?: boolean;
   contactId?: string;

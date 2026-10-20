@@ -100,7 +100,7 @@ test('financially restricted/privacy props never construct history, supplier sum
 test('invalid/subcent and over-remainder submissions retain draft and never call supplier payment callback', async () => {
   const h = harness(); h.open(); h.change('0.001'); await h.submit(); assert.equal(h.saved.length, 0); assert.match(h.messages.at(-1)!, /منزلتين/);
   h.change('651'); await h.submit(); assert.equal(h.saved.length, 0); assert.match(h.messages.at(-1)!, /أكبر/); assert.equal(h.amount().props.value, 651);
-  h.change('125'); await h.submit(); assert.deepEqual(h.saved, [['synthetic-case', 125]]); assert.equal(h.hasModal, false);
+  h.change('125'); await h.submit(); assert.equal(h.saved[0][0],'synthetic-case');assert.equal(h.saved[0][1],125);assert.match(h.saved[0][2],/^\d{4}-\d{2}-\d{2}$/);assert.equal(h.saved[0][3],''); assert.equal(h.hasModal, false);
 });
 
 test('pending supplier save blocks duplicate submit and close; rejected save retains explicit amount and history', async () => {

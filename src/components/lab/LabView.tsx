@@ -13,6 +13,7 @@ import type { ProstheticOrderInput } from '../../utils/prostheticWorkflow';
 import { getServiceGroup } from '../../utils/serviceCatalog';
 import { LabPaymentHistory } from './LabPaymentHistory';
 import './labView.css';
+import {isValidAppointmentDate} from '../appointments/appointmentScheduling';
 
 interface LabViewProps {
   labs: Lab[];
@@ -26,12 +27,13 @@ interface LabViewProps {
   onDeleteLab: (labId: string) => void | Promise<void>;
   onSaveLabCase: (caseData: Omit<LabCase, 'id'>) => void | Promise<void>;
   onUpdateLabCase?: (updatedCase: LabCase) => void | Promise<void>;
-  onAddLabCasePayment: (caseId: string, amount: number) => void | Promise<void>;
+  onAddLabCasePayment: (caseId: string, amount: number,date?:string,note?:string) => void | Promise<void>;
+  onOpenPatient?: (patientId:string)=>void;
   onManageLabPrices?: (labId?: string) => void;
   onBackToHome: () => void;
   canViewFinancials?: boolean;
   canManagePrices?: boolean;
-  onBulkPayment: (labId: string, amount: number) => void | Promise<void>;
+  onBulkPayment: (labId: string, amount: number,date?:string,note?:string) => void | Promise<void>;
   onEditorChange?: (open: boolean) => void;
 }
 
@@ -48,6 +50,7 @@ export const LabView: React.FC<LabViewProps> = ({
   onSaveLabCase,
   onUpdateLabCase,
   onAddLabCasePayment,
+  onOpenPatient,
   onManageLabPrices,
   onBackToHome,
   canViewFinancials = false,
@@ -113,13 +116,16 @@ export const LabView: React.FC<LabViewProps> = ({
 
   const localDateKey = (value: Date = new Date()) => new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
   const todayStr = localDateKey();
+  const [paymentDate,setPaymentDate]=useState(todayStr);
+  const [paymentNote,setPaymentNote]=useState('');
+  const [bulkDate,setBulkDate]=useState(todayStr);
 
   const getCaseStatusInfo = (c: LabCase) => {
     const isDelayed = c.status !== 'delivered' && c.status !== 'completed' && c.deliveryExpectedDate && c.deliveryExpectedDate < todayStr;
     const activeStatus = isDelayed ? 'delayed' : c.status;
 
     if (activeStatus === 'delivered' || activeStatus === 'completed') {
-      return { key: 'delivered', label: 'تم التسليم', color: 'bg-emerald-100 text-emerald-800 border-emerald-300', dot: '🟢' };
+      return { key: 'delivered', label: activeStatus==='completed'?'تم التسليم وانتهى العلاج':'تم التسليم · يُغلق العلاج من الملف', color: 'bg-emerald-100 text-emerald-800 border-emerald-300', dot: '🟢' };
     }
     if (activeStatus === 'ready') {
       return { key: 'ready', label: 'جاهز للاستلام', color: 'bg-blue-100 text-blue-800 border-blue-300', dot: '🔵' };
@@ -154,6 +160,7 @@ export const LabView: React.FC<LabViewProps> = ({
   const openPaymentHistory = (item: LabCase) => {
     setSelectedCaseForPayment(item);
     setPaymentAmount('');
+    setPaymentDate(todayStr);setPaymentNote('');
     setIsPaymentModalOpen(true);
   };
 
@@ -256,7 +263,7 @@ export const LabView: React.FC<LabViewProps> = ({
       showToast('تكلفة خدمة المعمل غير صحيحة، راجع أسعار المعمل', 'warning');
       return;
     }
-    const labTotal = targetService.price * units;
+    const labTotal = targetService.price * (targetService.billingBasis==='per-case'?1:units);
     if (caseSessionId && labCases.some(c => c.patientId === targetPatient.id && c.linkedSessionId === caseSessionId)) {
       showToast('هذه الخدمة مرتبطة بالفعل بطلب معمل', 'warning');
       return;
@@ -324,7 +331,8 @@ export const LabView: React.FC<LabViewProps> = ({
       return;
     }
 
-    await confirmSave(() => onAddLabCasePayment(selectedCaseForPayment.id, amt), () => {
+    if(!isValidAppointmentDate(paymentDate)){showToast('اختر تاريخ سداد صحيحًا.','warning');return;}
+    await confirmSave(() => onAddLabCasePayment(selectedCaseForPayment.id, amt,paymentDate,paymentNote), () => {
       setIsPaymentModalOpen(false);
       showToast('تم تسديد الدفعة للمعمل بنجاح', 'success');
     });
@@ -416,7 +424,7 @@ export const LabView: React.FC<LabViewProps> = ({
       {isProstheticOpen && onSaveProstheticOrder && <ProstheticOrderForm patients={patients} crownPrices={crownPrices} examinationFee={examinationFee} canRegisterPayment={canRegisterPayment} onSave={onSaveProstheticOrder} onClose={() => setIsProstheticOpen(false)} />}
       {saving && <p role="status" className="rounded-xl bg-teal-50 p-3 text-sm text-teal-900">جارٍ تأكيد الحفظ…</p>}
       {/* View Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="lab-page-header flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
           <button
             onClick={onBackToHome}
@@ -557,11 +565,13 @@ export const LabView: React.FC<LabViewProps> = ({
               <input type="number" min="0.01" step="0.01" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} className="block w-full border rounded-xl p-3 mt-1" />
             </label>
             {bulkAllocations.map(a => <p key={a.caseId} className="text-sm">{labCases.find(c => c.id === a.caseId)?.patientName}: {a.amount.toLocaleString()} ج.م</p>)}
+            <label className="block text-sm">تاريخ الدفعة المجمعة<input type="date" aria-label="تاريخ الدفعة المجمعة للمعمل" value={bulkDate} onChange={e=>setBulkDate(e.target.value)} className="block w-full border rounded-xl p-3 mt-1"/></label>
             {bulkAmount && !bulkAllocations.length && <p className="text-sm text-rose-700">أدخل مبلغاً أكبر من صفر ولا يتجاوز المستحق.</p>}
             <button type="button" disabled={!bulkAllocations.length || saving} className="rounded-xl bg-teal-800 text-white px-4 py-3 disabled:opacity-40" onClick={() => {
               const amount = Number(bulkAmount);
+              if(!isValidAppointmentDate(bulkDate)){showToast('اختر تاريخ سداد صحيحًا.','warning');return;}
               askConfirm({ title: 'تأكيد سداد المعمل', message: `سداد ${amount.toLocaleString()} ج.م إلى ${selectedLab.name} موزعة على ${bulkAllocations.length} حالة؟`, confirmLabel: 'تسجيل السداد', tone: 'warning', onConfirm: async () => {
-                await confirmSave(() => onBulkPayment(selectedLab.id, amount), () => { setBulkAmount(''); showToast('تم تسجيل الدفعة المجمعة', 'success'); });
+                await confirmSave(() => onBulkPayment(selectedLab.id, amount,bulkDate), () => { setBulkAmount(''); showToast('تم تسجيل الدفعة المجمعة', 'success'); });
               }});
             }}>تسجيل الدفعة المجمعة</button>
             </div>
@@ -846,6 +856,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
                       {/* Interactive Status Changer Badge */}
                       <div className="flex items-center gap-2 shrink-0">
+                        {onOpenPatient&&<button type="button" className="min-h-11 rounded-xl border px-3 text-xs font-bold" onClick={()=>onOpenPatient(c.patientId)}>ملف المريض</button>}
                         <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-bold ${statusInfo.color}`}>
                           <span>{statusInfo.dot}</span>
                           <span>{statusInfo.label}</span>
@@ -853,7 +864,7 @@ export const LabView: React.FC<LabViewProps> = ({
 
                         <select
                           value={c.status === 'completed' ? 'delivered' : c.status === 'delayed' ? 'pending' : c.status}
-                          disabled={!onUpdateLabCase || saving}
+                          disabled={!onUpdateLabCase || saving || c.status==='completed'}
                           onChange={e => handleUpdateStatus(c, e.target.value as LabCase['status'])}
                           className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-600"
                           title="تغيير حالة التركيبة"
@@ -1127,6 +1138,8 @@ export const LabView: React.FC<LabViewProps> = ({
             <div className="lab-payment-case-context"><strong>{selectedPaymentCase.patientName} <bdi>#{selectedPaymentCase.fileNo}</bdi></strong><span>{selectedPaymentCase.subType} · {selectedPaymentCase.units} {selectedPaymentCase.unitLabel}</span><span>المعمل: {selectedPaymentCase.labName}</span></div>
             <LabPaymentHistory key={selectedPaymentCase.id} cases={[selectedPaymentCase]} currentMonth={todayStr.slice(0, 7)} title="دفعات المعمل لهذه الحالة" />
             {selectedPaymentRemaining > 0 ? <form onSubmit={handleSaveLabPayment} aria-busy={saving} className="space-y-4"><fieldset disabled={saving} className="contents">
+              <label className="block text-sm">تاريخ السداد<input type="date" aria-label="تاريخ سداد المعمل" value={paymentDate} onChange={e=>setPaymentDate(e.target.value)} required className="block w-full border rounded-xl p-3 mt-1"/></label>
+              <label className="block text-sm">ملاحظة الدفعة (اختياري)<input aria-label="ملاحظة دفعة المعمل" value={paymentNote} maxLength={2000} onChange={e=>setPaymentNote(e.target.value)} className="block w-full border rounded-xl p-3 mt-1"/></label>
               <div>
                 <label htmlFor="input-lab-payment" className="block text-xs font-bold text-slate-700 mb-1">
                   المبلغ المسدد للمعمل (ج.م)

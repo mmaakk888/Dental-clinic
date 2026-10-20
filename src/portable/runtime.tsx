@@ -10,6 +10,7 @@ export interface PortableRuntime {
  backupRequest(form?:FormData):Promise<Response>;
  updateRequest(form?:FormData):Promise<Response>;
  prescriptionHeader():{doctorName:string;phone:string;address:string}|undefined;
+ nextFileNo():string|undefined;
  subscribe(listener:()=>void):()=>void; pending():boolean; error():string; retry():Promise<void>; cancel():Promise<void>;
 }
 export const PortableContext=createContext<PortableRuntime|null>(null);
@@ -47,7 +48,7 @@ export function createPortableRuntime(endpoint:URL):PortableRuntime {
   if(name==='saveCurrentUser')return (user:User|null)=>{if(user&&snapshot?.user.id!==user.id)throw Error('جلسة غير صالحة.');};if(name==='saveRememberedSession')return ()=>{};
   throw Error('عملية التخزين المحلي غير متاحة في نسخة PHP: '+name);
  }}) as typeof LocalStorage;
- const runtime:PortableRuntime={storage,currentUser:()=>snapshot?.user??null,prescriptionHeader:()=>snapshot?.settings.prescriptionHeader,read:action=>request(undefined,action),
+ const runtime:PortableRuntime={storage,currentUser:()=>snapshot?.user??null,prescriptionHeader:()=>snapshot?.settings.prescriptionHeader,nextFileNo:()=>snapshot?.domain.nextFileNo,read:action=>request(undefined,action),
   async backupRequest(form){if(!snapshot||!['admin','doctor'].includes(snapshot.user.role))throw Error('النسخ والنقل للمدير فقط.');if(pending||recovery?.userId===snapshot.user.id)throw Error('تحقق من العملية المعلقة أولًا.');const response=await fetch(new URL('backup.php',endpoint),{method:form?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:form?{'X-CSRF-Token':csrf}:{},...(form?{body:form}:{})});if(response.status===401)clear();return response;},
   refresh(){if(refreshInFlight)return refreshInFlight;const ticket=version;refreshInFlight=(async()=>{const value=await request();if(ticket!==version||value.unchanged===true)return;accept(value);})().finally(()=>{refreshInFlight=null;});return refreshInFlight;},
   async authenticate(username,password){const value=await request({action:'auth.login',args:{username,password}});version++;pending=null;accept(value);return snapshot!.user;},

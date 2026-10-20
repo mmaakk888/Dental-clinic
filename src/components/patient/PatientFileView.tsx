@@ -51,6 +51,9 @@ export interface PatientFileCapabilities {
 }
 
 interface PatientFileViewProps {
+  onCompleteTreatment?: (patientId:string,sessionId:string,completed:boolean)=>void|Promise<void>;
+  onSavePrescription?: (patientId:string,value:import('../../types').PrescriptionDraft)=>Promise<string>;
+  onRxDirtyChange?: (dirty:boolean)=>void;
   patient: Patient;
   appointments?: Appointment[];
   origin: NavigationOrigin;
@@ -99,6 +102,9 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   clinicLogo = null,
   drugCatalog = [],
   onSaveSession,
+  onCompleteTreatment,
+  onSavePrescription,
+  onRxDirtyChange,
   onSaveProstheticOrder,
   onAddPaymentInstallment,
   onUpdatePatient,
@@ -914,6 +920,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
                             {/* Action & Meter */}
                             <div className="patient-session-actions">
+                              {s.treatmentCompletedAt && <span className="text-xs text-emerald-800 bg-emerald-50 rounded-lg p-2">انتهى العلاج · الحساب محفوظ</span>}
+                              {canEditPatients && onCompleteTreatment && (s.treatmentCompletedAt || s.visitStatus==='follow_up' || s.treatmentStage && s.treatmentStage!=='single') && <button type="button" disabled={saving} className="patient-session-collect" onClick={()=>askConfirm({title:s.treatmentCompletedAt?'إعادة فتح المتابعة؟':'تأكيد انتهاء العلاج؟',message:'يتغير وضع المتابعة فقط؛ الخدمات والأسنان والدفعات والمتبقي محفوظون دون تغيير. للتركيبة يجب تسجيل التسليم أولًا.',confirmLabel:s.treatmentCompletedAt?'إعادة المتابعة':'إنهاء العلاج',onConfirm:async()=>{await run(()=>onCompleteTreatment(patient.id,s.id,!s.treatmentCompletedAt));}})}><CheckCircle2 size={16}/>{s.treatmentCompletedAt?'إعادة المتابعة':'إنهاء العلاج'}</button>}
                               {canRegisterPayment && sessionBalance(s) > 0 && (
                                 <button
                                   type="button"
@@ -1186,7 +1194,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
           )}
 
           {/* 5.5 Prescription & Instructions Tab */}
-          {canUseRx && activeTab === 'prescription' && (
+          {canUseRx && <div hidden={activeTab!=='prescription'}>
             <PrescriptionAndInstructionsView
               patient={patient}
               clinicName={clinicName}
@@ -1198,8 +1206,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               onAuthorizePrint={onAuthorizePrint}
               onPrepareOutput={onPrepareOutput}
               prescriptionHeader={prescriptionHeader}
+              onSavePrescription={canEditPatients ? onSavePrescription : undefined}
+              onDirtyChange={onRxDirtyChange}
             />
-          )}
+          </div>}
 
           {/* 5.6 Info & Demographics Tab */}
           {activeTab === 'info' && (

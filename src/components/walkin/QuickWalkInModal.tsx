@@ -17,6 +17,7 @@ import '../common/ActionDialog.css';
 import './walkInServicePicker.css';
 
 interface QuickWalkInModalProps {
+  nextFileNo?: string;
   isOpen: boolean;
   onClose: () => void;
   patients: Patient[];
@@ -41,7 +42,7 @@ interface QuickWalkInModalProps {
 const amountFormat = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
 const amountText = (value: number) => `${amountFormat.format(value)} ج.م`;
 
-export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onClose, patients, contacts = [], defaultExamFee = 100, serviceTypes = [], clinicalPrices = {}, allowWithoutFile=false, onSaveWalkInVisit }) => {
+export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onClose, patients, nextFileNo, contacts = [], defaultExamFee = 100, serviceTypes = [], clinicalPrices = {}, allowWithoutFile=false, onSaveWalkInVisit }) => {
   const { showToast } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const committingRef = useRef(false);
@@ -59,7 +60,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const results = useMemo(() => searchHomePatients(searchIndex, deferredQuery, deferredQuery.trim() ? 8 : 4, true), [searchIndex, deferredQuery]);
   const selectedPatient = useMemo(() => patients.find(item => item.id === selectedId), [patients, selectedId]);
   const autoFileNo = useMemo(() => nextWalkInFileNumber(patients), [patients]);
-  const fileNo = autoFileNo;
+  const fileNo = nextFileNo || autoFileNo;
   const [name, setName] = useState('');
   const [mobile, setMobile] = useState('');
   const [age, setAge] = useState('');
@@ -151,7 +152,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
           </> : <div className="walkin-grid">
             <label>اسم المريض<input value={name} onChange={event => {setName(event.target.value);setConfirmExistingFile(false);}} required autoComplete="name" /></label>
             <label>رقم الهاتف<input type="tel" value={mobile} onChange={event => {setMobile(event.target.value);setConfirmExistingFile(false);}} required autoComplete="tel" placeholder="01xxxxxxxxx" /></label>
-            {!withoutFile&&<label>رقم الملف التلقائي<input value={autoFileNo} readOnly aria-readonly="true" /><small>بعد آخر ملف؛ يتأكد الرقم النهائي عند الحفظ.</small></label>}
+            {!withoutFile&&<label>رقم الملف التلقائي<input value={fileNo} readOnly aria-readonly="true" /><small>بعد آخر ملف؛ يتأكد الرقم النهائي عند الحفظ.</small></label>}
             <label>العمر (اختياري)<input type="number" min="0" max="120" step="1" value={age} onChange={event => setAge(event.target.value)} /></label>
             <label>الجنس (اختياري)<select value={gender} onChange={event => setGender(event.target.value)}><option value="">غير محدد</option><option value="ذكر">ذكر</option><option value="أنثى">أنثى</option></select></label>
           </div>}

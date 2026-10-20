@@ -13,7 +13,7 @@ const artifacts = path.resolve('build/portable-artifacts');
 if (fs.existsSync(target) || fs.existsSync(artifacts)) {
   throw Error('Frozen release already exists. Rename build/portable-release AND build/portable-artifacts before preparing another release.');
 }
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md']) {
   if (!fs.existsSync(path.join('portable', file))) throw Error('Missing release document: ' + file);
 }
 await build({configFile: path.resolve('vite.portable.config.ts')});

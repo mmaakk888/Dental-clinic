@@ -161,6 +161,13 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
     if (row.firstVisit === undefined) row.firstVisit = '';
     date(row, 'firstVisit', path, true, true); text(row, 'notes', path, { defaultValue: '' }); text(row, 'allergy', path, { defaultValue: '' });
     text(row, 'gender', path, { max: 60 });
+    list(row,'prescriptions',path,(rx,rxPath)=>{
+      date(rx,'date',rxPath,true);timestamp(rx,'createdAt',rxPath);strings(rx,['diagnosis','instructions','recordedBy'],rxPath);
+      if(rx.sessionId!==undefined&&rx.sessionId!==null)text(rx,'sessionId',rxPath,{required:true,max:128});
+      list(rx,'items',rxPath,(item,itemPath)=>{text(item,'drugName',itemPath,{required:true,max:200});text(item,'dosage',itemPath,{defaultValue:'',max:500});text(item,'duration',itemPath,{defaultValue:'',max:200});},{required:true,limit:64});
+      if(!rx.items?.length)fail(`${rxPath}.items`);
+      if(!isRecord(rx.header))fail(`${rxPath}.header`);else ['doctorTitle','doctorName','doctorEnglish','specialty1','specialty2','phone','address'].forEach(k=>text(rx.header,k,`${rxPath}.header`,{defaultValue:'',max:500}));
+    },{limit:1000});
     list(row, 'sessions', path, (session, sessionPath) => {
       if (globalSessionIds.has(session.id)) fail(`${sessionPath}.id`, 'معرّف جلسة مكرر بين الملفات');
       globalSessionIds.add(session.id);
@@ -186,6 +193,7 @@ export function validateClinicBackup(input: unknown, context: BackupValidationCo
       strings(session, ['toothNum', 'toothLabel', 'chiefComplaint', 'diagnosis', 'procedurePerformed', 'prescriptionNotes', 'visitNotes', 'doctorName', 'time'], sessionPath);
       choice(session, 'paymentMethod', sessionPath, ['cash', 'card', 'transfer']); choice(session, 'visitStatus', sessionPath, ['completed', 'follow_up']);
       choice(session, 'treatmentStage', sessionPath, ['single', 'first', 'second', 'third', 'follow_up']);
+      timestamp(session,'treatmentCompletedAt',sessionPath);text(session,'treatmentCompletedBy',sessionPath,{max:128});
       choice(session, 'rootCanalStatus', sessionPath, ['access_cleaning', 'working_length', 'canal_filled', 'impression', 'final_restoration']); bool(session, 'isWalkIn', sessionPath);
       list(session, 'paymentsLog', sessionPath, receipt, { defaults: true });
       list(session, 'services', sessionPath, (service, servicePath) => {

@@ -33,6 +33,7 @@ import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDat
 import { createPatientDirectoryIndex, normalizeDirectoryDigits, searchPatientDirectory, type PatientDirectorySort } from '../../utils/patientDirectory';
 import { createPatientRegistrationIndex, findPatientRegistrationMatches, getNextPatientFileNo } from '../../utils/patientRegistration';
 import './patientDirectory.css';
+import {isTreatmentOngoing} from '../../utils/clinicalWorkflow';
 
 const clinicDateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' });
 const clinicToday = () => clinicDateFormatter.format(new Date());
@@ -42,6 +43,7 @@ const emptyLabCases: LabCase[] = [];
 const emptyContacts: ClinicContact[] = [];
 
 interface PatientsViewProps {
+  nextFileNo?: string;
   patients: Patient[];
   contacts?: ClinicContact[];
   appointments?: Appointment[];
@@ -86,6 +88,7 @@ const highlightText = (text: string, query: string) => {
 };
 
 export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
+  nextFileNo,
   patients,
   contacts = emptyContacts,
   appointments = emptyAppointments,
@@ -149,6 +152,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   // Form State for Add / Edit Patient
   const [fileNo, setFileNo] = useState('');
+  useEffect(()=>{if(isModalOpen&&!editingPatient&&nextFileNo)setFileNo(nextFileNo);},[isModalOpen,editingPatient,nextFileNo]);
   const [name, setName] = useState('');
   const [mobile, setMobile] = useState('');
   const [age, setAge] = useState<number | ''>('');
@@ -161,7 +165,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
   const handleOpenAddModal = () => {
     setEditingPatient(null);
-    setFileNo(getNextPatientFileNo(patients));
+    setFileNo(nextFileNo || getNextPatientFileNo(patients));
     setName('');
     setMobile('');
     setAge('');
@@ -321,7 +325,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const patientSummaries = useMemo(() => new Map(patients.map(p => {
     const totalRemain = getPatientFinancialSummary(p).totalRemaining;
     const hasAllergy = Boolean(p.allergy && p.allergy.trim());
-    const hasIncompleteTreatment = p.sessions ? p.sessions.some(s => s.visitStatus === 'follow_up' || (s.treatmentStage && s.treatmentStage !== 'single')) : false;
+    const hasIncompleteTreatment = p.sessions ? p.sessions.some(isTreatmentOngoing) : false;
     const lastSessionDate = (p.sessions || []).reduce<string | undefined>((latest, session) =>
       session.date && (!latest || session.date > latest) ? session.date : latest, undefined);
 
@@ -335,7 +339,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   })), [patients]);
   const patientMetrics = useMemo(() => {
     const todayPatients = new Set(appointments.filter(a => a.date === todayStr && !['cancelled', 'no_show', 'apologized'].includes(a.status)).flatMap(a => [a.patientId, a.fileNo].filter(Boolean)));
-    const labPatients = new Set(labCases.filter(c => c.status !== 'completed').map(c => c.patientId));
+    const labPatients = new Set(labCases.filter(c => !['completed','delivered'].includes(c.status)).map(c => c.patientId));
     return new Map(patients.map(patient => [patient.id, { ...patientSummaries.get(patient.id)!,
       hasTodayAppointment: todayPatients.has(patient.id), hasLabCase: labPatients.has(patient.id) }]));
   }, [patients, patientSummaries, appointments, labCases, todayStr]);

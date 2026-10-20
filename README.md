@@ -28,3 +28,7 @@ pnpm build
 راجع [نتائج الاختبار](portable/VERIFICATION.ar.md) و[المراجعة البصرية والأداء](portable/DESIGN-REVIEW.ar.md). الصلاحيات والحسابات المالية تُفرض في PHP؛ لا يُعد إخفاء زر حمايةً للبيانات. النسخ الاحتياطية المستقبلية من النظام وSQL تبقى خاصة. لا اتصال بالمشروع السحابي القديم أو تعديل بياناته.
 
 قسم [تحديث النظام](portable/UPDATE.ar.md) للمدير: حزمة ZIP موقّعة، فحص توافق ومعاينة، نسخة رجوع مشفرة خاصة، صيانة تمنع الحفظ، تحديث الكود وترحيلات وصفية آمنة، وفحص تشغيل بالإصدار الجديد قبل النجاح. استعادة مستقلة عند الفشل وبديل يدوي للاستضافات المقيدة. لا استضافة محددة أو نشر حي ضمن هذا الإصدار. `pnpm test:updates` يختبر النجاح والفشل على قاعدة محلية مملوءة مصطنعة؛ `pnpm package:update` يعد الحزم المستقبلية دون وضع مفتاح التوقيع الخاص في المصدر أو الاستضافة.
+# Patient/laboratory workflow v6
+
+`php-mysql-6-workflow` keeps the existing interface and schema. It fixes live contact identity, server-issued file numbers after archiving, explicit treatment closure/reopening, dated prescription history, casual-visit tooth display, and date-ordered supplier payment allocation. See `portable/WORKFLOW.ar.md`. Signed updates accept v4 or v5; never re-run the installer on an existing database.
+

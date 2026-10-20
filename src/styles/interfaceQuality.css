@@ -5,7 +5,8 @@
   --clinic-motion-fast: 140ms;
   --clinic-focus: color-mix(in srgb, var(--primary) 28%, transparent);
 }
-.clinic-workspace { isolation: isolate; }
+/* Dialogs mounted inside the workspace must layer above the fixed dock/header. */
+.clinic-workspace { isolation: auto; }
 .clinic-workspace :where(section, article, header, footer, fieldset) { min-inline-size: 0; }
 .clinic-workspace :where(h1,h2,h3,h4) { text-wrap: balance; }
 .clinic-workspace :where(p,small,label) { line-height: 1.65; }
