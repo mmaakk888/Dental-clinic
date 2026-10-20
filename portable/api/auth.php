@@ -49,6 +49,12 @@ final class Auth {
         $u=$this->current();$seconds=$remember?$this->config['remember_seconds']:$this->config['session_seconds'];$expires=time()+$seconds;
         $this->db->q('UPDATE dc_sessions SET expires_at=? WHERE token_hash=? AND user_id=?',[$expires,hash('sha256',$this->token()),$u['id']]);$this->setCookie($this->token(),$remember?$expires:0);
     }
+    public function reauthenticate(string $password):array {
+        $u=$this->current();permit($u,'backup');$bucket=hash('sha256','backup-reauth:'.$u['id']);$this->throttle($bucket,10);
+        $row=$this->db->one('SELECT password_hash FROM dc_users WHERE id=?',[$u['id']]);
+        if(strlen($password)>72||!password_verify($password,$row['password_hash']??''))reject('كلمة سر المدير غير صحيحة.',403);
+        $this->db->q('DELETE FROM dc_login_limits WHERE bucket=?',[$bucket]);return $u;
+    }
     public function logout(bool $clear=true):void {if($this->token()){$row=$this->db->one('SELECT user_id FROM dc_sessions WHERE token_hash=?',[hash('sha256',$this->token())]);$this->db->q('DELETE FROM dc_sessions WHERE token_hash=?',[hash('sha256',$this->token())]);if($clear&&$row)$this->audit($row['user_id'],'auth.logout');}if($clear)$this->setCookie('',time()-3600);}
     public function reset(array $input):void {
         $token=$input['token']??'';$password=$input['password']??'';if(!is_string($token)||!preg_match('/^[a-f0-9]{64}$/D',$token)||!is_string($password)||strlen($password)<12||strlen($password)>4096)reject('رابط أو كلمة سر غير صالحين.');

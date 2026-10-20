@@ -12,3 +12,6 @@ coverage/
 review-proofs/
 portable/private/config.php
 migration-private/
+*.clinicbackup
+clinic-decryption-key-*.json
+*.private.sql

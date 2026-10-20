@@ -5,7 +5,7 @@ DirectoryIndex index.html
   Header always set Cache-Control "no-cache"
  </IfModule>
 </FilesMatch>
-<FilesMatch "\.(sql|log|env|ini|bak|zip|sqlite|db)$">
+<FilesMatch "\.(sql|log|env|ini|bak|zip|sqlite|db|clinicbackup)$|^clinic-decryption-key-.*\.json$">
  Require all denied
 </FilesMatch>
 <IfModule mod_headers.c>

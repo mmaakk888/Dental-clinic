@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Explicit, synthetic loopback test database only. Never accepts production DSN.
-$name=$argv[1]??'';$output=$argv[2]??'';$port=(int)($argv[3]??4186);if(!in_array($port,[4186,4189],true))exit(2);
+$name=$argv[1]??'';$output=$argv[2]??'';$port=(int)($argv[3]??4186);if(!in_array($port,[4186,4189,4192],true))exit(2);
 if(!preg_match('/^test_clinic_portable_[a-f0-9]{12}$/D',$name)||!$output)exit(2);
 $pdo=new PDO('mysql:host=127.0.0.1;port=33307;charset=utf8mb4','root','LocalSyntheticOnly_MigrationTest_2026',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
 $pdo->exec('CREATE DATABASE `'.$name.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');$pdo->exec('USE `'.$name.'`');

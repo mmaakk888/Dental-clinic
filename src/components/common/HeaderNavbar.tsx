@@ -128,6 +128,14 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   const visibleExpenses = canAccessView(currentUser, 'summary') && canPerformAction(currentUser, 'view_expenses') && !isPrivacyMode ? expenses : EMPTY_RECORDS;
   const canSettings = canAccessView(currentUser, 'settings');
   const canBackup = canSettings && canPerformAction(currentUser, 'backup_restore');
+  const [backupWarning,setBackupWarning]=useState('');
+  useEffect(()=>{
+    let active=true,lastRead=0;
+    const read=async()=>{if(!portable||!canBackup||isPrivacyMode||document.hidden||Date.now()-lastRead<15000)return;lastRead=Date.now();try{const response=await portable.backupRequest();const value=await response.json();if(active&&response.ok&&value.ok){const s=value.result;setBackupWarning(s.state.failure||(s.policy.weeklyRequested&&!s.capabilities.weeklyActive?'النسخ الأسبوعي غير مفعل أو انقطع رصد المهمة؛ راجع قسم النسخ الاحتياطي.':''));}}catch{/* This only reads status; it never runs a backup or a scheduler. */}};
+    if(!canBackup||isPrivacyMode)setBackupWarning('');else void read();
+    const timer=setInterval(()=>void read(),300000);window.addEventListener('focus',read);
+    return()=>{active=false;clearInterval(timer);window.removeEventListener('focus',read);};
+  },[portable,canBackup,isPrivacyMode,accountKey]);
   const notifications = useMemo(() => buildClinicNotifications({
     patients: canPatientFinance ? visiblePatients : EMPTY_RECORDS, appointments: visibleAppointments, labCases: visibleLabCases, today,
   }), [canPatientFinance, visiblePatients, visibleAppointments, visibleLabCases, today]);
@@ -143,6 +151,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   };
 
   return <>
+    {canBackup&&!isPrivacyMode&&backupWarning&&<aside role="alert" dir="rtl" className="mx-3 my-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><span>تنبيه النسخ الاحتياطي: {backupWarning}</span><button className="cc-button" onClick={()=>onNavigate('settings','backup')}>مراجعة النسخ الاحتياطي</button></aside>}
     <header className="clinic-topbar" dir="rtl" aria-label="الحساب وأدوات العيادة">
       <div className="clinic-topbar-inner">
         <button type="button" className="clinic-topbar-account" onClick={() => setOverlay('account')}

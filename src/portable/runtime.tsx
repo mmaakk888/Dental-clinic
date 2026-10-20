@@ -7,6 +7,7 @@ type Snapshot={schemaVersion:1;revision:number;user:User;users:User[];domain:any
 export interface PortableRuntime {
  storage:typeof LocalStorage; currentUser():User|null; authenticate(username:string,password:string):Promise<User>;
  action(action:string,args:unknown):Promise<any>; read(action:string):Promise<any>; refresh():Promise<void>; remember(value:boolean):Promise<void>; logout():Promise<void>;
+ backupRequest(form?:FormData):Promise<Response>;
  prescriptionHeader():{doctorName:string;phone:string;address:string}|undefined;
  subscribe(listener:()=>void):()=>void; pending():boolean; error():string; retry():Promise<void>; cancel():Promise<void>;
 }
@@ -46,6 +47,7 @@ export function createPortableRuntime(endpoint:URL):PortableRuntime {
   throw Error('عملية التخزين المحلي غير متاحة في نسخة PHP: '+name);
  }}) as typeof LocalStorage;
  const runtime:PortableRuntime={storage,currentUser:()=>snapshot?.user??null,prescriptionHeader:()=>snapshot?.settings.prescriptionHeader,read:action=>request(undefined,action),
+  async backupRequest(form){if(!snapshot||!['admin','doctor'].includes(snapshot.user.role))throw Error('النسخ والنقل للمدير فقط.');if(pending||recovery?.userId===snapshot.user.id)throw Error('تحقق من العملية المعلقة أولًا.');const response=await fetch(new URL('backup.php',endpoint),{method:form?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:form?{'X-CSRF-Token':csrf}:{},...(form?{body:form}:{})});if(response.status===401)clear();return response;},
   refresh(){if(refreshInFlight)return refreshInFlight;const ticket=version;refreshInFlight=(async()=>{const value=await request();if(ticket!==version||value.unchanged===true)return;accept(value);})().finally(()=>{refreshInFlight=null;});return refreshInFlight;},
   async authenticate(username,password){const value=await request({action:'auth.login',args:{username,password}});version++;pending=null;accept(value);return snapshot!.user;},
   async remember(value){await request({action:'auth.remember',args:{remember:value}});},

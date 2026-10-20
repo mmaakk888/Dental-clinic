@@ -13,6 +13,16 @@ return [
     'max_upload_bytes' => 153600,
     'max_logo_bytes' => 2097152,
     'allow_http_loopback' => false,
+    // No private decryption key belongs here. Configure credentials directly on
+    // the new host, never in the UI, GitHub, a backup or JavaScript.
+    'backup' => [
+        'hosting_profile'=>'unknown', // unknown | infinityfree (no cron) | cron
+        'max_plain_bytes'=>16777216, 'max_attachment_bytes'=>5242880,
+        'smtp'=>['host'=>'','port'=>587,'encryption'=>'tls','username'=>'','password'=>'','from'=>''],
+        // An existing PRIVATE WebDAV folder on a DIFFERENT HTTPS host. We verify
+        // PUT + authenticated GET + unauthenticated denial before emailing it.
+        'webdav'=>['url'=>'','username'=>'','password'=>''],
+    ],
     // Optional external AI. No PHI is sent until both flags are explicitly enabled.
     // Verify a current model in your provider account. Never put this key in JS.
     'ai' => ['enabled'=>false,'allow_external_data'=>false,'api_key'=>'','model'=>''],
