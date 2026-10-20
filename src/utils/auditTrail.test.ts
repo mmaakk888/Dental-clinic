@@ -114,7 +114,7 @@ function exerciseAuditAction(props: AuditTrailViewProps, label: string, count = 
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => ({ click: () => outcome.clicks++, remove: () => {} }) } });
   URL.createObjectURL = () => { outcome.blobs++; return 'blob:synthetic-audit'; }; URL.revokeObjectURL = () => {};
   globalThis.setTimeout = ((callback: () => void) => { callback(); return 0; }) as unknown as typeof setTimeout;
-  internals.H = { useState: (initial: any) => [typeof initial === 'function' ? initial() : initial, () => {}], useMemo: (factory: () => unknown) => factory(), useId: () => 'synthetic-id', useContext: () => ({ showToast: (message: string) => outcome.messages.push(message) }) };
+  internals.H = { useState: (initial: any) => [typeof initial === 'function' ? initial() : initial, () => {}], useMemo: (factory: () => unknown) => factory(), useId: () => 'synthetic-id', useEffect: () => {}, useContext: (context: any) => context.displayName === 'ClinicPortableRuntime' ? null : ({ showToast: (message: string) => outcome.messages.push(message) }) };
   try {
     withStorage(JSON.stringify(Array.from({ length: count }, (_, index) => sample({ id: `synthetic-${index}` }))), () => {
       const tree = compiled.exports.component(props);

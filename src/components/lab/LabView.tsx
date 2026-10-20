@@ -800,8 +800,9 @@ export const LabView: React.FC<LabViewProps> = ({
           {filteredCases.length === 0 ? (
             <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
               <Microscope className="w-10 h-10 text-slate-300 mx-auto" />
-              <p className="text-sm font-bold text-slate-700 font-tajawal">لا توجد حالات معمل تطابق التصفية الحالية</p>
-              <p className="text-xs text-slate-500">جرّب تغيير التصفية أو البحث باسم آخر</p>
+              <p className="text-sm font-bold text-slate-700 font-tajawal">{labCases.length ? 'لا توجد حالات معمل تطابق التصفية الحالية' : 'لم تُسجّل أي تركيبة بعد'}</p>
+              <p className="text-xs text-slate-500">{labCases.length ? 'جرّب تغيير التصفية أو البحث باسم آخر' : labs.length ? 'سجّل التركيبة من ملف المريض لربط الجلسة والحساب والمعمل معًا.' : 'أضف معملًا وخدماته وأسعاره أولًا، ثم اضبط المعمل الافتراضي من الإعدادات.'}</p>
+              {!labCases.length && !labs.length && canViewFinancials && <button type="button" className="clinic-next-action" onClick={()=>setActiveTab('labs')}>تجهيز المعامل</button>}
             </div>
           ) : (
             <div className="space-y-4">

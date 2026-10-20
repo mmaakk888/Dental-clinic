@@ -55,12 +55,12 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
 
   // Prescription Header/Footer Customizable Template Data (Defaults match Dr. Mohamed Osama A5 design)
   const [rxDocTitle, setRxDocTitle] = useState('دكتور');
-  const [rxDocName, setRxDocName] = useState(prescriptionHeader === undefined ? 'محمد أسامة عبدالكريم' : prescriptionHeader.doctorName);
-  const [rxDocEnglish, setRxDocEnglish] = useState(prescriptionHeader === undefined ? 'DR. MOHAMED OSAMA' : '');
+  const [rxDocName, setRxDocName] = useState(prescriptionHeader?.doctorName ?? '');
+  const [rxDocEnglish, setRxDocEnglish] = useState('');
   const [rxSpecialty1, setRxSpecialty1] = useState('طب وجراحة الفم والأسنان');
   const [rxSpecialty2, setRxSpecialty2] = useState('تقويم وتجميل الأسنان');
-  const [rxPhone, setRxPhone] = useState(prescriptionHeader === undefined ? '011 4338 4338' : prescriptionHeader.phone);
-  const [rxAddress, setRxAddress] = useState(prescriptionHeader === undefined ? 'طريق اجا السنبلاوين - برج النور الحمص - بجوار الجمعية الزراعية' : prescriptionHeader.address);
+  const [rxPhone, setRxPhone] = useState(prescriptionHeader?.phone ?? '');
+  const [rxAddress, setRxAddress] = useState(prescriptionHeader?.address ?? '');
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
   // Native share/window.open require the current user gesture on iPhone.
   // Never await a network authorization immediately before invoking them.

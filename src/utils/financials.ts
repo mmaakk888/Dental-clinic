@@ -46,7 +46,7 @@ const positiveMoney = (value: number | undefined): number =>
 export function getSessionCollected(session: Session): number {
   const activePayments = (session.paymentsLog || []).filter(payment => !payment.voidedAt);
   if ((session.paymentsLog || []).length > 0) {
-    return sumFinancialAmounts(activePayments.map(payment => positiveMoney(payment.amount)));
+    return sumFinancialAmounts([positiveMoney(session.legacyOpeningPaid),...activePayments.map(payment => positiveMoney(payment.amount))]);
   }
   return positiveMoney(session.paid);
 }
@@ -70,7 +70,7 @@ export function appendSessionReceipt(session: Session, receipt: PaymentInstallme
   return { ...session, paymentsLog, paid, remain: Math.max(0, sumFinancialAmounts([positiveMoney(session.amount), -positiveMoney(session.discount), -paid])) };
 }
 
-function getIndependentGeneralPayments(patient: Patient) {
+export function getIndependentGeneralPayments(patient: Patient) {
   const sessionPaymentIds = new Set(
     patient.sessions.flatMap(session => (session.paymentsLog || []).map(payment => payment.id))
   );
@@ -234,7 +234,7 @@ export function calculateDailyCollections(
       const installmentPaidInPeriod = sumFinancialAmounts(installmentsInPeriod.map(p => positiveMoney(p.amount)));
 
       // Legacy sessions may have only a paid total and no receipt log.
-      const legacyPaidInPeriod = (session.paymentsLog || []).length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
+      const legacyPaidInPeriod = session.legacyOpeningPaid === undefined && (session.paymentsLog || []).length === 0 && session.paid > 0 && dateFilterFn(session.payDate || session.date)
         ? positiveMoney(session.paid)
         : 0;
       const paidInPeriod = sumFinancialAmounts([installmentPaidInPeriod, legacyPaidInPeriod]);
@@ -278,7 +278,7 @@ export function calculateDailyCollections(
         // again or move money to another service when an intervening date is
         // excluded. This is reporting only, never a rewrite of receipt history.
         const distribution = { examFeePaid: 0, services: servicesList.map(service => ({ ...service, paid: 0 })) };
-        let collectedBefore = 0;
+        let collectedBefore = positiveMoney(session.legacyOpeningPaid);
         for (const receipt of [...allActiveInstallments].sort((a, b) => a.date.localeCompare(b.date))) {
           const before = distributePaymentToServices(examFee, servicesList, collectedBefore, discountAmt);
           collectedBefore = sumFinancialAmounts([collectedBefore, positiveMoney(receipt.amount)]);

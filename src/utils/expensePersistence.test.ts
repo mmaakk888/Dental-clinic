@@ -20,7 +20,7 @@ function callback(file: URL, name: string, dependencies: Record<string, unknown>
   const code = ts.transpileModule(`return (${expression.getText(ast)});`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
-  return new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
+  return new Function('runtime', 'portable', ...Object.keys(dependencies), code)(undefined, null, ...Object.values(dependencies));
 }
 const basic = (changes: Partial<Expense> = {}): Expense => ({
   id: 'synthetic-expense', title: 'مصروف اختبار', category: 'supplies', amount: 500, date: '2026-10-10', ...changes,

@@ -1,0 +1,3 @@
+<FilesMatch "^(core|auth|store|domain|importer|ai)\.php$">
+ Require all denied
+</FilesMatch>

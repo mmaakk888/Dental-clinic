@@ -7,6 +7,7 @@ import { canPerformAction, canAccessView } from '../../utils/rbac';
 import { buildClinicNotifications, countUnreadNotifications, getLocalNotificationDay } from '../../utils/clinicNotifications';
 import { STORAGE_FAILURE_EVENT } from '../../utils/storage';
 import './HeaderNavbar.css';
+import {usePortableRuntime} from '../../portable/runtime';
 
 const GlobalSearchModal = lazy(() => import('./GlobalSearchModal').then(module => ({ default: module.GlobalSearchModal })));
 const NotificationCenterModal = lazy(() => import('./NotificationCenterModal').then(module => ({ default: module.NotificationCenterModal })));
@@ -88,7 +89,8 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
   const [readState, setReadState] = useState<{ account: string; keys: ReadonlySet<string> }>({ account: accountKey, keys: EMPTY_READ_KEYS });
   const readKeys = readState.account === accountKey ? readState.keys : EMPTY_READ_KEYS;
   const today = useNotificationDay();
-  const { online, queued, pending, failed } = useOfflineSyncStatus();
+  const portable=usePortableRuntime();
+  const { online, queued, pending, failed } = useOfflineSyncStatus(!portable);
   const closeOverlay = useCallback(() => setOverlay(null), []);
   const sheetRef = useAppointmentDialog(overlay === 'account' || overlay === 'status', closeOverlay);
 
@@ -168,11 +170,11 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
             <span className="clinic-topbar-tool-label">{isPrivacyMode ? 'المبالغ مخفية' : 'إخفاء المبالغ'}</span>
           </button>
           <button type="button" className={`clinic-topbar-tool clinic-topbar-status ${storageWarning ? 'clinic-topbar-tool--warning' : ''}`}
-            onClick={() => setOverlay('status')} aria-label={storageWarning ? 'حالة الموقع: ظهر خطأ حفظ، راجع التفاصيل' : 'حالة الموقع: تخزين محلي، عرض التفاصيل'}
-            title="تخزين محلي في هذا المتصفح — تفاصيل الشبكة والنسخ الاحتياطي"
+            onClick={() => setOverlay('status')} aria-label={portable ? 'حالة الموقع: خادم العيادة، عرض التفاصيل' : storageWarning ? 'حالة الموقع: ظهر خطأ حفظ، راجع التفاصيل' : 'حالة الموقع: تخزين محلي، عرض التفاصيل'}
+            title={portable?'حفظ PHP وMySQL — تفاصيل الاتصال والنسخ الاحتياطي':'تخزين محلي في هذا المتصفح — تفاصيل الشبكة والنسخ الاحتياطي'}
             aria-haspopup="dialog" aria-expanded={overlay === 'status'} aria-controls="clinic-status-dialog">
             {storageWarning ? <AlertTriangle aria-hidden="true" /> : <Database aria-hidden="true" />}
-            <span className="clinic-topbar-tool-label">{storageWarning ? 'راجع الحفظ' : 'محلي'}</span>
+            <span className="clinic-topbar-tool-label">{portable?(portable.pending()?'راجع الحفظ':'خادم العيادة'):storageWarning ? 'راجع الحفظ' : 'محلي'}</span>
             <span aria-hidden="true" className={`clinic-topbar-network-dot ${online ? 'is-online' : ''}`} />
           </button>
           <button type="button" className="clinic-topbar-tool clinic-topbar-bell" onClick={() => setOverlay('notifications')}
@@ -206,6 +208,11 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
             {canSettings && <button type="button" className="clinic-topbar-menu-action" onClick={() => navigateFromSheet('settings')}><Sliders aria-hidden="true" /><span>إعدادات العيادة<small>الهوية والخدمات والحسابات والبيانات</small></span><ArrowLeft aria-hidden="true" /></button>}
             <p className="clinic-topbar-note">التنقل بين الأقسام متاح من الشريط السفلي. إخفاء المبالغ لا يحوّل الصفحة إلى شاشة مريض مستقلة.</p>
             <button type="button" className="clinic-topbar-logout" onClick={() => { closeOverlay(); onLogout(); }}><LogOut aria-hidden="true" />تسجيل الخروج من الحساب</button>
+          </> : portable ? <>
+            <div className="clinic-topbar-local-notice"><Database aria-hidden="true"/><div><h3>حفظ مشترك على MySQL</h3><p>التعديلات تُحفظ على خادم العيادة بعد تأكيده، ولا تُحفظ ملفات المرضى في المتصفح كبديل. تُحدّث البيانات كل دقيقة أثناء فتح الصفحة، وليست مزامنة لحظية أو عملًا دون إنترنت.</p></div></div>
+            <p role="status">{portable.pending()?'توجد محاولة تحتاج تأكيدًا أو إلغاءً من الخادم.':'لا توجد محاولة حفظ معلقة في هذه الصفحة.'}</p>
+            <button type="button" className="clinic-topbar-primary" onClick={()=>void portable.refresh().then(closeOverlay).catch(()=>{})}>تحديث بيانات الخادم الآن</button>
+            {canBackup&&<button type="button" className="clinic-topbar-secondary" onClick={()=>navigateFromSheet('settings','excel')}>النسخ الاحتياطي والتصدير</button>}
           </> : <>
             <div className="clinic-topbar-local-notice"><Database aria-hidden="true" /><div><h3>النسخة تعمل بتخزين محلي</h3><p>السجلات موجودة في متصفح هذا الجهاز، وليست قاعدة مشتركة بين الأجهزة. هذه الحالة ليست تأكيدًا لنجاح آخر حفظ أو وجود نسخة احتياطية.</p></div></div>
             {storageWarning && <p role="alert" className="clinic-topbar-save-warning">ظهر خطأ حفظ خلال هذه الجلسة. راجع رسالة الخطأ وأعد المحاولة قبل إغلاق المسودة؛ لا تعتبر التعديل محفوظًا.</p>}

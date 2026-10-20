@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Storage, STORAGE_FAILURE_EVENT, SERVICE_CATALOG_STORAGE_KEYS, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS } from './storage';
 import { LabCase, User } from '../types';
-import { INITIAL_PATIENTS } from '../data/initialData';
+import { INITIAL_PATIENTS } from './testing/legacyFixtures';
 import { DEFAULT_THEME, DEFAULT_UI_LABELS } from '../data/initialData';
 import { normalizeNavigationOrder } from './clinicContent';
 import { cloneServiceCatalog } from './serviceCatalog';
@@ -135,11 +135,11 @@ test('account checks observe updated permissions from another tab rather than st
   assert.equal(Storage.getUsers()[0].permissions.patientEdit, false);
 });
 
-test('only exact untouched legacy demo records receive the aggregate marker', () => {
+test('empty production defaults never auto-classify a saved patient as a demo aggregate', () => {
   const oldFixture = { ...INITIAL_PATIENTS[0], payments: INITIAL_PATIENTS[0].payments.map(({ legacyAggregate: _marker, ...payment }) => payment) };
   Storage.savePatients([oldFixture, { ...oldFixture, id: 'real-501', name: 'مريض حقيقي' }]);
   const records = Storage.getPatients();
-  assert.equal(records[0].payments[0].legacyAggregate, true);
+  assert.equal(records[0].payments[0].legacyAggregate, undefined);
   assert.equal(records[1].payments[0].legacyAggregate, undefined);
 });
 

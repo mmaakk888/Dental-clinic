@@ -204,7 +204,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
               ))}
             </div>
           ) : (
-            <div className="dashboard-empty"><CheckCircle2 aria-hidden="true" /><strong>لا توجد مواعيد مسجلة اليوم</strong><span>يمكنك إضافة موعد جديد من جدول المواعيد.</span></div>
+            <div className="dashboard-empty"><CheckCircle2 aria-hidden="true" /><strong>لا توجد مواعيد مسجلة اليوم</strong><span>{!canPatients ? 'تظهر هنا المواعيد المتاحة لحسابك عند تسجيلها.' : patients.length ? 'يمكنك متابعة الحجوزات من جدول المواعيد.' : 'ابدأ بإضافة أول مريض، ثم سجّل موعده من ملفه.'}</span>{!patients.length && canPatients && canPerformAction(user,'add_patient') && <button type="button" className="clinic-next-action" onClick={()=>onNavigate('patients')}>إضافة أول مريض</button>}</div>
           )}
           {stats.dayAppointments.length > layout.appointmentLimit && <p className="home-schedule-more">يظهر {layout.appointmentLimit.toLocaleString('ar-EG')} من {stats.dayAppointments.length.toLocaleString('ar-EG')} مواعيد اليوم. باقي المواعيد في الجدول الكامل.</p>}
         </section>}

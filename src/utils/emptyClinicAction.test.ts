@@ -79,7 +79,7 @@ function createHarness(options: { currentUser?: SyntheticAccount; users?: Synthe
     window: { location: { reload: record('forbidden-reload') } },
     ...Object.fromEntries(Object.keys(clearedViews).map(name => [name, record(name)])),
   };
-  const action = new Function(...Object.keys(dependencies), executable)(...Object.values(dependencies)) as () => Promise<void>;
+  const action = new Function('runtime', 'portable', ...Object.keys(dependencies), executable)(undefined, null, ...Object.values(dependencies)) as () => Promise<void>;
   return { action, calls, release, replaceUsers: (next: SyntheticAccount[]) => { users = next; } };
 }
 

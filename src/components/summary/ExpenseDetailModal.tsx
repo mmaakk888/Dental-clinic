@@ -4,6 +4,9 @@ import { Expense, ExpenseItem } from '../../types';
 import { getExpensePaymentSummary } from '../../utils/expenseUtils';
 import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import {usePortableRuntime} from '../../portable/runtime';
+import {canPerformAction} from '../../utils/rbac';
+import {localDateISO} from '../appointments/appointmentScheduling';
 
 interface ExpenseDetailModalProps {
   expense: Expense | null;
@@ -16,7 +19,7 @@ interface ExpenseDetailModalProps {
 }
 
 export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
-  expense,
+  expense:providedExpense,
   isOpen,
   onClose,
   onEdit,
@@ -24,6 +27,10 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   canExportData = false,
   onAuthorizeDataExport,
 }) => {
+  const portable=usePortableRuntime();
+  const expense=portable&&providedExpense?portable.storage.getExpenses().find(row=>row.id===providedExpense.id)??providedExpense:providedExpense;
+  const [payment,setPayment]=useState(''),[paymentDate,setPaymentDate]=useState(localDateISO),[paying,setPaying]=useState(false);
+  const payingRef=useRef(false);
   const { showToast } = useToastAndConfirm();
   const canDownloadImage = canExportData && !isPrivacyMode && Boolean(onAuthorizeDataExport);
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -218,6 +225,16 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
           </div>
 
           {/* Price Variance Alerts Banner if present */}
+          {portable&&!isPrivacyMode&&canPerformAction(portable.currentUser(),'view_expenses')&&<section className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 space-y-3" aria-label="دفعات المورد">
+            <h4 className="font-bold">سجل دفعات المورد</h4>
+            {(expense.paymentsLog??[]).map(receipt=><p key={receipt.id} className="flex justify-between gap-3 text-sm"><time>{receipt.date}</time><bdi>{maskMoney(receipt.amount)}</bdi></p>)}
+            {!!expense.legacyOpeningPaid&&<p className="text-sm">رصيد مسدد تاريخيًا دون إيصالات مؤرخة: {maskMoney(expense.legacyOpeningPaid)}. لا يُعد دفعة جديدة.</p>}
+            {financial.remaining>0&&<form className="flex flex-wrap items-end gap-3" onSubmit={async event=>{event.preventDefault();if(payingRef.current)return;payingRef.current=true;setPaying(true);try{await portable.action('expense.payment',{id:expense.id,amount:Number(payment),date:paymentDate});setPayment('');showToast('تم تسجيل دفعة المورد دون إنشاء مصروف آخر.','success');}catch(error){showToast(error instanceof Error?error.message:'لم يتأكد الحفظ.','error');}finally{payingRef.current=false;setPaying(false);}}}>
+              <label className="text-sm">مبلغ الدفعة<input required type="number" min="0.01" max={financial.remaining} step="0.01" value={payment} disabled={paying} onChange={event=>setPayment(event.target.value)} className="block rounded-xl border bg-white p-2"/></label>
+              <label className="text-sm">تاريخ الدفع<input required type="date" value={paymentDate} disabled={paying} onChange={event=>setPaymentDate(event.target.value)} className="block rounded-xl border bg-white p-2"/></label>
+              <button type="submit" disabled={paying} className="rounded-xl bg-indigo-700 px-4 py-3 font-bold text-white">{paying?'جارٍ الحفظ…':'تسجيل دفعة فعلية'}</button>
+            </form>}
+          </section>}
           {expense.priceVarianceAlerts && expense.priceVarianceAlerts.length > 0 && (
             <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />

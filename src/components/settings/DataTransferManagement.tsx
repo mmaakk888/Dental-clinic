@@ -11,6 +11,8 @@ import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { downloadLocalClinicBackup, localBackupSectionSummary, readLocalClinicBackup, type LocalBackupPreview } from '../../utils/localClinicBackup';
 import './ClinicContacts.css';
 import './DataTransferManagement.css';
+import {usePortableRuntime} from '../../portable/runtime';
+import {PortableBackupPanel} from './PortableBackupPanel';
 
 type AuthorizationKind = 'patients' | 'patient_finance' | 'financial_report' | 'full_backup';
 const defaultColumns: PatientExportColumns = { id: true, name: true, mobile: true, age: true, firstVisit: true, allergy: false, notes: false, gender: false, totalRequired: false, totalPaid: false, totalRemain: false };
@@ -126,6 +128,7 @@ export function DataTransferManagement({ patients, contacts, canTransferData = f
   canManageFullBackup?: boolean; onGetFullBackupSnapshot: () => Promise<unknown>; onRestoreFullData: (input: unknown) => Promise<void>;
 }) {
   const id = `data-transfer-${useId().replace(/[^\w-]/g, '')}`;
+  const portable=usePortableRuntime();
   const [section, setSection] = useState<'patients' | 'contacts' | 'reports' | 'backup'>('patients'), [dialog, setDialog] = useState<'patients-import' | 'contacts-import' | 'contacts-export' | 'backup-restore' | null>(null);
   const [columns, setColumns] = useState(defaultColumns), [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const { showToast } = useToastAndConfirm();
@@ -167,7 +170,8 @@ export function DataTransferManagement({ patients, contacts, canTransferData = f
       <div className="dt-notice"><AlertCircle aria-hidden="true" /><p>نفس دليل جهات الاتصال وواتساب: أرقام الملفات والأرقام المستقلة، مع جميع أرقام الملفات المطابقة للرقم العائلي. التصدير يشمل القائمة كلها أو نتائج البحث والتصفية. الاستيراد لا يفتح ملفات ولا يغيّر الموافقة على الحملات.</p></div>
     </div>}
     {section === 'reports' && canExportFinancialReports && <div className="dt-section"><h3>التقرير المالي والتحصيلات</h3><p>سجل التحصيلات المسموح لهذا الحساب، بصيغة CSV. ليس نسخة كاملة لسجلات المرضى.</p><div className="dt-actions"><button type="button" className="cc-button" onClick={onExportFinancialReport}><Download aria-hidden="true" />تنزيل التقرير المالي CSV</button></div></div>}
-    {section === 'backup' && canManageFullBackup && <div className="dt-section"><div><h3>نسخة محلية كاملة للعيادة</h3><p>تحفظ المرضى والجلسات والإيصالات والمواعيد والمعامل والمصروفات والخامات والحسابات والفهارس والهوية وترتيب الشريط في ملف JSON.</p></div><div className="dt-notice dt-notice-warning"><AlertCircle aria-hidden="true" /><p>الملف غير مشفّر ويحتوي بيانات طبية ومالية وبيانات دخول مجزّأة. لا ترسله في المحادثات أو ترفعه إلى GitHub. مفاتيح الخدمات والجلسة وتذكر الدخول ليست ضمن النسخة. لا رفع إلى السحابة ولا مزامنة أجهزة من هذه الأدوات.</p></div><div className="dt-actions"><button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => void exportBackup()}><Download aria-hidden="true" />{saving ? 'جارٍ تجهيز النسخة…' : 'تنزيل نسخة كاملة JSON'}</button><button type="button" className="cc-button" disabled={saving} onClick={() => setDialog('backup-restore')}><Upload aria-hidden="true" />اختيار نسخة للاستعادة</button></div><p>نزّل نسخة قبل تحديث البرنامج أو الاستعادة. لا تمسح بيانات المتصفح؛ قد تكون النسخة الوحيدة للعيادة.</p></div>}
+    {section === 'backup' && canManageFullBackup && !portable && <div className="dt-section"><div><h3>نسخة محلية كاملة للعيادة</h3><p>تحفظ المرضى والجلسات والإيصالات والمواعيد والمعامل والمصروفات والخامات والحسابات والفهارس والهوية وترتيب الشريط في ملف JSON.</p></div><div className="dt-notice dt-notice-warning"><AlertCircle aria-hidden="true" /><p>الملف غير مشفّر ويحتوي بيانات طبية ومالية وبيانات دخول مجزّأة. لا ترسله في المحادثات أو ترفعه إلى GitHub. مفاتيح الخدمات والجلسة وتذكر الدخول ليست ضمن النسخة. لا رفع إلى السحابة ولا مزامنة أجهزة من هذه الأدوات.</p></div><div className="dt-actions"><button type="button" className="cc-button cc-button-primary" disabled={saving} onClick={() => void exportBackup()}><Download aria-hidden="true" />{saving ? 'جارٍ تجهيز النسخة…' : 'تنزيل نسخة كاملة JSON'}</button><button type="button" className="cc-button" disabled={saving} onClick={() => setDialog('backup-restore')}><Upload aria-hidden="true" />اختيار نسخة للاستعادة</button></div><p>نزّل نسخة قبل تحديث البرنامج أو الاستعادة. لا تمسح بيانات المتصفح؛ قد تكون النسخة الوحيدة للعيادة.</p></div>}
+    {section === 'backup' && canManageFullBackup && portable && <PortableBackupPanel />}
     {dialog === 'patients-import' && canImportPatients && <PatientImportDialog patients={patients} onImport={onImportPatients} onAuthorize={onAuthorizePatientImport} onAuthorizeExport={() => onAuthorizeDataExport('patients')} onClose={() => setDialog(null)} />}
     {dialog === 'contacts-import' && canManageContacts && <ContactImportDialog contacts={contacts} patients={patients} onImport={onImportContacts} onAuthorizeExport={onAuthorizeContactExport} onClose={() => setDialog(null)} />}
     {dialog === 'contacts-export' && <ContactExportDialog allRows={toExport(contactRows)} filteredRows={toExport(filtered)} filterActive={!!query || filter !== 'all'} onAuthorizeExport={onAuthorizeContactExport} onClose={() => setDialog(null)} />}

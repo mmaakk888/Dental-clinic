@@ -43,7 +43,7 @@ function harness(rejectCommit = false, initialPatients: Patient[] = [structuredC
     setIsWalkInModalOpen: (open: boolean) => { events.push(`modal:${open}`); },
     handleSelectPatient: (id: string) => { events.push(`select:${id}`); },
   };
-  const save = new Function(...Object.keys(dependencies), executable)(...Object.values(dependencies));
+  const save = new Function('runtime', 'portable', ...Object.keys(dependencies), executable)(undefined, null, ...Object.values(dependencies));
   return { save, events, requestedActions, current: () => data,
     replacePatients: (patients: Patient[]) => { data = { ...data, patients }; } };
 }

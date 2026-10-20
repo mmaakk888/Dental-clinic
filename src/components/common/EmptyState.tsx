@@ -42,8 +42,8 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   };
 
   return (
-    <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-white/60 border border-dashed border-slate-300 rounded-2xl my-4">
-      <div className="w-16 h-16 rounded-2xl bg-[#e4ede9] text-[#0f3d3e] flex items-center justify-center mb-4 shadow-inner">
+    <div className="clinic-empty-state flex flex-col items-center justify-center py-12 px-4 text-center bg-white/60 border border-dashed border-slate-300 rounded-2xl my-4">
+      <div className="clinic-empty-icon w-16 h-16 rounded-2xl flex items-center justify-center mb-4">
         {renderIcon()}
       </div>
       <h3 className="text-lg font-bold text-slate-800 font-tajawal mb-1">
@@ -57,7 +57,8 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       {displayCta && displayHandler && (
         <button
           onClick={displayHandler}
-          className="px-5 py-2.5 rounded-xl bg-[#0f3d3e] hover:bg-[#1b5e5a] text-white text-sm font-bold shadow-md shadow-[#0f3d3e]/20 transition-all cursor-pointer hover:scale-[1.02]"
+          type="button"
+          className="clinic-empty-action"
         >
           {displayCta}
         </button>

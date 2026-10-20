@@ -11,15 +11,16 @@ function readStatus() {
   };
 }
 
-export function useOfflineSyncStatus() {
-  const [status, setStatus] = useState(readStatus);
+export function useOfflineSyncStatus(enabled=true) {
+  const current=()=>enabled?readStatus():{online:navigator.onLine,queued:0,pending:0,failed:0};
+  const [status, setStatus] = useState(current);
   useEffect(() => {
     const update = () => {
-      const next = readStatus();
+      const next = current();
       setStatus(previous => previous.online === next.online && previous.queued === next.queued
         && previous.pending === next.pending && previous.failed === next.failed ? previous : next);
     };
-    const unsubscribe = subscribeOfflineSyncStatus(update);
+    const unsubscribe = enabled?subscribeOfflineSyncStatus(update):()=>{};
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
     // A change between render and subscription must not be missed.
@@ -29,6 +30,6 @@ export function useOfflineSyncStatus() {
       window.removeEventListener('online', update);
       window.removeEventListener('offline', update);
     };
-  }, []);
+  }, [enabled]);
   return status;
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import { ActiveView, NavigationOrigin, LabService, Patient, ClinicContact, Appointment, AppointmentStatus, Lab, LabCase, ThemeSettings, UILabels, User, DeviceMode, Session, MaterialUsage } from './types';
-import { Storage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS, WHATSAPP_SETTINGS_STORAGE_KEY, PRIVACY_MODE_STORAGE_KEY, PROSTHETIC_ROUTING_STORAGE_KEY } from './utils/storage';
+import { Storage as BrowserStorage, STORAGE_FAILURE_EVENT, CLINIC_CONTENT_STORAGE_KEYS, SERVICE_CATALOG_STORAGE_KEYS, DRUG_CATALOG_STORAGE_KEY, LABS_STORAGE_KEY, CLINIC_DOMAIN_STORAGE_KEYS, WHATSAPP_SETTINGS_STORAGE_KEY, PRIVACY_MODE_STORAGE_KEY, PROSTHETIC_ROUTING_STORAGE_KEY } from './utils/storage';
+import type {PortableRuntime} from './portable/runtime';
 import type { ClinicIdentitySettings, ClinicDomainData } from './utils/storage';
 import { withClinicWriteLock } from './utils/clinicWriteLock';
 import { addWalkInRecord, savePatientRecord, savePatientAppointment, deletePatientRecord, addPatientReceipt, importPatientRecords, canonicalFileNumber } from './utils/clinicMutations';
@@ -40,6 +41,8 @@ import { useAppointmentDialog } from './components/appointments/useAppointmentDi
 import { LoginModal } from './components/auth/LoginModal';
 import { OfflineSyncBanner } from './components/common/OfflineSyncBanner';
 import { HomeView } from './components/home/HomeView';
+import { ScreenLoader } from './components/common/ScreenLoader';
+import {activeFontStylesheet} from './utils/fontStylesheet';
 
 // Code-split views & modals via React.lazy for ultra-fast mobile startup and reduced bundle size
 const PatientsView = lazy(() => import('./components/patients/PatientsView').then(m => ({ default: m.PatientsView })));
@@ -60,10 +63,7 @@ const EndodonticHelperModal = lazy(() => import('./components/patient/Endodontic
 
 function ViewFallbackLoader() {
   return (
-    <div className="w-full py-12 flex flex-col items-center justify-center space-y-3 font-cairo dir-rtl animate-fadeIn">
-      <div className="w-10 h-10 border-3 border-purple-600 border-t-transparent rounded-full animate-spin" />
-      <p className="text-xs font-bold text-slate-500">جارٍ تحميل الشاشة...</p>
-    </div>
+    <ScreenLoader />
   );
 }
 
@@ -99,7 +99,8 @@ function ModalOpeningPlaceholder({ onClose }: { onClose: () => void }) {
   </div>;
 }
 
-export function AppContent() {
+export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
+  const Storage = runtime?.storage ?? BrowserStorage;
   useVisibleViewport();
   const { showToast, cancelConfirm } = useToastAndConfirm();
   useEffect(() => {
@@ -117,6 +118,7 @@ export function AppContent() {
 
   // Authentication State. Remembered sessions never persist a password.
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    if (runtime) return runtime.currentUser();
     const savedUsers = Storage.getUsers();
     const remembered = Storage.getRememberedSession();
 
@@ -207,6 +209,20 @@ export function AppContent() {
     setPatients(data.patients); setAppointments(data.appointments); setLabCases(data.labCases);
     setExpenses(data.expenses); setMaterialUsages(data.materialUsages); setContacts(data.contacts);
   }, []);
+
+  useEffect(() => {
+    if (!runtime) return;
+    const refresh = () => {
+      const user = runtime.currentUser();
+      setCurrentUser(user); setIsLoginModalOpen(!user); setUsers(Storage.getUsers());
+      publishDomain(Storage.getDomainData()); setLabs(Storage.getLabsFresh());
+      setServiceCatalog(Storage.getServiceCatalog()); setProstheticRouting(Storage.getProstheticRouting());
+      setClinicName(Storage.getClinicName()); setClinicLogo(Storage.getClinicLogo()); setTheme(Storage.getTheme());
+      const content = Storage.getClinicContent(); setLabels(content.labels); setTileOrder(content.tileOrder);
+      setWhatsappSettings(Storage.getWhatsappSettingsFresh()); setDrugCatalog(Storage.getDrugCatalogFresh());
+    };
+    refresh(); return runtime.subscribe(refresh);
+  }, [runtime, publishDomain]);
 
   const commitDomain = async (actions: RBACAction[], mutate: (data: ClinicDomainData) => ClinicDomainData) => {
     await withClinicWriteLock(() => {
@@ -313,6 +329,7 @@ export function AppContent() {
       isPaid: boolean;
     };
   }) => {
+    if (runtime) return runtime.action('walkin.save', payload);
     requireFreshSettingsPermission(payload.patient.isNew ? 'add_patient' : 'edit_patient');
     requireFreshSettingsPermission('register_payment');
     const serviceItems = payload.visit.services || [];
@@ -507,21 +524,23 @@ export function AppContent() {
   useEffect(() => {
     // Saved custom fonts have one owner. Built-in choices remove a stale link.
     document.getElementById('dynamic-google-font')?.remove();
-    if (!theme.customFontUrl?.trim()) return;
+    const fontUrl=activeFontStylesheet(theme.fontFamily,theme.customFontUrl);
+    if (!fontUrl) return;
     const fontLink = document.createElement('link');
     fontLink.id = 'dynamic-google-font';
     fontLink.rel = 'stylesheet';
-    fontLink.href = theme.customFontUrl;
+    fontLink.href = fontUrl;
     fontLink.onerror = () => showToast('تعذّر تحميل الخط المخصص؛ سيُستخدم الخط البديل مؤقتًا.', 'warning');
     document.head.appendChild(fontLink);
     return () => { fontLink.onerror = null; fontLink.remove(); };
-  }, [theme.customFontUrl, showToast]);
+  }, [theme.fontFamily, theme.customFontUrl, showToast]);
 
   // Domain changes persist explicitly under a cross-tab write lock. Rendering,
   // loading a tab and refreshing another tab must never trigger an autosave.
 
   // Auth Handlers
   const handleAuthenticate = (username: string, password: string): Promise<User> => withClinicWriteLock(async () => {
+    if (runtime) return runtime.authenticate(username, password);
     const previous = Storage.getUsers();
     const authenticated = await authenticateLocalAccount(previous, username, password);
     if (!canUserLoginNow(authenticated.user).allowed) throw new Error('الحساب غير متاح الآن حسب جدول العمل.');
@@ -535,6 +554,7 @@ export function AppContent() {
   });
 
   const handleLoginSuccess = (user: User, rememberMe: boolean = true) => {
+    if (runtime) { void runtime.remember(rememberMe).catch(error => showToast(error.message, 'error')); setCurrentUser(runtime.currentUser()); setIsLoginModalOpen(false); setActiveView('home'); return; }
     Storage.saveCurrentUser(user);
     if (rememberMe) {
       Storage.saveRememberedSession(Storage.createRememberedSession(user));
@@ -550,6 +570,7 @@ export function AppContent() {
   };
 
   const handleLogout = useCallback(() => {
+    if (runtime) void runtime.logout().catch(() => showToast('لم يتأكد إنهاء جلسة الخادم؛ أعد المحاولة عند رجوع الاتصال.', 'error'));
     cancelConfirm();
     setCurrentUser(null);
     setIsLoginModalOpen(true);
@@ -609,6 +630,7 @@ export function AppContent() {
 
   // Patient Actions
   const handleSavePatient = async (patientData: Omit<Patient, 'sessions' | 'payments'>, originalId?: string, baseline?: Patient) => {
+    if (runtime) return runtime.action('patient.save', {value: patientData, ...(originalId ? {originalId} : {})});
     let savedId = patientData.id;
     await commitDomain([originalId === undefined ? 'add_patient' : 'edit_patient'], data => {
       savedId = originalId === undefined ? getNextPatientFileNo(data.patients) : patientData.id;
@@ -620,6 +642,7 @@ export function AppContent() {
   };
 
   const handleDeletePatient = async (patientId: string) => {
+    if (runtime) return runtime.action('patient.delete', {id: patientId});
     await commitDomain(['delete_patient'], data => deletePatientRecord(data, patientId));
     if (selectedPatientId === patientId) {
       setSelectedPatientId(null);
@@ -628,6 +651,7 @@ export function AppContent() {
   };
 
   const handleSaveSession = (patientId: string, sessionData: Omit<import('./types').Session, 'id'>) => {
+    if (runtime) return runtime.action('visit.save', {patientId, value: sessionData});
     if (sessionData.prosthetic || getServiceGroup(sessionData.type) === 'prosthetic' || sessionData.services?.some(item => getServiceGroup(item.name) === 'prosthetic')) throw new Error('سجّل التركيبة من زر «تركيبة جديدة» لربطها بالمعمل والحساب مرة واحدة.');
     const amountCents = financialMoneyCents(sessionData.amount);
     const paidCents = financialMoneyCents(sessionData.paid);
@@ -663,12 +687,14 @@ export function AppContent() {
   };
 
   const handleSaveProstheticOrder = (input: ProstheticOrderInput) => {
+    if (runtime) return runtime.action('prosthetic.order', {value: input});
     validateProstheticOrder(input);
     return commitDomain(input.paid > 0 ? ['view_patients', 'add_session', 'register_payment'] : ['view_patients', 'add_session'], data =>
       createProstheticOrder(data, input, Storage.getProstheticRouting(), Storage.getLabsFresh(), Storage.getServiceCatalog()));
   };
 
   const handleAddPaymentInstallment = (patientId: string, sessionId: string, installment: { amount: number; date: string }) => {
+    if (runtime) return runtime.action('receipt.add', {patientId, sessionId, value: installment});
     if (!Number.isFinite(installment.amount) || installment.amount <= 0 || !isValidAppointmentDate(installment.date)) throw new Error('راجع مبلغ الدفعة وتاريخ التحصيل.');
     return commitDomain(['register_payment'], data => ({ ...data,
       patients: addPatientReceipt(data.patients, patientId, sessionId, { id: `inst_${crypto.randomUUID()}`,
@@ -676,10 +702,11 @@ export function AppContent() {
   };
 
   // Appointment Actions
-  const handleSaveAppointment = (apptData: Omit<Appointment, 'id'> & { id?: string }, baseline?: Appointment) =>
+  const handleSaveAppointment = (apptData: Omit<Appointment, 'id'> & { id?: string }, baseline?: Appointment) => runtime ? runtime.action('appointment.save', {value: apptData}) :
     commitDomain(['manage_appointments'], data => savePatientAppointment(data, apptData, baseline));
 
   const handleUpdateApptStatus = (apptId: string, status: AppointmentStatus) => {
+    if (runtime) return runtime.action('appointment.status', {id: apptId, status});
     return commitDomain(['manage_appointments'], data => {
       if (!data.appointments.some(appointment => appointment.id === apptId)) throw new Error('الموعد لم يعد موجودًا.');
       if (!['scheduled', 'confirmed', 'waiting', 'attended', 'apologized', 'no_show', 'cancelled'].includes(status)) throw new Error('حالة الموعد غير صالحة.');
@@ -688,11 +715,13 @@ export function AppContent() {
   };
 
   const handleDeleteAppointment = (apptId: string) => {
+    if (runtime) return runtime.action('appointment.delete', {id: apptId});
     return commitDomain(['manage_appointments'], data => ({ ...data, appointments: data.appointments.filter(a => a.id !== apptId) }));
   };
 
   // Lab Actions
   const handleSaveLab = (labData: Omit<Lab, 'id'> & { id?: string }, baseline?: Lab) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('lab.save', {value: labData});
     requireFreshSettingsPermission('manage_lab');
     requireFreshSettingsPermission('view_lab_costs');
     if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل تعديل بيانات المعمل.');
@@ -708,6 +737,7 @@ export function AppContent() {
   });
 
   const handleDeleteLab = (labId: string) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('lab.delete', {id: labId});
     requireFreshSettingsPermission('manage_lab');
     requireFreshSettingsPermission('view_lab_costs');
     if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل حذف المعمل.');
@@ -724,6 +754,7 @@ export function AppContent() {
   });
 
   const handleSaveLabPricing = (labId: string, services: LabService[], baseline: Lab) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('lab.prices', {labId, services});
     requireFreshSettingsPermission('manage_prices');
     requireFreshSettingsPermission('view_lab_costs');
     if (isPrivacyMode) throw new Error('أوقف وضع عرض المريض قبل تعديل تكاليف المعامل.');
@@ -747,6 +778,7 @@ export function AppContent() {
   };
 
   const handleSaveLabCase = (caseData: Omit<LabCase, 'id'> & { id?: string }) => {
+    if (runtime) return runtime.action('lab.legacy', {value: caseData});
     return commitDomain(['manage_lab', 'view_lab_costs'], data => {
     if (caseData.id) {
       const current = data.labCases.find(item => item.id === caseData.id);
@@ -774,6 +806,7 @@ export function AppContent() {
   };
 
   const handleUpdateLabCase = (updatedCase: LabCase) => {
+    if (runtime) return runtime.action('lab.progress', {value: updatedCase});
     return commitDomain(['manage_lab'], data => {
       if (!data.labCases.some(item => item.id === updatedCase.id)) throw new Error('حالة المعمل لم تعد موجودة.');
       return { ...data, labCases: data.labCases.map(c => {
@@ -790,6 +823,7 @@ export function AppContent() {
   };
 
   const handleAddLabCasePayment = (caseId: string, amount: number) => {
+    if (runtime) return runtime.action('lab.payment', {caseId, amount});
     const amountCents = labMoneyCents(amount);
     if (amountCents <= 0) throw new Error('أدخل مبلغًا صحيحًا للمعمل.');
     const receiptId = crypto.randomUUID();
@@ -811,6 +845,7 @@ export function AppContent() {
   };
 
   const handleLabBulkPayment = (labId: string, amount: number) => {
+    if (runtime) return runtime.action('lab.payment', {labId, amount});
     const receiptId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     return commitDomain(['manage_lab', 'view_lab_costs'], data => {
@@ -827,6 +862,7 @@ export function AppContent() {
 
   // Settings Actions
   const handleSaveIdentity = (values: ClinicIdentitySettings) => {
+    if (runtime) return runtime.action('settings.identity', {value: values});
     requireFreshSettingsPermission('access_control_panel');
     Storage.saveClinicIdentity(values);
     setClinicName(values.clinicName);
@@ -835,6 +871,7 @@ export function AppContent() {
   };
 
   const handleSaveContent = (values: ContentDraft) => {
+    if (runtime) return runtime.action('settings.content', {value: values});
     requireFreshSettingsPermission('access_control_panel');
     const latest = Storage.getClinicContent();
     if (JSON.stringify(latest) !== JSON.stringify(cloneContentDraft({ labels, tileOrder }))) {
@@ -913,6 +950,7 @@ export function AppContent() {
   const openHomeInvoice = useCallback(() => openHomeAction('invoice'), [openHomeAction]);
 
   const handleSaveUsers = (newUsers: User[]) => withClinicWriteLock(async () => {
+    if (runtime) throw Error('استخدم محرر حساب الخادم، لا قائمة كلمات السر المحلية.');
     const latest = requireFreshSettingsPermission('manage_users');
     if (JSON.stringify(latest) !== JSON.stringify(users)) {
       setUsers(latest);
@@ -933,6 +971,7 @@ export function AppContent() {
   });
 
   const handleSaveServiceCatalog = (values: ServiceCatalogValues) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('settings.catalog', {value: values});
     requireFreshSettingsPermission('manage_prices');
     const latest = Storage.getServiceCatalog();
     if (JSON.stringify(latest) !== JSON.stringify(cloneServiceCatalog(serviceCatalog))) {
@@ -948,6 +987,7 @@ export function AppContent() {
   });
 
   const handleSaveProstheticRouting = (value: ProstheticRoutingSettings, baseline: ProstheticRoutingSettings) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('settings.routing', {value});
     const authorize = () => {
       const latestUsers = requireFreshSettingsPermission('access_control_panel');
       const owner = latestUsers.find(item => item.id === currentUser?.id);
@@ -967,6 +1007,7 @@ export function AppContent() {
   });
 
   const handleSaveExpense = (expenseData: Omit<import('./types').Expense, 'id'> & { id?: string }, baseline?: import('./types').Expense) => {
+    if (runtime) return runtime.action('expense.save', {value: expenseData});
     return commitDomain(['view_expenses'], data => {
     if (Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل تعديل المصروفات.');
     if (!Number.isFinite(expenseData.amount) || expenseData.amount < 0 || !isValidAppointmentDate(expenseData.date) || !expenseData.title?.trim()) throw new Error('راجع اسم المصروف ومبلغه وتاريخه.');
@@ -992,10 +1033,12 @@ export function AppContent() {
   };
 
   const handleDeleteExpense = (expenseId: string) => {
+    if (runtime) return runtime.action('expense.delete', {id: expenseId});
     return commitDomain(['view_expenses'], data => ({ ...data, expenses: data.expenses.filter(e => e.id !== expenseId) }));
   };
 
   const handleAddMaterialUsage = (usage: Omit<MaterialUsage, 'id'>) => {
+    if (runtime) return runtime.action('material.usage', {value: usage});
     return commitDomain(['view_expenses'], data => {
       if (!isValidAppointmentDate(usage.date) || !Number.isFinite(usage.quantity) || usage.quantity <= 0 || !['used', 'waste'].includes(usage.kind)) throw new Error('راجع كمية الخامة ونوع الحركة وتاريخها.');
       const material = getInventory(data.expenses, data.materialUsages).find(item => item.key === usage.materialKey);
@@ -1005,9 +1048,10 @@ export function AppContent() {
     });
   };
 
-  const handleDeleteMaterialUsage = (id: string) => commitDomain(['view_expenses'], data => ({ ...data, materialUsages: data.materialUsages.filter(usage => usage.id !== id) }));
+  const handleDeleteMaterialUsage = (id: string) => runtime ? runtime.action('material.delete', {id}) : commitDomain(['view_expenses'], data => ({ ...data, materialUsages: data.materialUsages.filter(usage => usage.id !== id) }));
 
   const handleSaveWhatsappSettings = (settings: import('./types').WhatsappSettings) => withClinicWriteLock(() => {
+    if (runtime) return runtime.action('settings.whatsapp', {value: settings});
     requireFreshSettingsPermission('access_control_panel');
     const latest = Storage.getWhatsappSettingsFresh();
     if (JSON.stringify(latest) !== JSON.stringify(whatsappSettings)) {
@@ -1018,13 +1062,14 @@ export function AppContent() {
     setWhatsappSettings(settings);
   });
 
-  const handleSaveContact = (contact: ClinicContact, original?: ClinicContact) =>
+  const handleSaveContact = (contact: ClinicContact, original?: ClinicContact) => runtime ? runtime.action('contacts.save', {value: contact, ...(original ? {original} : {})}) :
     commitDomain(['view_patients', 'edit_patient'], data => ({ ...data, contacts: saveClinicContact(data.contacts, contact, original) }));
 
-  const handleDeleteContact = (original: ClinicContact) =>
+  const handleDeleteContact = (original: ClinicContact) => runtime ? runtime.action('contacts.delete', {id: original.id}) :
     commitDomain(['view_patients', 'edit_patient'], data => ({ ...data, contacts: deleteClinicContact(data.contacts, original) }));
 
   const handleImportContacts = async (rows: ContactImportInput[]): Promise<ContactImportSummary> => {
+    if (runtime) return runtime.action('contacts.import', {rows});
     let summary: ContactImportSummary = { addedCount: 0, duplicateCount: 0, invalidCount: 0 };
     await commitDomain(['data_import', 'access_control_panel', 'view_patients', 'edit_patient'], data => {
       const result = applyContactImport(data.contacts, rows);
@@ -1063,6 +1108,7 @@ export function AppContent() {
   };
 
   const handleSaveDrugCatalog = (catalog: import('./types').DrugCatalogItem[]) => {
+    if (runtime) return runtime.action('settings.drugs', {value: catalog});
     requireFreshSettingsPermission('access_control_panel');
     const latest = Storage.getDrugCatalogFresh();
     if (JSON.stringify(latest) !== JSON.stringify(drugCatalog)) {
@@ -1110,17 +1156,19 @@ export function AppContent() {
     if (Storage.getPrivacyModeFresh()) throw new Error('أوقف وضع عرض المريض قبل طباعة بياناته.');
   };
 
-  const handleImportPatients = (imported: Patient[]) => commitDomain(['data_import', 'access_control_panel', 'view_patients', 'add_patient'], latest => {
+  const handleImportPatients = (imported: Patient[]) => runtime ? runtime.action('patients.import', {rows: imported}) : commitDomain(['data_import', 'access_control_panel', 'view_patients', 'add_patient'], latest => {
     const checked = assertClinicBackup({ patients: imported });
     return { ...latest, patients: importPatientRecords(latest.patients, checked.patients!) };
   });
 
-  const handleGetFullBackupSnapshot = () => withClinicWriteLock(() => {
+  const handleGetFullBackupSnapshot = () => withClinicWriteLock(async () => {
+    if (runtime) {await runtime.refresh();authorizeDataExport('full_backup');return (await runtime.read('backup')).backup;}
     authorizeDataExport('full_backup');
     return assertClinicBackup(Storage.getBackupDataFresh());
   });
 
   const handleRestoreFullData = (input: unknown) => withClinicWriteLock(async () => {
+    if (runtime) return runtime.action('backup.restore', {value: input});
     requireFreshSettingsPermission('data_import');
     authorizeDataExport('full_backup');
     const latest = Storage.getDomainData();
@@ -1142,6 +1190,7 @@ export function AppContent() {
   });
 
   const handleClearOperationalData = () => withClinicWriteLock(() => {
+    if (runtime) throw Error('مسح سجلات الخادم غير متاح من زر المسح المحلي؛ استخدم نسخة احتياطية وأداة إدارة القاعدة.');
     authorizeDataExport('full_backup');
     const latestUser = Storage.getUsers().find(user => user.id === currentUser?.id);
     if (latestUser?.role !== 'admin' && latestUser?.role !== 'doctor') throw new Error('بدء عيادة فارغة متاح للطبيب أو مدير النظام فقط.');
@@ -1186,7 +1235,7 @@ export function AppContent() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[var(--bg-main)] text-[#17262a] font-['Cairo',sans-serif] flex flex-col transition-colors">
-      <OfflineSyncBanner />
+      {!runtime && <OfflineSyncBanner />}
       <HeaderNavbar
         activeView={activeView}
         labels={labels}
@@ -1279,6 +1328,7 @@ export function AppContent() {
                 clinicName={clinicName}
                 clinicLogo={clinicLogo}
                 whatsappSettings={whatsappSettings}
+                prescriptionHeader={runtime?.prescriptionHeader()}
                 onAuthorizeWhatsappSend={authorizeWhatsappSend}
                 readWhatsappSettings={Storage.getWhatsappSettingsFresh}
                 drugCatalog={drugCatalog}
@@ -1311,7 +1361,8 @@ export function AppContent() {
 
           {activeView === 'appointments' && (
             canAccessView(currentUser, 'appointments') ? (
-              <AppointmentsView
+              <AppointmentsView localAuditEnabled={!runtime}
+                onAddFirstPatient={canPerformAction(currentUser,'add_patient') ? () => handleNavigateWithSubTab('patients') : undefined}
                 appointments={appointments}
                 patients={patients}
                 onSelectPatient={handleSelectPatient}

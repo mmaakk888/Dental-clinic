@@ -33,7 +33,7 @@ function harness() {
       actions.push(required); domain = mutate(domain);
     },
   };
-  return { save: new Function(...Object.keys(dependencies), code)(...Object.values(dependencies)) as
+  return { save: new Function('runtime', 'portable', ...Object.keys(dependencies), code)(undefined, null, ...Object.values(dependencies)) as
     (patientId: string, session: Omit<Session, 'id'>) => Promise<void>, current: () => structuredClone(domain), actions };
 }
 

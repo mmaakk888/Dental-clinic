@@ -24,7 +24,7 @@ function appCallback(name: string, dependencies: Record<string, unknown>): any {
   const executable = ts.transpileModule(`return (${expression.getText(parsed)});`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
-  return new Function(...Object.keys(dependencies), executable)(...Object.values(dependencies));
+  return new Function('runtime', 'portable', ...Object.keys(dependencies), executable)(undefined, null, ...Object.values(dependencies));
 }
 const patient = (id = '401'): Patient => ({ id, name: `ملف اختبار مصطنع ${id}`, mobile: '01000000000', age: 30,
   firstVisit: '2026-10-10', notes: '', allergy: '', sessions: [], payments: [] });

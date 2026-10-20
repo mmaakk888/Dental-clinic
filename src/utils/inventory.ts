@@ -21,7 +21,7 @@ export function getInventory(expenses: Expense[], usages: MaterialUsage[]) {
       const key = materialKey(item.itemName, unit);
       const row = map.get(key) ?? { key, name: item.itemName.trim(), unit, purchased: 0, purchaseCost: 0, used: 0, waste: 0 };
       row.purchased += quantity;
-      const total = Number(item.total);
+      const total = Number(item.inventoryCost??item.total);
       row.purchaseCost += Number.isFinite(total) && total >= 0 ? total : quantity * (Number(item.unitPrice) || 0);
       map.set(key, row);
     });
@@ -41,6 +41,7 @@ export function getInventory(expenses: Expense[], usages: MaterialUsage[]) {
 }
 
 function getUsageCost(usage: MaterialUsage, fallbackUnitCost: number) {
+  if(typeof usage.costTotal==='number'&&Number.isFinite(usage.costTotal)&&usage.costTotal>=0)return usage.costTotal;
   const cost = Number.isFinite(usage.unitCostAtUse) && usage.unitCostAtUse >= 0 ? usage.unitCostAtUse : fallbackUnitCost;
   return Math.max(0, Number(usage.quantity) || 0) * cost;
 }

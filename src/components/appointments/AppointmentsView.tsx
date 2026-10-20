@@ -23,6 +23,7 @@ interface AppointmentsViewProps {
   onBackToHome: () => void;
   onEditorChange?: (open: boolean) => void;
   localAuditEnabled?: boolean;
+  onAddFirstPatient?: () => void;
 }
 
 function getWeekDays(referenceDate: Date) {
@@ -73,7 +74,8 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   onUpdateApptStatus,
   onBackToHome,
   onEditorChange,
-  localAuditEnabled = true
+  localAuditEnabled = true,
+  onAddFirstPatient
 }) => {
   const { showToast, validationFail, askConfirm } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
@@ -619,9 +621,9 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
           <EmptyState
             icon={<CalendarIcon className="w-8 h-8 opacity-80" />}
             message={searchQuery.trim() ? 'لا توجد مواعيد مطابقة للبحث' : 'لا توجد مواعيد مسجلة في هذا اليوم'}
-            description={searchQuery.trim() ? 'جرّب اسمًا أو رقم ملف آخر، أو امسح البحث لعرض كل مواعيد اليوم.' : 'احجز موعدًا جديدًا لمريض في هذا التاريخ.'}
-            ctaLabel={searchQuery.trim() ? 'مسح البحث' : 'حجز موعد جديد'}
-            onCtaClick={searchQuery.trim() ? () => setSearchQuery('') : handleOpenAddModal}
+            description={searchQuery.trim() ? 'جرّب اسمًا أو رقم ملف آخر، أو امسح البحث لعرض كل مواعيد اليوم.' : patients.length ? 'احجز موعدًا جديدًا لمريض في هذا التاريخ.' : 'أضف أول ملف مريض من قسم المرضى، ثم حدّد يوم الحجز ووقته.'}
+            ctaLabel={searchQuery.trim() ? 'مسح البحث' : !patients.length && onAddFirstPatient ? 'إضافة أول مريض' : 'حجز موعد جديد'}
+            onCtaClick={searchQuery.trim() ? () => setSearchQuery('') : !patients.length && onAddFirstPatient ? onAddFirstPatient : handleOpenAddModal}
           />
         ) : (
           <div className="grid gap-2.5">

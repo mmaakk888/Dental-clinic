@@ -6,11 +6,13 @@ import { useConfirmedAction } from '../common/useConfirmedAction';
 import { BalanceProgressMeter } from '../common/FinancialBadge';
 import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, isExpenseInvoiceTotalLocked } from '../../utils/expenseUtils';
 import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
 import './SummaryView.css';
+import {usePortableRuntime} from '../../portable/runtime';
 
 type SummaryTab = 'overview' | 'expenses' | 'analytics';
 
@@ -145,7 +147,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [expenseTitle, setExpenseTitle] = useState('');
   const [expenseCategory, setExpenseCategory] = useState<'supplies' | 'fixed' | 'maintenance' | 'other'>('supplies');
+  const portable=usePortableRuntime();
   const [expenseAmount, setExpenseAmount] = useState<number | ''>('');
+  const [expensePaid,setExpensePaid]=useState<number | ''>('');
   const [expenseDate, setExpenseDate] = useState<string>(localDateKey());
   const [expenseNote, setExpenseNote] = useState('');
   const [isFixedExpense, setIsFixedExpense] = useState(false);
@@ -227,6 +231,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   };
 
   // Open modal if external trigger opens add expense
+  const expenseEditorDialogRef=useAppointmentDialog(isExpenseModalOpen&&canViewExpenses,handleCloseExpenseModal);
   React.useEffect(() => {
     if (isOpenAddExpenseModal && !canViewExpenses) {
       onCloseAddExpenseModal?.();
@@ -354,7 +359,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     setExpenseTitle(presetTitle || '');
     setExpenseCategory(presetCat || 'supplies');
     setExpenseType(presetType || (presetCat === 'maintenance' ? 'maintenance' : presetCat === 'supplies' || !presetCat ? 'supplies' : 'other'));
-    setExpenseAmount('');
+    setExpenseAmount('');setExpensePaid('');
     setExpenseDate(localDateKey());
     setExpenseNote('');
     setIsFixedExpense(presetCat === 'fixed' || (presetTitle && !presetTitle.includes('خامات')) ? true : false);
@@ -370,7 +375,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     setExpenseTitle(exp.title);
     setExpenseCategory(exp.category);
     setExpenseType(inferExpenseType(exp));
-    setExpenseAmount(exp.amount);
+    setExpenseAmount(exp.amount);setExpensePaid(exp.paidAmount??'');
     setExpenseDate(exp.invoiceDate || exp.date);
     setExpenseNote(exp.note || '');
     setIsFixedExpense(exp.isFixed ?? (exp.category === 'fixed'));
@@ -410,6 +415,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       category: expenseCategory,
       expenseType,
       amount: amt,
+      ...(portable?{paidAmount:editingExpense?.paidAmount??(typeof expensePaid==='number'?expensePaid:0),paidDate:localDateKey()}:{}),
       date: expenseDate,
       note: expenseNote.trim(),
       isFixed: isFixedExpense,
@@ -722,8 +728,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
           </div>
 
           {filteredExpenses.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-slate-200">
+            <div className="clinic-empty-inline text-slate-500 text-sm bg-slate-50 rounded-2xl border border-slate-200">
               {monthExpenses.length ? 'لا توجد مصروفات مطابقة للبحث أو التصنيف المحدد.' : 'لا توجد مصروفات في الفترة المحددة. يمكنك اختيار شهر آخر أو إضافة مصروف جديد.'}
+              {!expenses.length && <button type="button" className="clinic-next-action" onClick={()=>handleOpenAddExpense()}>إضافة أول مصروف</button>}
             </div>
           ) : (
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden">
@@ -838,19 +845,21 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
           className="clinic-modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-fadeIn dir-rtl"
         >
           <div 
+            ref={expenseEditorDialogRef} role="dialog" aria-modal="true" aria-labelledby="expense-editor-title" tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll my-auto relative z-10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-base font-bold text-[#0f3d3e] font-tajawal">
+              <h2 id="expense-editor-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 {editingExpense ? `تعديل مصروف: ${editingExpense.title}` : 'تسجيل مصروف جديد'}
               </h2>
               <button 
                 type="button" 
                 onClick={handleCloseExpenseModal} 
+                aria-label="إغلاق نافذة المصروف"
                 className="text-slate-400 hover:text-slate-600 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition"
               >
-                ✕
+                <X className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
 
@@ -910,6 +919,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 </div>
               </label>
 
+              {portable&&!editingExpense&&<label className="block text-sm font-bold">المدفوع الفعلي الآن (ج.م)
+                <input type="number" min="0" max={expenseAmount||0} step="0.01" value={expensePaid} onChange={event=>setExpensePaid(event.target.value===''?'':Number(event.target.value))} className="mt-2 w-full rounded-xl border p-3" placeholder="0"/>
+                <small className="block text-slate-500">ترك الحقل فارغًا يعني لم تُسجّل دفعة، وليس سداد المصروف تلقائيًا.</small>
+              </label>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">

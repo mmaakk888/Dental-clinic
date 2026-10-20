@@ -11,6 +11,7 @@ export interface PaymentInstallment {
 }
 
 export interface ExpenseItem {
+  inventoryCost?: number;
   id: string;
   expenseId?: string;
   itemName: string;
@@ -42,6 +43,8 @@ export interface PriceVarianceAlert {
 }
 
 export interface Expense {
+  paymentsLog?: PaymentInstallment[];
+  legacyOpeningPaid?: number;
   id: string;
   title: string;
   category: 'supplies' | 'fixed' | 'maintenance' | 'other';
@@ -81,6 +84,7 @@ export interface Expense {
 }
 
 export interface MaterialUsage {
+  costTotal?: number;
   id: string;
   materialKey: string;
   materialName: string;
@@ -161,6 +165,8 @@ export interface SessionServiceItem {
 }
 
 export interface Session {
+  /** Imported paid balance without a dated receipt; never counted as today's cash. */
+  legacyOpeningPaid?: number;
   id: string;
   type: string;
   tooth: string | null; // composite ID e.g. "ur5", "ul2", "lr6", "ll1"
@@ -364,6 +370,8 @@ export interface UserPermission {
 }
 
 export interface User {
+  /** Server metadata for account editors only; never authorizes a session. */
+  passwordConfigured?: boolean;
   id: string;
   name: string;
   username: string;

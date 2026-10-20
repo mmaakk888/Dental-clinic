@@ -3,6 +3,7 @@ import { User, Lock, Eye, EyeOff, KeyRound, HelpCircle, CheckCircle2, AlertCircl
 import { User as UserType } from '../../types';
 import { canUserLoginNow } from '../../utils/accessControl';
 import { ClinicLogo } from '../common/ClinicLogo';
+import {usePortableRuntime} from '../../portable/runtime';
 
 interface LoginModalProps {
   users: UserType[];
@@ -19,6 +20,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onLogin,
   onAuthenticate
 }) => {
+  const portable=usePortableRuntime();
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -150,7 +152,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
             <div className="px-2.5 py-1 rounded-full bg-slate-800/90 border border-slate-700 text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-              <span>نسخة محلية</span>
+              <span>{portable?'خادم العيادة':'نسخة محلية'}</span>
             </div>
           </div>
 

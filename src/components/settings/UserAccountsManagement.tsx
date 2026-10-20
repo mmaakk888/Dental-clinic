@@ -11,6 +11,7 @@ import {
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import './userAccountsManagement.css';
+import {usePortableRuntime} from '../../portable/runtime';
 
 export interface UserAccountsManagementProps {
   users: User[];
@@ -34,6 +35,7 @@ const permissionKeys = new Set(ACCOUNT_PERMISSION_GROUPS.flatMap(group => group.
 const modalError = (error: unknown) => error instanceof Error && error.message ? error.message : 'تعذّر حفظ الحسابات. لم يتم إغلاق النافذة؛ راجع البيانات وحاول مرة أخرى.';
 
 export function UserAccountsManagement({ users, currentUser, onSaveUsers }: UserAccountsManagementProps) {
+  const portable = usePortableRuntime();
   const { askConfirm, showToast } = useToastAndConfirm();
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
@@ -42,6 +44,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
   const [tab, setTab] = useState<EditorTab>('details');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
+  const [resetLink,setResetLink]=useState('');
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
   const latest = useRef({ users, currentUser, onSaveUsers });
@@ -84,7 +87,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
     event.preventDefault();
     if (savingRef.current) return;
     if (!editor || !checkLatest(editor.snapshot)) return;
-    const validation = validateUserAccountDraft(editor.draft, latest.current.users, editor.original, editor.newId);
+    const validation = validateUserAccountDraft(editor.draft, latest.current.users, editor.original, editor.newId, !!portable);
     if (!validation.valid) {
       setErrors(validation.errors);
       if (validation.errors.name || validation.errors.username || validation.errors.newPassword || validation.errors.role || validation.errors.email || validation.errors.phone) setTab('details');
@@ -107,13 +110,17 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
       onConfirm: async () => {
         // Recheck after confirmation: do not save a stale list or a subsequently changed draft.
         if (editorRef.current !== pending || !checkLatest(pending.snapshot)) return;
-        const checked = validateUserAccountDraft(pending.draft, latest.current.users, pending.original, pending.newId);
+        const checked = validateUserAccountDraft(pending.draft, latest.current.users, pending.original, pending.newId, !!portable);
         if (!checked.valid || !checked.user) { setErrors(checked.errors); return; }
         if (savingRef.current) return;
         const baselineUsers = latest.current.users;
         const nextUsers = pending.original ? baselineUsers.map(user => user.id === pending.original!.id ? checked.user! : user) : [...baselineUsers, checked.user];
         savingRef.current = true; setIsSaving(true);
         try {
+          if (portable) {
+            await portable.action('users.save', {...(pending.original ? {id: pending.original.id} : {}), value: {...checked.user, newPassword: pending.draft.newPassword}});
+            setEditor(null); setErrors({}); setNotice(''); showToast('تم حفظ حساب الخادم وصلاحياته.', 'success'); return;
+          }
           const secured = await secureUserAccountsForStorage(nextUsers, baselineUsers);
           // Hashing is asynchronous: do not apply a changed/closed draft, a stale
           // user list, or revoked authority after that wait.
@@ -128,16 +135,16 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
   };
   const removeAccount = (user: User) => {
     if (!authorized) { setNotice('الحساب الحالي لا يملك صلاحية إدارة المستخدمين.'); return; }
-    const warning = guardAccountRemoval(users, user.id, currentUser?.id);
+    const warning = guardAccountRemoval(users, user.id, currentUser?.id, !!portable);
     if (warning) { setNotice(warning); return; }
     const snapshot = userAccountsSnapshot(users);
     askConfirm({ title: 'حذف حساب المستخدم', message: `سيُلغى دخول حساب «${user.name}» نهائيًا. إيقاف الحساب من نافذة التعديل يحافظ عليه للمراجعة. هل تريد الحذف؟`, confirmLabel: 'حذف الحساب', tone: 'danger', onConfirm: async () => {
       const value = latest.current;
       if (value.currentUser?.isActive === false || !canPerformAction(value.currentUser, 'manage_users')) { setNotice('لم تعد صلاحية إدارة الحسابات متاحة.'); return; }
       if (snapshot !== userAccountsSnapshot(value.users)) { setNotice('تغيّرت قائمة الحسابات. راجع القائمة الحالية قبل الحذف.'); return; }
-      const error = guardAccountRemoval(value.users, user.id, value.currentUser?.id);
+      const error = guardAccountRemoval(value.users, user.id, value.currentUser?.id, !!portable);
       if (error) { setNotice(error); return; }
-      try { await value.onSaveUsers(value.users.filter(item => item.id !== user.id)); setNotice(''); showToast('تم حذف حساب المستخدم.', 'success'); }
+      try { if (portable) await portable.action('users.delete', {id: user.id}); else await value.onSaveUsers(value.users.filter(item => item.id !== user.id)); setNotice(''); showToast(portable ? 'تم إيقاف حساب الخادم وإلغاء جلساته.' : 'تم حذف حساب المستخدم.', 'success'); }
       catch (error) { setNotice(modalError(error)); }
     } });
   };
@@ -161,6 +168,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
     </div>
     <div className="ua-list-caption"><span>الحسابات الظاهرة: {visible.length} من {users.length}</span><span>كلمات السر لا تُعرض في القائمة.</span></div>
     {notice && <div className="ua-alert" role="alert">{notice}<button type="button" onClick={() => setNotice('')} aria-label="إغلاق التنبيه"><X size={16} /></button></div>}
+    {portable&&resetLink&&<div className="ua-alert" role="status"><p>رابط خاص صالح لساعة ولمرة واحدة. سلّمه لصاحب الحساب مباشرةً، ولا تنشره.</p><input aria-label="رابط إعادة التعيين الخاص" dir="ltr" readOnly value={resetLink} onFocus={event=>event.target.select()} className="w-full rounded border p-3"/><button type="button" onClick={()=>setResetLink('')}>إخفاء الرابط</button></div>}
     <div className="ua-account-list">
       {visible.map(user => <article key={user.id} className={`ua-account-row ${user.isActive === false ? 'ua-account-paused' : ''}`}>
         <div className="ua-avatar" aria-hidden="true"><UserRound size={19} /></div>
@@ -168,7 +176,7 @@ export function UserAccountsManagement({ users, currentUser, onSaveUsers }: User
           <p className="ua-account-username"><span dir="auto">{user.username}</span><span className="ua-account-dot" aria-hidden="true">·</span>{roleLabel[user.role] || 'نوع غير معروف'}</p>
           <div className="ua-account-meta"><span className={`ua-badge ${user.isActive === false ? 'ua-badge-paused' : 'ua-badge-active'}`}>{user.isActive === false ? 'موقوف' : 'نشط'}</span><span className="ua-schedule"><Clock3 size={13} aria-hidden="true" />{accountScheduleLabel(user)}</span></div>
         </div>
-        <div className="ua-row-actions"><button type="button" className="ua-button ua-button-soft" onClick={() => openEditor(user)} disabled={!authorized} aria-label={`تعديل حساب ${user.name}`}><Pencil size={15} aria-hidden="true" /><span>تعديل</span></button><button type="button" className="ua-icon-button ua-delete" onClick={() => removeAccount(user)} disabled={!authorized || user.id === currentUser?.id} aria-label={`حذف حساب ${user.name}`} title={user.id === currentUser?.id ? 'لا يمكن حذف حسابك الحالي' : 'حذف الحساب'}><Trash2 size={16} aria-hidden="true" /></button></div>
+        <div className="ua-row-actions">{portable&&<button type="button" className="ua-button ua-button-soft" disabled={!authorized} onClick={async()=>{try{const result=await portable.action('users.reset',{id:user.id});setResetLink(result.resetUrl);}catch(error){setNotice(modalError(error));}}}>رابط إعادة تعيين</button>}<button type="button" className="ua-button ua-button-soft" onClick={() => openEditor(user)} disabled={!authorized} aria-label={`تعديل حساب ${user.name}`}><Pencil size={15} aria-hidden="true" /><span>تعديل</span></button><button type="button" className="ua-icon-button ua-delete" onClick={() => removeAccount(user)} disabled={!authorized || user.id === currentUser?.id} aria-label={`حذف حساب ${user.name}`} title={user.id === currentUser?.id ? 'لا يمكن حذف حسابك الحالي' : 'حذف الحساب'}><Trash2 size={16} aria-hidden="true" /></button></div>
       </article>)}
       {!visible.length && <div className="ua-empty"><UserRound size={24} aria-hidden="true" /><strong>لا توجد حسابات مطابقة</strong><p>غيّر البحث أو الفلاتر لعرض الحسابات.</p>{(search || roleFilter !== 'all' || statusFilter !== 'all') && <button type="button" className="ua-button ua-button-soft" onClick={() => { setSearch(''); setRoleFilter('all'); setStatusFilter('all'); }}>إلغاء الفلاتر</button>}</div>}
     </div>

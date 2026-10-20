@@ -31,7 +31,7 @@ test('catalog clones preserve exact valid names and use independent defaults for
     fallback.serviceTypes.push('مسودة');
     fallback.crownPrices.PFM = 0;
     assert.notEqual(DEFAULT_SERVICE_TYPES.at(-1), 'مسودة');
-    assert.equal(DEFAULT_PATIENT_CROWN_PRICES.PFM, 1200);
+    assert.equal(DEFAULT_PATIENT_CROWN_PRICES.PFM, undefined, 'fresh clinics must not silently inherit a sample selling price');
   }
   assert.deepEqual(cloneServiceCatalog({ serviceTypes: [], crownPrices: {} }), { serviceTypes: [], crownPrices: {}, clinicalPrices: {}, examinationFee: 100 });
 });

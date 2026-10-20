@@ -10,3 +10,5 @@ coverage/
 
 # Local visual QA screenshots may include clinic or account details.
 review-proofs/
+portable/private/config.php
+migration-private/

@@ -41,6 +41,7 @@ function headerShortcut(blocker: 'dialog' | 'alertdialog' | 'native' | null) {
     },
     useRef: (initial: any) => ({ current: initial }),
     useCallback: (callback: any) => callback,
+    useContext: (context: any) => context._currentValue,
     useMemo: (factory: () => any) => factory(),
     useEffect: (effect: any) => effects.push(effect),
   };

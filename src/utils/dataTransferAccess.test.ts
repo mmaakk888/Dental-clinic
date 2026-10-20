@@ -47,7 +47,7 @@ function harness(role: User['role'] = 'doctor') {
     importPatientRecords: () => { touched.push('import-patients'); return []; },
     applyContactImport: () => { touched.push('import-contacts'); return { contacts: [], addedCount: 0, duplicateCount: 0, invalidCount: 0 }; },
   };
-  const actions = new Function(...Object.keys(dependencies), executable)(...Object.values(dependencies));
+  const actions = new Function('runtime', 'portable', ...Object.keys(dependencies), executable)(undefined, null, ...Object.values(dependencies));
   return { ...actions, touched, demote: () => { latestUser = account('secretary'); },
     waitForLock: () => { let release!: () => void; lockGate = new Promise<void>(resolve => { release = resolve; }); return release; } };
 }

@@ -118,10 +118,10 @@ export function isUsableControlPanelManager(user: User): boolean {
     && hasPasswordCredential(user) && canPerformAction(user, 'manage_users') && !validateAccountSchedule(user.accessSchedule);
 }
 
-export function guardAccountRemoval(users: User[], userId: string, currentUserId?: string): string | null {
+export function guardAccountRemoval(users: User[], userId: string, currentUserId?: string, serverCredentials = false): string | null {
   if (userId === currentUserId) return 'لا يمكن حذف الحساب المستخدم حاليًا. يمكنك إيقاف حساب آخر بدلًا من حذفه.';
   if (!users.some(user => user.id === userId)) return 'الحساب لم يعد موجودًا. حدّث القائمة ثم حاول مرة أخرى.';
-  if (!users.some(user => user.id !== userId && isUsableControlPanelManager(user))) return 'لا يمكن حذف آخر حساب إداري صالح للدخول. احتفظ بحساب إداري نشط واحد على الأقل.';
+  if (!users.some(user => user.id !== userId && (serverCredentials ? user.passwordConfigured && user.isActive !== false && ['doctor','admin'].includes(user.role) : isUsableControlPanelManager(user)))) return 'لا يمكن حذف آخر حساب إداري صالح للدخول. احتفظ بحساب إداري نشط واحد على الأقل.';
   return null;
 }
 
@@ -133,7 +133,7 @@ export interface UserAccountValidation {
   passwordChanged: boolean;
 }
 
-export function validateUserAccountDraft(draft: UserAccountDraft, users: User[], original?: User | null, newId = ''): UserAccountValidation {
+export function validateUserAccountDraft(draft: UserAccountDraft, users: User[], original?: User | null, newId = '', serverCredentials = false): UserAccountValidation {
   const errors: Record<string, string> = {};
   const baseline = createUserAccountDraft(original);
   const name = string(draft.name).trim();
@@ -144,7 +144,7 @@ export function validateUserAccountDraft(draft: UserAccountDraft, users: User[],
   if (!name || Array.from(name).length > 100 || singleLine.test(name)) errors.name = 'اكتب اسمًا من 1 إلى 100 حرف في سطر واحد.';
   if (!username || Array.from(username).length > 60 || singleLine.test(username)) errors.username = 'اكتب اسم دخول من 1 إلى 60 حرف في سطر واحد.';
   else if (users.some(user => user.id !== original?.id && string(user.username).trim().toLowerCase() === username)) errors.username = 'اسم الدخول مستخدم بالفعل؛ اختر اسمًا آخر.';
-  if ((!original || !hasPasswordCredential(original)) && !password) errors.newPassword = 'اكتب كلمة سر للحساب؛ الدخول دون كلمة سر غير مسموح.';
+  if ((!original || !(serverCredentials ? original.passwordConfigured : hasPasswordCredential(original))) && !password) errors.newPassword = 'اكتب كلمة سر للحساب؛ الدخول دون كلمة سر غير مسموح.';
   if (password) {
     const passwordError = validateNewPassword(password);
     if (passwordError) errors.newPassword = passwordError;
@@ -187,7 +187,7 @@ export function validateUserAccountDraft(draft: UserAccountDraft, users: User[],
   const scheduleError = validateAccountSchedule(user.accessSchedule);
   if (scheduleError) errors.schedule = scheduleError;
   const nextUsers = original ? users.map(item => item.id === original.id ? user : item) : [...users, user];
-  if (!nextUsers.some(isUsableControlPanelManager)) errors.manager = 'احتفظ بحساب إداري نشط صالح للدخول واحد على الأقل؛ لا يمكن إيقافه أو سحب إدارته أو جعل جدوله غير صالح.';
+  if (!nextUsers.some(user => serverCredentials ? user.isActive !== false && ['doctor','admin'].includes(user.role) && (user.passwordConfigured || !!password && user.id === newId) : isUsableControlPanelManager(user))) errors.manager = 'احتفظ بحساب إداري نشط صالح للدخول واحد على الأقل؛ لا يمكن إيقافه أو سحب إدارته أو جعل جدوله غير صالح.';
   const before = original || ({ role: 'secretary', permissions: createSafeSecretaryPermissions() } as User);
   const newPermissionGrants = ACCOUNT_PERMISSION_GROUPS.flatMap(group => group.items)
     .filter(permission => !canPerformAction(before, permission.action) && canPerformAction(user, permission.action))

@@ -1,6 +1,7 @@
 import { Patient, Appointment, Expense, ExpenseItem } from '../types';
 import { parseInvoiceExtraction } from '../utils/invoiceExtraction';
 import { appointmentDuration, appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, occupiesAppointmentSlot } from '../components/appointments/appointmentScheduling';
+import {fetchAi} from './aiTransport';
 
 export interface ExtractedInvoice {
   supplierName?: string;
@@ -74,7 +75,7 @@ export const AiService = {
   // 1. Extract Invoice data via Gemini OCR
   async extractInvoice(imageBase64: string, mimeType = 'image/jpeg'): Promise<ExtractedInvoice> {
     try {
-      const res = await fetch('/api/ai/extract-invoice', {
+      const res = await fetchAi('/api/ai/extract-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64, mimeType }),
@@ -102,7 +103,7 @@ export const AiService = {
         unpaidBalance: p.sessions?.reduce((acc, s) => acc + (s.remain || 0), 0) || 0,
       }));
 
-      const res = await fetch('/api/ai/smart-search', {
+      const res = await fetchAi('/api/ai/smart-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, patients: minifiedPatients }),
@@ -148,7 +149,7 @@ export const AiService = {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
     try {
-      const res = await fetch('/api/ai/schedule-assistant', {
+      const res = await fetchAi('/api/ai/schedule-assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ procedureType, date, existingAppointments: dayAppointments }),
@@ -192,7 +193,7 @@ export const AiService = {
     previousMonthExpenses = 0
   ): Promise<FinancialInsightsResult> {
     try {
-      const res = await fetch('/api/ai/financial-insights', {
+      const res = await fetchAi('/api/ai/financial-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -221,7 +222,7 @@ export const AiService = {
   // 5. Endodontic Working Length Assistant
   async analyzeEndoWorkingLength(imageBase64: string, toothNumber: string): Promise<EndodonticAnalysis> {
     try {
-      const res = await fetch('/api/ai/endodontic-helper', {
+      const res = await fetchAi('/api/ai/endodontic-helper', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64, toothNumber }),
@@ -242,7 +243,7 @@ export const AiService = {
     newPatientsCount: number;
   }): Promise<ClinicalSummaryResult> {
     try {
-      const res = await fetch('/api/ai/clinical-summary', {
+      const res = await fetchAi('/api/ai/clinical-summary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

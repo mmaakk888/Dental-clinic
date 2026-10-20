@@ -5,6 +5,7 @@ import { ClinicLogo } from '../common/ClinicLogo';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { applyColorPreset, applyFontChoice, buildGoogleFont, cloneIdentityDraft, COLOR_PRESETS, contrastRatio, DEFAULT_THEME, FONT_CHOICES, normalizeHexColor, readableForeground, validateClinicName, validateLogoMetadata } from '../../utils/clinicIdentity';
 import './identityAppearance.css';
+import {activeFontStylesheet} from '../../utils/fontStylesheet';
 
 export interface IdentityAppearanceDraft {
   clinicName: string;
@@ -123,7 +124,7 @@ export function IdentityAppearance({ clinicName, clinicLogo, theme, onSaveIdenti
 
   const selectedFont = matchingFont(draft.theme.fontFamily);
   const customFont = selectedFont ? null : buildGoogleFont(firstFontFamily(draft.theme.fontFamily));
-  const previewFontUrl = customFont?.customFontUrl;
+  const previewFontUrl = activeFontStylesheet(draft.theme.fontFamily,draft.theme.customFontUrl);
   const previewFontName = customFont?.name;
   useEffect(() => {
     if (!previewFontUrl || !previewFontName) { setFontStatus(selectedFont ? 'ready' : 'unavailable'); return; }
@@ -269,7 +270,7 @@ export function IdentityAppearance({ clinicName, clinicLogo, theme, onSaveIdenti
     <div className="ia-preview-stage"><div className="ia-preview" data-device={previewMode} style={previewStyle}>
       <div className="ia-demo-header"><IdentityLogo source={draft.clinicLogo} /><div><strong>{draft.clinicName.trim() || 'اسم عيادتك'}</strong><small>نموذج العرض</small></div></div>
       <div className="ia-demo-body"><div className="ia-demo-welcome"><small>أهلًا بك</small><h4>كل التفاصيل في مكان واحد</h4><p>تنظيم مواعيد العيادة ومتابعة العمل بسهولة.</p><span className="ia-demo-action">إجراء تجريبي</span></div>
-        <div className="ia-demo-metrics"><div><CalendarDays aria-hidden="true" /><span>مواعيد تجريبية</span><strong>٨</strong></div><div><Users aria-hidden="true" /><span>متابعات تجريبية</span><strong>٣</strong></div></div>
+        <div className="ia-demo-metrics"><div><CalendarDays aria-hidden="true" /><span>معاينة المواعيد</span><strong>٠</strong></div><div><Users aria-hidden="true" /><span>معاينة المتابعات</span><strong>٠</strong></div></div>
         <div className="ia-demo-row"><span className="ia-demo-dot" /><span>مثال على بطاقة متابعة</span><small>مؤكد</small></div>
       </div>
       <div className="ia-demo-navigation" aria-hidden="true"><span>الرئيسية</span><span>المرضى</span><span>المواعيد</span></div>

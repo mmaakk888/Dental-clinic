@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useDeferredValue, useEffect } from 'react';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 import { 
   Search, 
   ContactRound,
@@ -116,6 +117,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   // Modals & Bottom Sheets State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
+  const patientEditorDialogRef=useAppointmentDialog(isModalOpen,()=>{if(!saving)setIsModalOpen(false);});
 
   // Bound mounted cards; reveal more explicitly instead of mounting the full directory.
   const [visibleCount, setVisibleCount] = useState(30);
@@ -753,6 +755,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
           <div
             id="patientModal"
+            ref={patientEditorDialogRef} role="dialog" aria-modal="true" aria-label={editingPatient ? 'تعديل بيانات المريض' : 'إضافة مريض'} tabIndex={-1}
             className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 relative max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto modal-scroll font-cairo dir-rtl"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">

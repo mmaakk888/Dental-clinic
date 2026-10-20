@@ -1,10 +1,12 @@
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
+import {usePortableRuntime} from '../../portable/runtime';
 import { History, Search, Download, UserRound, CalendarDays, Monitor, Printer, SlidersHorizontal, X } from 'lucide-react';
 import { getAuditLogs, type AuditLogItem } from '../../services/auditLogger';
 import { AUDIT_ACTIONS, AUDIT_ENTITIES, auditActionLabel, auditEntityLabel, filterAuditLogs, formatAuditDateTime, serializeAuditCsv } from '../../utils/auditTrailPresentation';
 import { downloadTransferBlob } from '../../utils/patientSpreadsheets';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import './auditTrail.css';
+import {presentServerAudit} from '../../utils/serverAuditPresentation';
 
 export interface AuditTrailViewProps {
   canExport?: boolean;
@@ -13,7 +15,10 @@ export interface AuditTrailViewProps {
 }
 
 export const AuditTrailView: React.FC<AuditTrailViewProps> = ({ canExport = false, onAuthorizeExport }) => {
-  const [logs] = useState<AuditLogItem[]>(() => getAuditLogs());
+  const portable = usePortableRuntime();
+  const [logs,setLogs] = useState<AuditLogItem[]>(() => portable ? [] : getAuditLogs());
+  const [serverError,setServerError] = useState('');
+  useEffect(()=>{if(!portable)return;let live=true;portable.read('audit').then(value=>{if(live)setLogs(value.logs.map(presentServerAudit));}).catch(error=>{if(live)setServerError(error.message);});return()=>{live=false;};},[portable]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterAction, setFilterAction] = useState('all');
   const [filterEntity, setFilterEntity] = useState('all');
@@ -60,7 +65,8 @@ export const AuditTrailView: React.FC<AuditTrailViewProps> = ({ canExport = fals
           <span className="audit-trail-icon" aria-hidden="true"><History /></span>
           <div>
             <h2 id={`${fieldId}-title`}>سجل النشاطات</h2>
-            <p>العمليات المسجلة في هذا المتصفح، مع المستخدم والتاريخ وتفاصيل كل عملية.</p>
+            <p>{portable ? 'أحدث ٢٠٠٠ عملية مؤكدة، باسم الحساب والتاريخ والقسم؛ دون كلمات السر أو تفاصيل طبية في السجل.' : 'العمليات المسجلة في هذا المتصفح، مع المستخدم والتاريخ وتفاصيل كل عملية.'}</p>
+            {serverError && <p role="alert">{serverError}</p>}
           </div>
         </div>
         {transferAllowed && <div className="audit-trail-actions">

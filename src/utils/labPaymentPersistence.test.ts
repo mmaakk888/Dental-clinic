@@ -17,7 +17,7 @@ const visit = (node: ts.Node) => { if (ts.isVariableDeclaration(node) && ts.isId
 function callback(name: string, deps: Record<string, unknown>) {
   const expression = declarations.get(name); assert.ok(expression);
   const code = ts.transpileModule(`return (${expression.getText(ast)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
-  return new Function(...Object.keys(deps), code)(...Object.values(deps));
+  return new Function('runtime', 'portable', ...Object.keys(deps), code)(undefined, null, ...Object.values(deps));
 }
 const item = (changes: Partial<LabCase> = {}): LabCase => ({ id: 'synthetic-case', patientId: '501', fileNo: '501', patientName: 'مريض اختبار', labId: 'synthetic-lab', labName: 'معمل اختبار', type: 'ثابت', subType: 'زيركون', unitLabel: 'وحدة', units: 1, labTotal: 1000, labPaid: 600, patientTotal: 5000, patientPaid: 4000, date: '2026-10-01', status: 'pending', ...changes });
 async function withHarness(run: (h: ReturnType<typeof harness>) => Promise<void>) {

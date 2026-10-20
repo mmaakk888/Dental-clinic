@@ -1,8 +1,0 @@
-{
-  "firestore": { "database": "(default)", "rules": "firestore.release.rules" },
-  "emulators": {
-    "firestore": { "host": "127.0.0.1", "port": 8789 },
-    "ui": { "enabled": false },
-    "singleProjectMode": true
-  }
-}
