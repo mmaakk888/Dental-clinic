@@ -23,5 +23,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["node_modules", "dist", "build", ".firebase", "review-proofs"]
+  "exclude": ["node_modules", "dist", "build", ".clinic-local", "review-proofs"]
 }

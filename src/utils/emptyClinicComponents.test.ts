@@ -79,7 +79,7 @@ test('empty clinic card is explicit, compact and inert until separately confirme
   assert.match(markup, /فهارس الخدمات والأدوية والأسعار وقوالب الرسائل/);
   assert.match(markup, /نزّل نسخة JSON كاملة أولًا/); assert.match(markup, /لا يكتشف النظام البيانات التجريبية تلقائيًا/);
   assert.match(markup, /الحذف يشمل كل بيانات التشغيل المحلية/); assert.match(markup, /لا يتم الحذف بمجرد فتح هذه البطاقة/);
-  assert.match(markup, /لا تُنقل بيانات إلى Firebase/); assert.match(markup, /min-h-\[44px\]/); assert.match(markup, /w-full/); assert.match(markup, /sm:w-auto/);
+  assert.match(markup, /لا تُنقل بيانات إلى خدمة خارجية/); assert.match(markup, /min-h-\[44px\]/); assert.match(markup, /w-full/); assert.match(markup, /sm:w-auto/);
   assert.doesNotMatch(markup, /استعادة الضبط الافتراضي|إعادة ضبط البيانات للافتراضي|role="alertdialog"/);
   assert.equal(authorizationCalls, 0); assert.equal(clearCalls, 0);
 });

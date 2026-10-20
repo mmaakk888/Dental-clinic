@@ -233,7 +233,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = React.memo(({
               {pending > 0 && <div><dt>بانتظار الربط</dt><dd>{pending.toLocaleString('ar-EG')} عملية</dd></div>}
               {failed > 0 && <div><dt>بعلامة فشل في الطابور</dt><dd>{failed.toLocaleString('ar-EG')} عملية</dd></div>}
             </dl>
-            <p className="clinic-topbar-note">مؤشر الشبكة لا يختبر الوصول إلى الإنترنت أو Firebase. احتفظ بنسخة احتياطية مؤكدة قبل تغيير الجهاز أو حذف بيانات المتصفح.</p>
+            <p className="clinic-topbar-note">مؤشر الشبكة لا يؤكد الوصول إلى خادم العيادة أو نجاح الحفظ. احتفظ بنسخة احتياطية مؤكدة قبل تغيير الجهاز أو حذف بيانات المتصفح.</p>
             {canBackup && <button type="button" className="clinic-topbar-primary" onClick={() => navigateFromSheet('settings', 'excel')}><Sliders aria-hidden="true" />النسخة الاحتياطية والتصدير</button>}
           </>}
         </div>

@@ -1,10 +1,11 @@
 import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';import {randomBytes,randomUUID,generateKeyPairSync,sign,createHash} from 'node:crypto';import {createServer} from 'node:net';import {once} from 'node:events';
 import {createZip,listFiles} from './portable-zip';
-const root=process.cwd(),php=process.env.CLINIC_TEST_PHP||path.resolve('.firebase/php-migration-runtime/php/php.exe');
+const root=process.cwd(),php=process.env.CLINIC_TEST_PHP||path.resolve('.clinic-local/php-migration-runtime/php/php.exe');
 await new Promise<void>((resolve,reject)=>{const s=createServer();s.once('error',reject);s.listen(4189,'127.0.0.1',()=>s.close(()=>resolve()));});
 const ext=['-n','-d',`extension_dir=${path.join(path.dirname(php),'ext')}`,...['pdo_mysql','sodium','openssl','curl','zip'].flatMap(x=>['-d','extension='+x])];
-const dir=fs.mkdtempSync(path.resolve('.firebase/system-update-test-')),publicDir=path.join(dir,'htdocs'),config=path.join(dir,'config.php');fs.mkdirSync(publicDir);
+fs.mkdirSync(path.resolve('.clinic-local'),{recursive:true});
+const dir=fs.mkdtempSync(path.resolve('.clinic-local/system-update-test-')),publicDir=path.join(dir,'htdocs'),config=path.join(dir,'config.php');fs.mkdirSync(publicDir);
 fs.cpSync('build/portable-public',publicDir,{recursive:true});fs.cpSync('portable/api',path.join(publicDir,'api'),{recursive:true});fs.cpSync('portable/public',publicDir,{recursive:true});
 const run=(file:string,...args:string[])=>{const r=spawnSync(php,[...ext,file,...args],{encoding:'utf8',windowsHide:true});if(r.status!==0)throw Error(r.stderr||r.stdout);return r.stdout;};
 const setup=JSON.parse(run('scripts/portable-test-bootstrap.php','test_clinic_portable_'+randomBytes(6).toString('hex'),config,'4189'));

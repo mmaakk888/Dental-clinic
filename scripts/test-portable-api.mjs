@@ -2,10 +2,11 @@ import fs from 'node:fs';import path from 'node:path';import {spawn,spawnSync} f
 import {createServer} from 'node:net';
 import {testWorkflow} from './workflow-regression.mjs';
 for(const port of [4189,4192])await new Promise((resolve,reject)=>{const probe=createServer();probe.once('error',reject);probe.listen(port,'127.0.0.1',()=>probe.close(resolve));});
-const root=process.cwd(),php=process.env.CLINIC_TEST_PHP||path.resolve('.firebase/php-migration-runtime/php/php.exe');
+const root=process.cwd(),php=process.env.CLINIC_TEST_PHP||path.resolve('.clinic-local/php-migration-runtime/php/php.exe');
 if(!fs.existsSync(php))throw Error('Set CLINIC_TEST_PHP to a local PHP CLI with pdo_mysql. Dedicated MariaDB test server must run on 127.0.0.1:33307.');
 const extensions=['-n','-d',`extension_dir=${path.join(path.dirname(php),'ext')}`,'-d','extension=pdo_mysql','-d','extension=sodium','-d','extension=openssl','-d','extension=curl'];
-const testDir=fs.mkdtempSync(path.resolve('.firebase/portable-api-test-')),publicDir=path.join(testDir,'htdocs'),config=path.join(testDir,'config.php');fs.mkdirSync(publicDir);
+fs.mkdirSync(path.resolve('.clinic-local'),{recursive:true});
+const testDir=fs.mkdtempSync(path.resolve('.clinic-local/portable-api-test-')),publicDir=path.join(testDir,'htdocs'),config=path.join(testDir,'config.php');fs.mkdirSync(publicDir);
 fs.cpSync('build/portable-public',publicDir,{recursive:true});fs.cpSync('portable/api',path.join(publicDir,'api'),{recursive:true});fs.cpSync('portable/public',publicDir,{recursive:true});
 const bootstrap=spawnSync(php,[...extensions,'scripts/portable-test-bootstrap.php','test_clinic_portable_'+randomBytes(6).toString('hex'),config,'4189'],{encoding:'utf8',windowsHide:true});if(bootstrap.status!==0)throw Error(bootstrap.stderr||bootstrap.stdout);const setup=JSON.parse(bootstrap.stdout);
 const defaults={clinicName:'اختبار مصطنع',theme:{primary:'#123456',secondary:'#234567',accent:'#345678',background:'#ffffff'},content:{labels:{},tileOrder:[]},serviceCatalog:{examinationFee:100,serviceTypes:['حشو'],clinicalPrices:{'حشو':500},crownPrices:{'زيركون':2000}},prostheticRouting:{defaultLabs:{},overrides:[]},whatsappSettings:{templates:{},apiKey:'',webhookUrl:''},drugCatalog:[]};fs.writeFileSync(path.join(testDir,'defaults.json'),JSON.stringify(defaults));

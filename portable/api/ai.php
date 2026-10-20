@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace Clinic;
 /** Optional external provider; explicitly disabled until the owner configures
- * consent/key/model privately. No Node, Firebase, automatic scheduling or save. */
+ * consent/key/model privately. No hosted Node, automatic scheduling or save. */
 function aiRequest(DB $db,array $config,array $user,string $action,array $args):array {
     $permissions=['extract-invoice'=>'expense.save','smart-search'=>'patients.read','schedule-assistant'=>'appointment.save','endodontic-helper'=>'rx'];$route=substr($action,3);
     if(isset($permissions[$route]))permit($user,$permissions[$route]);elseif(in_array($route,['financial-insights','clinical-summary'],true)){if(!owner($user))reject('الموجز المالي خاص بالإدارة.',403);}else reject('خدمة غير موجودة.',404);

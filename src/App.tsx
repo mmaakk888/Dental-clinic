@@ -1219,7 +1219,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
     const latestUser = Storage.getUsers().find(user => user.id === currentUser?.id);
     if (latestUser?.role !== 'admin' && latestUser?.role !== 'doctor') throw new Error('بدء عيادة فارغة متاح للطبيب أو مدير النظام فقط.');
     // Explicit confirmed local clear only. Never reset accounts or settings,
-    // import a backup, or write to either Firebase project here.
+    // import a backup, or write to any remote project here.
     Storage.clearOperationalDataConfirmed();
     publishDomain({ patients: [], contacts: [], appointments: [], labCases: [], expenses: [], materialUsages: [] });
     setLabs([]);

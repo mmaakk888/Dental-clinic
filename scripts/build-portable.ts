@@ -29,7 +29,7 @@ for (const file of ['config.example.php', '.htaccess']) {
 // Private operational tools only; no legacy data migration exporters.
 fs.cpSync('portable/tools',path.join(privateDir,'portable/tools'),{recursive:true});
 fs.copyFileSync('portable/schema.sql', path.join(privateDir, 'schema.sql'));
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md']) {
   fs.copyFileSync(path.join('portable', file), path.join(privateDir, file));
 }
 const defaults = {
@@ -52,7 +52,7 @@ const manifest = listFiles(publicDir).map(file => ({
   sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
 }));
 for (const item of manifest) {
-  if (/\.(?:sql|zip|log|env|db|sqlite|map|clinicbackup)$/i.test(item.path) || /(?:^|\/)(?:config\.php|defaults\.json|clinic-decryption-key-[^/]+\.json|node_modules|tools|migration-private|\.firebase)(?:\/|$)/.test(item.path)) {
+  if (/\.(?:sql|zip|log|env|db|sqlite|map|clinicbackup)$/i.test(item.path) || /(?:^|\/)(?:config\.php|defaults\.json|clinic-decryption-key-[^/]+\.json|node_modules|tools|migration-private|\.clinic-local)(?:\/|$)/.test(item.path)) {
     throw Error('Private/unwanted file in htdocs: ' + item.path);
   }
 }
@@ -70,7 +70,7 @@ for (const item of fs.readdirSync('.')) {
 }
 const filtered = sourceFiles.filter(file => {
   const relative = path.relative(process.cwd(), file).replaceAll('\\', '/');
-  return !/(?:^|\/)(?:node_modules|\.git|\.firebase|migration-private|review-proofs|build|dist)(?:\/|$)/.test(relative)
+  return !/(?:^|\/)(?:node_modules|\.git|\.clinic-local|migration-private|review-proofs|build|dist)(?:\/|$)/.test(relative)
     && !/(?:^|\/)(?:config\.php|.*\.private\.[^/]+|\.env(?!\.example$)[^/]*)$/.test(relative)
     && !/\.(?:log|jpg|jpeg|png|zip|db|sqlite|clinicbackup|pem|key)$/i.test(relative)
     && !/(?:^|\/)clinic-decryption-key-[^/]+\.json$/i.test(relative);

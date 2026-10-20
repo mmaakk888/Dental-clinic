@@ -1,6 +1,6 @@
 # نظام إدارة عيادة الأسنان — PHP/MySQL
 
-واجهة عربية React/Vite بنفس التصميم المعتمد، بقاعدة MySQL وجلسات وصلاحيات PHP من السيرفر. تعمل على استضافة PHP مشتركة، دون Node.js أو اعتماد Firebase.
+واجهة عربية React/Vite بنفس التصميم المعتمد، بقاعدة MySQL وجلسات وصلاحيات PHP من السيرفر. تعمل على استضافة PHP مشتركة، دون Node.js أو اعتماد على مزود قاعدة خارجي.
 
 ## البداية
 
@@ -31,4 +31,8 @@ pnpm build
 # Patient/laboratory workflow v6
 
 `php-mysql-6-workflow` keeps the existing interface and schema. It fixes live contact identity, server-issued file numbers after archiving, explicit treatment closure/reopening, dated prescription history, casual-visit tooth display, and date-ordered supplier payment allocation. See `portable/WORKFLOW.ar.md`. Signed updates accept v4 or v5; never re-run the installer on an existing database.
+
+## مسارات التشغيل الحالية — v7
+
+الإصدار `php-mysql-7-clean-paths` يستخدم `.clinic-local/` لأدوات PHP/MySQL المحلية والمفاتيح والاختبارات الخاصة؛ لا يُرفع هذا المجلد للاستضافة أو GitHub. ملفات النشر في `build/portable-artifacts/` كالمعتاد. تغيير الأسماء لا ينقل البيانات ولا يعيد تهيئة القاعدة. حزمة `clinic-update-v4-v5-v6-to-v7.zip` تحدّث v4 أو v5 أو v6 مع بقاء البيانات والإعدادات.
 

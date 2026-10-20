@@ -10,7 +10,7 @@ const tones: Record<DashboardTone, { icon: string; hover: string }> = {
   teal: { icon: 'bg-teal-100 text-teal-700', hover: 'hover:border-teal-300' },
 };
 
-/** Shared presentation for the local and Firebase dashboards. Data and actions
+/** Shared dashboard presentation. Data and actions
  * are supplied by each runtime; these components never read or save records. */
 export const DashboardActionButton: React.FC<{
   title: string; note: string; icon: React.ReactNode; tone: DashboardTone;

@@ -22,7 +22,7 @@ export function EmptyClinicCard({ onAuthorize, onClear }: EmptyClinicCardProps) 
     catch { showToast('هذه العملية غير متاحة الآن لهذا الحساب أو في وضع الخصوصية.', 'error'); return; }
     const confirmation: ConfirmOptions = {
       title: 'تأكيد بدء عيادة فارغة',
-      message: 'سيتم حذف جميع ملفات المرضى وجهات الاتصال والمواعيد والمعامل وحالاتها والجلسات والتحصيلات والمصروفات وحركات الخامات المحلية، سواء كانت تجريبية أو حقيقية. ستبقى حسابات الدخول وكلمات السر والهوية والإعدادات وفهارس الخدمات والأدوية والأسعار وقوالب الرسائل. تأكد من تنزيل نسخة JSON كاملة أولًا؛ لا يمكن التراجع إلا باستعادة نسخة محفوظة. هذه العملية لا تنقل بيانات إلى Firebase ولا تمسح بيانات سحابية.',
+      message: 'سيتم حذف جميع ملفات المرضى وجهات الاتصال والمواعيد والمعامل وحالاتها والجلسات والتحصيلات والمصروفات وحركات الخامات المحلية، سواء كانت تجريبية أو حقيقية. ستبقى حسابات الدخول وكلمات السر والهوية والإعدادات وفهارس الخدمات والأدوية والأسعار وقوالب الرسائل. تأكد من تنزيل نسخة JSON كاملة أولًا؛ لا يمكن التراجع إلا باستعادة نسخة محفوظة. هذه العملية تخص بيانات هذا الجهاز فقط، ولا تمسح بيانات سحابية.',
       confirmLabel: 'حذف بيانات التشغيل المحلية والبدء فارغًا',
       cancelLabel: 'إلغاء والاحتفاظ بالبيانات',
       tone: 'danger',
@@ -54,7 +54,7 @@ export function EmptyClinicCard({ onAuthorize, onClear }: EmptyClinicCardProps) 
           </div>
           <p className="text-sm leading-relaxed text-slate-600">يحتفظ بحسابات الدخول وكلمات السر، اسم العيادة وشعارها ومظهرها، الإعدادات وفهارس الخدمات والأدوية والأسعار وقوالب الرسائل.</p>
           <p className="flex items-start gap-2 text-sm leading-relaxed text-rose-800"><AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" /><span>نزّل نسخة JSON كاملة أولًا من التصدير والاستيراد. لا يكتشف النظام البيانات التجريبية تلقائيًا؛ الحذف يشمل كل بيانات التشغيل المحلية، وليس التجريبية فقط.</span></p>
-          <p className="text-xs leading-relaxed text-slate-600">لا يتم الحذف بمجرد فتح هذه البطاقة، ولا تُنقل بيانات إلى Firebase أو تُحذف بيانات سحابية.</p>
+          <p className="text-xs leading-relaxed text-slate-600">لا يتم الحذف بمجرد فتح هذه البطاقة. العملية تخص بيانات هذا الجهاز فقط، ولا تُنقل بيانات إلى خدمة خارجية أو تُحذف بيانات سحابية.</p>
           <button type="button" disabled={clearing} onClick={requestClear} className="min-h-[44px] w-full rounded-xl bg-rose-700 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-rose-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700 disabled:cursor-wait disabled:opacity-60 sm:w-auto">
             {clearing ? 'جارٍ تأكيد الحذف…' : 'مراجعة وتأكيد البدء فارغًا'}
           </button>
