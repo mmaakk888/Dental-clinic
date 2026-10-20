@@ -365,9 +365,9 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
                         <td className="p-2.5 font-bold text-slate-900">
                           <div className="flex items-center gap-1.5">
                             <span className="font-mono text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
-                              #{row.fileNo}
+                              {row.fileNo?`#${row.fileNo}`:'بدون ملف'}
                             </span>
-                            {onSelectPatientFile ? <button type="button" onClick={() => { onSelectPatientFile(row.patientId); onClose(); }} className="font-tajawal text-xs text-indigo-700 hover:underline min-h-11" aria-label={`فتح ملف ${row.patientName}`}>{row.patientName}</button> : <span className="font-tajawal text-xs">{row.patientName}</span>}
+                            {onSelectPatientFile ? <button type="button" onClick={() => { onSelectPatientFile(row.patientId); onClose(); }} className="font-tajawal text-xs text-indigo-700 hover:underline min-h-11" aria-label={`${row.fileNo?'فتح ملف':'عرض زيارة'} ${row.patientName}`}>{row.patientName}</button> : <span className="font-tajawal text-xs">{row.patientName}</span>}
                             {row.isWalkIn && (
                               <span className="text-[9px] font-black bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full shrink-0">
                                 زائر

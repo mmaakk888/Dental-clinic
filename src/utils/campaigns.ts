@@ -1,5 +1,6 @@
 import { ClinicContact, Patient } from '../types';
 import { normalizeContactPhone, normalizeContactSearch } from './clinicContacts';
+import {hasPatientFile} from './patientFileIdentity';
 
 // A campaign never needs sessions, payments, notes, or fabricated clinical files.
 export type CampaignRecipient = {
@@ -18,6 +19,7 @@ const normalizedText = normalizeContactSearch;
 export function campaignRecipients(patients: Patient[], contacts: ClinicContact[] = []): CampaignRecipient[] {
   const byPhone = new Map<string, CampaignRecipient>();
   for (const patient of patients) {
+    if(!hasPatientFile(patient))continue;
     const phone = normalizeContactPhone(patient.mobile);
     if (!phone) continue;
     const existing = byPhone.get(phone);
@@ -31,6 +33,7 @@ export function campaignRecipients(patients: Patient[], contacts: ClinicContact[
     if (existing) { existing.searchNames.push(contact.name); continue; }
     byPhone.set(phone, { id: contact.id, name: contact.name, mobile: contact.mobile, phone, source: 'contact', patientIds: [], searchNames: [contact.name] });
   }
+  const contactsById=new Map(contacts.map(c=>[c.id,c]));for(const patient of patients)if(!hasPatientFile(patient)&&patient.contactId){const contact=contactsById.get(patient.contactId);const recipient=contact?byPhone.get(normalizeContactPhone(contact.mobile)):undefined;if(recipient&&!recipient.searchNames.includes(patient.name))recipient.searchNames.push(patient.name);}
   return [...byPhone.values()];
 }
 

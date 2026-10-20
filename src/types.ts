@@ -217,6 +217,8 @@ export interface GeneralPayment {
 
 export interface Patient {
   id: string; // File Number e.g. "101"
+  withoutFile?: boolean;
+  contactId?: string;
   name: string;
   mobile: string;
   age: number;

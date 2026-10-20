@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useMemo, useState, useRef } from 'react';
 import { Banknote, Search, X } from 'lucide-react';
 import { Patient } from '../../types';
+import {patientFileLabel} from '../../utils/patientFileIdentity';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { paymentSessionRemaining as remainingFor, validateHomePayment } from '../../utils/homePayment';
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
@@ -71,7 +72,7 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
         <div className="space-y-2">
           <label htmlFor="home-payment-search" className="block font-bold text-slate-800">١. المريض</label>
           {patient ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex flex-wrap items-center justify-between gap-3">
-            <div><strong className="block text-lg text-slate-950">{patient.name}</strong><span className="text-sm text-slate-600">ملف <bdi>#{patient.id}</bdi>{showRemaining ? ` · المتبقي ${money(getPatientFinancialSummary(patient).totalRemaining)}` : ''}</span></div>
+            <div><strong className="block text-lg text-slate-950">{patient.name}</strong><span className="text-sm text-slate-600">{patientFileLabel(patient)}{showRemaining ? ` · المتبقي ${money(getPatientFinancialSummary(patient).totalRemaining)}` : ''}</span></div>
             <button type="button" onClick={() => { setPatientId(''); setSessionId(''); setAmount(''); }} className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-emerald-800 min-h-[44px]">تغيير المريض</button>
           </div> : <>
             <div className="relative"><Search aria-hidden="true" className="absolute start-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
@@ -80,7 +81,7 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
             <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100" aria-busy={query !== deferredQuery}>
               {results.map(item => <button key={item.id} type="button" className="w-full flex items-center gap-3 p-3 text-start hover:bg-slate-50 min-h-[56px]"
                 onClick={() => { setPatientId(item.id); setSessionId(item.sessions.find(session => remainingFor(session) > 0)?.id || ''); setAmount(''); }}>
-                <span className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-700"><bdi>#{item.id}</bdi></span>
+                <span className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-700">{patientFileLabel(item)}</span>
                 <span className="min-w-0"><strong className="block text-base text-slate-900">{item.name}</strong><small className="text-sm text-slate-500"><bdi>{item.mobile || 'بدون هاتف'}</bdi></small></span>
               </button>)}
               {!results.length && <p className="p-4 text-slate-500">لا يوجد ملف مطابق للبحث.</p>}
@@ -94,7 +95,7 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
             className="w-full min-h-[52px] rounded-xl border border-slate-300 bg-white px-3 text-base">
             <option value="">اختر الخدمة</option>{sessions.map(session => <option key={session.id} value={session.id}>{session.type} · {session.date}{showRemaining ? ` · متبقي ${money(remainingFor(session))}` : ''}</option>)}
           </select> : <div className="rounded-xl bg-slate-50 p-4 text-slate-600"><p>لا توجد خدمة بمبلغ مستحق للتحصيل.</p>
-            <button type="button" className="mt-2 min-h-[44px] font-bold text-indigo-700" onClick={() => { onOpenPatient(patient.id); onClose(); }}>فتح ملف المريض</button></div>}
+            <button type="button" className="mt-2 min-h-[44px] font-bold text-indigo-700" onClick={() => { onOpenPatient(patient.id); onClose(); }}>{patient.withoutFile?'عرض الزيارة':'فتح ملف المريض'}</button></div>}
         </div>}
         <div className="space-y-2"><label htmlFor="home-payment-amount" className="block font-bold text-slate-800">٣. المبلغ المحصّل الآن (ج.م)</label>
           <input id="home-payment-amount" type="number" min="0.01" step="0.01" required disabled={!patient || !sessionId} value={amount} onChange={event => setAmount(event.target.value)} inputMode="decimal" placeholder="0.00"

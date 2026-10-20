@@ -1,4 +1,5 @@
 import type { ClinicContact, Patient } from '../types';
+import {hasPatientFile} from './patientFileIdentity';
 import { normalizeDirectoryDigits, normalizeDirectoryName } from './patientDirectory';
 import { normalizeContactPhone } from './clinicContacts';
 
@@ -36,7 +37,7 @@ export function getNextPatientFileNo(patients: readonly Pick<Patient, 'id'>[]): 
 /** Cache normalizations once per directory change, never copy clinical fields. */
 export function createPatientRegistrationIndex(patients: readonly RegistrationPerson[], contacts: readonly Pick<ClinicContact, 'id' | 'name' | 'mobile'>[]): PatientRegistrationEntry[] {
   return [
-    ...patients.map(person => ({ source: 'patient' as const, id: person.id, name: person.name, mobile: person.mobile })),
+    ...patients.filter(hasPatientFile).map(person => ({ source: 'patient' as const, id: person.id, name: person.name, mobile: person.mobile })),
     ...contacts.map(person => ({ source: 'contact' as const, id: person.id, name: person.name, mobile: person.mobile })),
   ].map(person => ({ source: person.source, id: person.id, name: person.name, mobile: person.mobile,
     normalizedName: normalizeDirectoryName(person.name), phone: normalizeContactPhone(person.mobile) }));

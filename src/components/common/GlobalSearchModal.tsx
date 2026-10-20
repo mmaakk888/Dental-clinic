@@ -100,7 +100,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
     if (!q) return { patients: [], appointments: [], labCases: [], expenses: [] };
 
     // Ranked & Filtered Patients
-    const rankedPatients = patients
+    const rankedPatients = patients.filter(p=>!p.withoutFile&&!p.id.startsWith('unfiled:'))
       .map(p => ({ patient: p, score: getPatientScore(p, q) }))
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)

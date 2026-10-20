@@ -212,7 +212,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
       validationFail('apptModal', 'input-appt-hour', 'اختر وقتًا صحيحًا للموعد');
       return;
     }
-    const info = { patientId: targetPatient.id, fileNo: targetPatient.id, patientName: targetPatient.name, mobile: targetPatient.mobile };
+    const info = { patientId: targetPatient.id, fileNo: targetPatient.withoutFile?'':targetPatient.id, patientName: targetPatient.name, mobile: targetPatient.mobile };
 
     const isDoubleBooked = findAppointmentConflicts(appointments, apptDate, time24).length > 0;
     if (isDoubleBooked) {
@@ -664,7 +664,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
                           {a.patientName}
                         </button>
                         <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold border border-slate-200/70">
-                          ملف #{a.fileNo}
+                          {a.fileNo?`ملف #${a.fileNo}`:'زيارة بدون ملف'}
                         </span>
 
                         {a.isFollowUp && (
@@ -790,12 +790,12 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
                         type="button"
                         onClick={() => {
                           setSelectedPatientId(p.id);
-                          setPatientSearch(`${p.name} (ملف #${p.id})`);
+                          setPatientSearch(`${p.name} (${p.withoutFile?'بدون ملف':`ملف #${p.id}`})`);
                         }}
                         className="w-full text-right p-2.5 rounded-xl hover:bg-indigo-50 text-sm font-bold text-slate-800 flex items-center justify-between gap-2 min-h-[44px] touch-manipulation"
                       >
                         <span className="break-words min-w-0">{p.name}</span>
-                        <span className="text-slate-500 font-mono shrink-0">#{p.id}</span>
+                        <span className="text-slate-500 font-mono shrink-0">{p.withoutFile?'بدون ملف':`#${p.id}`}</span>
                       </button>
                     ))}
                     {filteredPatientsDropdown.length === 0 && <p className="p-3 text-sm text-slate-600">لا توجد نتائج. المريض الجديد يحتاج ملفًا من قسم المرضى أولًا.</p>}

@@ -25,8 +25,9 @@ interface QuickWalkInModalProps {
   defaultExamFee?: number;
   serviceTypes?: string[];
   clinicalPrices?: Record<string, number>;
+  allowWithoutFile?: boolean;
   onSaveWalkInVisit: (data: {
-    patient: { isNew: boolean; id: string; name: string; mobile: string; age: number; gender?: string };
+    patient: { isNew: boolean; id: string; name: string; mobile: string; age: number; gender?: string; withoutFile?:boolean; confirmExistingFile?:boolean };
     visit: {
       chiefComplaint: string; diagnosis: string; procedurePerformed: string; services?: SessionServiceItem[];
       prescriptionNotes: string; visitNotes: string; visitStatus: 'completed' | 'follow_up';
@@ -40,13 +41,15 @@ interface QuickWalkInModalProps {
 const amountFormat = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
 const amountText = (value: number) => `${amountFormat.format(value)} ج.م`;
 
-export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onClose, patients, contacts = [], defaultExamFee = 100, serviceTypes = [], clinicalPrices = {}, onSaveWalkInVisit }) => {
+export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onClose, patients, contacts = [], defaultExamFee = 100, serviceTypes = [], clinicalPrices = {}, allowWithoutFile=false, onSaveWalkInVisit }) => {
   const { showToast } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const committingRef = useRef(false);
   const closeDialog = () => { if (!committingRef.current) onClose(); };
   const dialogRef = useAppointmentDialog(isOpen, closeDialog);
   const [patientMode, setPatientMode] = useState<'existing' | 'new'>('existing');
+  const [withoutFile,setWithoutFile]=useState(false);
+  const [confirmExistingFile,setConfirmExistingFile]=useState(false);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const patientSearch = useRef({ query, deferredQuery, patients, isOpen });
@@ -106,8 +109,9 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
     if (patientMode === 'existing' && !selectedPatient) { showToast('اختر ملف المريض أولًا.', 'warning'); return; }
     const newId = fileNo.trim() || autoFileNo;
     if (patientMode === 'new') {
-      if (!name.trim() || !mobile.trim() || !newId) { showToast('اكتب اسم المريض والهاتف ورقم ملف متاح.', 'warning'); return; }
-      if (patients.some(item => canonicalFileNumber(item.id) === canonicalFileNumber(newId))) { showToast('رقم الملف مستخدم. اختر المريض المسجل أو رقمًا آخر.', 'warning'); return; }
+      if (!name.trim() || !mobile.trim() || (!withoutFile&&!newId)) { showToast('اكتب اسم المريض والهاتف.', 'warning'); return; }
+      if (!withoutFile&&patients.some(item => canonicalFileNumber(item.id) === canonicalFileNumber(newId))) { showToast('رقم الملف مستخدم. اختر المريض المسجل أو رقمًا آخر.', 'warning'); return; }
+      if(withoutFile&&registrationMatches.some(m=>m.fileNo&&m.reason!=='name')&&!confirmExistingFile){showToast('راجع الملف الموجود وأكّد الزيارة المستقلة إن كان الرقم مشتركًا.', 'warning');return;}
       if (age && (!Number.isInteger(Number(age)) || Number(age) < 0 || Number(age) > 120)) { showToast('أدخل عمرًا صحيحًا من صفر إلى ١٢٠ سنة، أو اتركه فارغًا.', 'warning'); return; }
     }
     if (services.some(item => draftPrices[item.id] === '')) { showToast('اكتب سعر كل خدمة قبل حفظ الزيارة؛ الصفر مقبول إذا كانت مجانية.', 'warning'); return; }
@@ -115,7 +119,7 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
     if (error) { showToast(error, 'warning'); return; }
     const patient = patientMode === 'existing' && selectedPatient
       ? { isNew: false, id: selectedPatient.id, name: selectedPatient.name, mobile: selectedPatient.mobile, age: selectedPatient.age || 0, gender: selectedPatient.gender }
-      : { isNew: true, id: newId, name: name.trim(), mobile: mobile.trim(), age: age ? Number(age) : 0, gender: gender || undefined };
+      : { isNew: true, id: withoutFile?'':newId, name: name.trim(), mobile: mobile.trim(), age: age ? Number(age) : 0, gender: gender || undefined, ...(allowWithoutFile&&withoutFile?{withoutFile:true,confirmExistingFile}: {}) };
     committingRef.current = true;
     try {
       await run(async () => {
@@ -140,17 +144,19 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
       <form id="walkin-form" onSubmit={submit} className="walkin-form min-h-0 overflow-y-auto"><fieldset disabled={saving} className="contents">
         <section className="walkin-section"><h4>١. المريض</h4>
           <div className="walkin-mode"><button type="button" aria-pressed={patientMode === 'existing'} onClick={() => setPatientMode('existing')}>مريض مسجل</button><button type="button" aria-pressed={patientMode === 'new'} onClick={() => setPatientMode('new')}>مريض جديد</button></div>
+          {patientMode==='new'&&allowWithoutFile&&<div className="space-y-2 mb-3"><div className="walkin-mode" role="group" aria-label="طريقة تسجيل المريض"><button type="button" aria-pressed={!withoutFile} onClick={()=>setWithoutFile(false)}>فتح ملف جديد</button><button type="button" aria-pressed={withoutFile} onClick={()=>setWithoutFile(true)}>زيارة بدون ملف</button></div><p className="walkin-hint">{withoutFile?'يُحفظ الاسم والموبايل في جهات الاتصال، والخدمة والمدفوع في الحسابات، دون حجز رقم ملف.':'رقم الملف التالي يُحجز عند حفظ الزيارة فقط.'}</p></div>}
           {patientMode === 'existing' ? selectedPatient ? <div className="flex items-center justify-between gap-3 flex-wrap"><div><strong className="block">{selectedPatient.name}</strong><small className="text-slate-500">ملف <bdi>#{selectedPatient.id}</bdi> · <bdi>{selectedPatient.mobile}</bdi></small></div><button type="button" className="clinic-action-cancel" onClick={() => setSelectedId('')}>تغيير المريض</button></div> : <>
             <label>ابحث بالاسم أو رقم الملف أو الهاتف<input data-dialog-autofocus value={query} onChange={event => { patientSearch.current.query = event.target.value; setQuery(event.target.value); }} placeholder="اسم المريض، #رقم الملف أو الهاتف" autoComplete="off" /></label>
             <div className="walkin-results" aria-busy={query !== deferredQuery}>{results.map(item => <button type="button" key={item.id} disabled={query !== deferredQuery} onClick={() => selectSearchPatient(item.id, deferredQuery)}><strong>{item.name} <bdi>#{item.id}</bdi></strong><small><bdi>{item.mobile}</bdi></small></button>)}{!results.length && <p className="p-3 text-sm text-slate-500">لا يوجد ملف مطابق. يمكنك اختيار «مريض جديد».</p>}</div>
           </> : <div className="walkin-grid">
-            <label>اسم المريض<input value={name} onChange={event => setName(event.target.value)} required autoComplete="name" /></label>
-            <label>رقم الهاتف<input type="tel" value={mobile} onChange={event => setMobile(event.target.value)} required autoComplete="tel" placeholder="01xxxxxxxxx" /></label>
-            <label>رقم الملف التلقائي<input value={autoFileNo} readOnly aria-readonly="true" /><small>بعد آخر ملف؛ يتأكد الرقم النهائي عند الحفظ.</small></label>
+            <label>اسم المريض<input value={name} onChange={event => {setName(event.target.value);setConfirmExistingFile(false);}} required autoComplete="name" /></label>
+            <label>رقم الهاتف<input type="tel" value={mobile} onChange={event => {setMobile(event.target.value);setConfirmExistingFile(false);}} required autoComplete="tel" placeholder="01xxxxxxxxx" /></label>
+            {!withoutFile&&<label>رقم الملف التلقائي<input value={autoFileNo} readOnly aria-readonly="true" /><small>بعد آخر ملف؛ يتأكد الرقم النهائي عند الحفظ.</small></label>}
             <label>العمر (اختياري)<input type="number" min="0" max="120" step="1" value={age} onChange={event => setAge(event.target.value)} /></label>
             <label>الجنس (اختياري)<select value={gender} onChange={event => setGender(event.target.value)}><option value="">غير محدد</option><option value="ذكر">ذكر</option><option value="أنثى">أنثى</option></select></label>
           </div>}
-          {patientMode === 'new' && registrationMatches.length > 0 && <aside className="walkin-duplicate-warning" role="status"><strong>راجع التشابه قبل إنشاء ملف جديد</strong><p>الاسم المتشابه أو رقم العائلة لا يعني أنه نفس المريض؛ لا يحدث دمج تلقائي.</p>{registrationMatches.map(match => <div key={`${match.source}:${match.id}`}><span>{match.name} — {match.fileNo ? `له ملف #${match.fileNo}` : 'موجود بجهات الاتصال'} · {match.reason === 'name' ? 'اسم مشابه' : 'نفس الهاتف'}</span>{match.fileNo && <button type="button" onClick={() => { setPatientMode('existing'); setSelectedId(match.fileNo!); }}>استخدام الملف</button>}</div>)}</aside>}
+          {patientMode === 'new' && registrationMatches.length > 0 && <aside className="walkin-duplicate-warning" role="status"><strong>راجع الاسم والرقم المسجلين قبل الحفظ</strong><p>الاسم المتشابه أو رقم العائلة لا يعني أنه نفس المريض؛ لا يحدث دمج تلقائي.</p>{registrationMatches.map(match => <div key={`${match.source}:${match.id}`}><span>{match.name} — {match.fileNo ? `له ملف #${match.fileNo}` : 'موجود بجهات الاتصال'} · {match.reason === 'name' ? 'اسم مشابه' : 'نفس الهاتف'}</span>{match.fileNo && <button type="button" onClick={() => { setPatientMode('existing'); setSelectedId(match.fileNo!); }}>استخدام الملف</button>}</div>)}</aside>}
+          {patientMode==='new'&&withoutFile&&registrationMatches.some(m=>m.fileNo&&m.reason!=='name')&&<label className="walkin-hint walkin-acknowledge"><input type="checkbox" checked={confirmExistingFile} onChange={e=>setConfirmExistingFile(e.target.checked)}/>راجعت الملف الموجود؛ أريد زيارة مستقلة بدون ملف ودون دمج الأشخاص.</label>}
         </section>
         <section className="walkin-section"><h4>٢. الخدمات والكشف</h4>
           <WalkInServicePicker options={pickerOptions} disabled={saving} onAdd={addService} onAddCustom={() => addService()} />

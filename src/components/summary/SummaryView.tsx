@@ -554,7 +554,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-900 text-sm">{p.name}</span>
-                        <span className="font-mono text-slate-400">#{p.id}</span>
+                        <span className="font-mono text-slate-400">{p.id.startsWith('unfiled:')?'بدون ملف':`#${p.id}`}</span>
                       </div>
                       <span className="text-slate-500 block text-[11px]">موبايل: {p.mobile || '—'}</span>
                     </div>

@@ -1,5 +1,6 @@
 import { Session, SessionServiceItem, Patient, Appointment, PaymentInstallment } from '../types';
 import { isValidAppointmentDate } from '../components/appointments/appointmentScheduling';
+import {hasPatientFile} from './patientFileIdentity';
 
 /** New cash entries are integer piastres; only negligible binary arithmetic
  * residue is accepted, never an intentional third decimal or an unsafe total. */
@@ -320,7 +321,7 @@ export function calculateDailyCollections(
         rows.push({
           sessionId: session.id,
           patientId: patient.id,
-          fileNo: patient.id,
+          fileNo: hasPatientFile(patient)?patient.id:'',
           patientName: patient.name,
           mobile: patient.mobile,
           time: session.time || '—',
@@ -352,7 +353,7 @@ export function calculateDailyCollections(
         rows.push({
           sessionId: pay.linkedSessionId || `general_${pay.id}`,
           patientId: patient.id,
-          fileNo: patient.id,
+          fileNo: hasPatientFile(patient)?patient.id:'',
           patientName: patient.name,
           mobile: patient.mobile,
           time: pay.createdAt ? new Date(pay.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—',

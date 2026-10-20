@@ -8,6 +8,18 @@ final class Store {
     private function table(string $value):string {if(!in_array($value,['dc_patients','dc_visits','dc_receipts','dc_contacts','dc_appointments','dc_labs','dc_lab_cases','dc_expenses','dc_material_usages'],true))reject();return $value;}
     public function patient(string $file):array {$r=$this->db->one('SELECT * FROM dc_patients WHERE (file_no=? OR id=?) AND archived=0',[$file,$file]);if(!$r)reject('ملف المريض غير موجود.',404);return $r;}
     public function profile(array $p):array {$d=decode($p['payload']);$d['id']=$p['file_no'];return $d;}
+    /** A billing/clinical identity, NOT a numbered paper file. Reuse the existing
+     * relational ledger without consuming lastFileNo. The opaque key is never
+     * presented as a file number or included in the numbered-file directory. */
+    public function unfiledProfile(array $input):string {
+        $name=text($input['name']??'',200);$raw=text($input['mobile']??'',60);$phone=phone($raw);$age=$input['age']??0;
+        if(!$name||!$phone||!is_int($age)||$age<0||$age>120)reject('راجع الاسم والموبايل والعمر للزيارة بدون ملف.');
+        foreach($this->db->q('SELECT payload FROM dc_patients WHERE phone=? AND archived=0',[$phone])->fetchAll() as $same)if(empty(decode($same['payload'])['withoutFile'])&&($input['confirmExistingFile']??false)!==true)reject('هذا الهاتف له ملف بالفعل؛ استخدم الملف أو أكّد تسجيل زيارة مستقلة دون دمج.',409);
+        $contact=$this->db->one('SELECT id FROM dc_contacts WHERE phone=? AND archived=0 ORDER BY id LIMIT 1',[$phone]);$contactId=$contact['id']??uuid();
+        if(!$contact){$c=['id'=>$contactId,'name'=>$name,'mobile'=>$raw,'notes'=>'','createdAt'=>now()];$this->db->q('INSERT INTO dc_contacts(id,name,phone,payload) VALUES (?,?,?,?)',[$contactId,$name,$phone,json($c)]);}
+        $recordId=uuid();$key='unfiled:'.$recordId;$profile=['id'=>$key,'withoutFile'=>true,'contactId'=>$contactId,'name'=>$name,'mobile'=>$raw,'age'=>$age,'gender'=>text($input['gender']??'',16),'firstVisit'=>date('Y-m-d'),'notes'=>'','allergy'=>''];
+        $this->db->q('INSERT INTO dc_patients(id,file_no,name,phone,payload) VALUES (?,?,?,?,?)',[$recordId,$key,$name,$phone,json($profile)]);return $key;
+    }
     public function fullPatients():array {
         $profiles=$this->db->q('SELECT * FROM dc_patients WHERE archived=0 ORDER BY file_no')->fetchAll();$visits=$this->db->q('SELECT * FROM dc_visits WHERE archived=0 ORDER BY visit_date DESC,id')->fetchAll();$receipts=$this->db->q('SELECT * FROM dc_receipts ORDER BY paid_date,id')->fetchAll();
         $byPatient=[];$byVisit=[];$general=[];foreach($visits as $v)$byPatient[$v['patient_id']][]=$v;foreach($receipts as $r){if($r['visit_id']===null)$general[$r['patient_id']][]=$r;else $byVisit[$r['visit_id']][]=$r;}
@@ -40,8 +52,8 @@ final class Store {
     }
     public function saveProfile(array $input,?string $original=null):string {
         $name=text($input['name']??'',200);if($name==='')reject('اسم المريض مطلوب.');$rawPhone=text($input['mobile']??'',60);if($rawPhone!==''&&!phone($rawPhone))reject('رقم الهاتف غير صالح.');$age=$input['age']??0;if(!is_int($age)||$age<0||$age>120)reject('العمر غير صالح.');
-        if($original!==null){$row=$this->patient($original);$recordId=$row['id'];$file=$row['file_no'];}
-        else{$last=(int)$this->db->get('lastFileNo',0);$requested=$input['id']??null;
+        if($original!==null){$row=$this->patient($original);if(!empty(decode($row['payload'])['withoutFile']))reject('هذا سجل زيارة بدون ملف؛ لا يُمنح رقمًا من تعديل بيانات ملف.');$recordId=$row['id'];$file=$row['file_no'];}
+        else{$last=(int)$this->db->get('lastFileNo',0);foreach($this->db->q('SELECT file_no FROM dc_patients')->fetchAll() as $existing){$n=digits($existing['file_no']);if(ctype_digit($n)&&strlen(ltrim($n,'0'))<=10)$last=max($last,(int)$n);}$requested=$input['id']??null;
             if($last<0||$last>=2000000000)reject('عداد الملفات غير صالح أو بلغ الحد؛ راجعه قبل الإنشاء.');$file=(string)($last+1);if($requested!==null&&$requested!==''&&(string)$requested!==$file)reject('تغيّر رقم الملف التالي؛ حدّث القائمة قبل الإضافة.',409);$recordId=uuid();$this->db->set('lastFileNo',$last+1);}
         $prior=$original!==null?decode($row['payload']):[];
         $profile=array_merge($prior,['id'=>$file,'name'=>$name,'mobile'=>$rawPhone,'age'=>$age,'gender'=>text($input['gender']??'',16),'firstVisit'=>array_key_exists('firstVisit',$input)?($input['firstVisit']!==''?day($input['firstVisit']):''):($prior['firstVisit']??date('Y-m-d')),'notes'=>text($input['notes']??''),'allergy'=>text($input['allergy']??'')]);

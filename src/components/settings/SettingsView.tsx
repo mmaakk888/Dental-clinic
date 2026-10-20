@@ -217,7 +217,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const sessionsByPatient = new Map(patients.map(patient => [patient.id, new Map(patient.sessions.map(session => [session.id, session]))]));
     const rows: (string | number)[][] = calculateDailyCollections(patients, () => true).rows.map(row => {
       const session = sessionsByPatient.get(row.patientId)?.get(row.sessionId);
-      return [row.date, session ? 'تحصيل على خدمة' : 'دفعة عامة', `'${row.fileNo}`, row.patientName, row.proceduresText,
+      return [row.date, session ? 'تحصيل على خدمة' : 'دفعة عامة', row.fileNo?`'${row.fileNo}`:'بدون ملف', row.patientName, row.proceduresText,
         session ? Math.max(0, row.totalValue - row.discountAmount) : 0, row.paidAmount, 'نقدي'];
     });
 

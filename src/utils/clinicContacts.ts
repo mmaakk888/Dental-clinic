@@ -1,4 +1,5 @@
 import type { ClinicContact, Patient } from '../types';
+import {hasPatientFile} from './patientFileIdentity';
 import { normalizeDirectoryDigits } from './patientDirectory';
 import { cleanEgyptianPhone } from './whatsappUtils';
 
@@ -82,7 +83,7 @@ export function findPatientsByPhone(patients: readonly Patient[], phone: string)
   const normalized = normalizeContactPhone(phone);
   if (!normalized) return [];
   // Several files may legitimately share a family phone. Never select/merge one.
-  return patients.filter(patient => normalizeContactPhone(patient.mobile) === normalized);
+  return patients.filter(patient => hasPatientFile(patient) && normalizeContactPhone(patient.mobile) === normalized);
 }
 
 export type ContactPatientFile = Pick<Patient, 'id' | 'name'>;
@@ -97,9 +98,11 @@ export interface ClinicContactDirectoryRow {
 
 /** Derived communication directory only: no patient-to-contact writes, merging
  * or consent changes. Shared canonical family numbers retain all file names. */
-export function buildClinicContactDirectory(contacts: readonly ClinicContact[], patients: readonly Pick<Patient, 'id' | 'name' | 'mobile'>[]): ClinicContactDirectoryRow[] {
+export function buildClinicContactDirectory(contacts: readonly ClinicContact[], patients: readonly (Pick<Patient, 'id' | 'name' | 'mobile'> & Partial<Pick<Patient,'withoutFile'|'contactId'>>)[]): ClinicContactDirectoryRow[] {
+  const casualNames=new Map<string,string[]>();for(const patient of patients)if(!hasPatientFile(patient)&&patient.contactId)casualNames.set(patient.contactId,[...(casualNames.get(patient.contactId)||[]),patient.name]);
   const files = new Map<string, ContactPatientFile[]>();
   for (const patient of patients) {
+    if(!hasPatientFile(patient))continue;
     const phone = normalizeContactPhone(patient.mobile);
     if (!phone) continue;
     const matches = files.get(phone) || [];
@@ -111,9 +114,10 @@ export function buildClinicContactDirectory(contacts: readonly ClinicContact[], 
     const phone = normalizeContactPhone(contact.mobile), matches = files.get(phone) || [];
     if (phone) represented.add(phone);
     return { id: `contact:${contact.id}`, name: contact.name, mobile: contact.mobile, contact, matches,
-      search: [createContactSearchEntry(contact), ...matches.map(file => createContactSearchEntry({ name: file.name, mobile: contact.mobile }))] };
+      search: [createContactSearchEntry(contact), ...(casualNames.get(contact.id)||[]).map(name=>createContactSearchEntry({name,mobile:contact.mobile})), ...matches.map(file => createContactSearchEntry({ name: file.name, mobile: contact.mobile }))] };
   });
   for (const patient of patients) {
+    if(!hasPatientFile(patient))continue;
     if (!patient.mobile.trim()) continue;
     const phone = normalizeContactPhone(patient.mobile);
     if (phone && represented.has(phone)) continue;

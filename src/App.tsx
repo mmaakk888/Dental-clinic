@@ -43,6 +43,8 @@ import { OfflineSyncBanner } from './components/common/OfflineSyncBanner';
 import { HomeView } from './components/home/HomeView';
 import { ScreenLoader } from './components/common/ScreenLoader';
 import {activeFontStylesheet} from './utils/fontStylesheet';
+import {hasPatientFile} from './utils/patientFileIdentity';
+const UnfiledVisitView = lazy(() => import('./components/contacts/UnfiledVisitView').then(m=>({default:m.UnfiledVisitView})));
 
 // Code-split views & modals via React.lazy for ultra-fast mobile startup and reduced bundle size
 const PatientsView = lazy(() => import('./components/patients/PatientsView').then(m => ({ default: m.PatientsView })));
@@ -163,6 +165,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
   // Persistent Domain Data
   const [patients, setPatients] = useState<Patient[]>(() => Storage.getPatients());
   const [contacts, setContacts] = useState<ClinicContact[]>(() => Storage.getContacts());
+  const filePatients=useMemo(()=>patients.filter(hasPatientFile),[patients]);
   const [appointments, setAppointments] = useState<Appointment[]>(() => Storage.getAppointments());
   const [labs, setLabs] = useState<Lab[]>(() => Storage.getLabsFresh());
   const [labCases, setLabCases] = useState<LabCase[]>(() => Storage.getLabCases());
@@ -311,6 +314,8 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
       mobile: string;
       age: number;
       gender?: string;
+      withoutFile?:boolean;
+      confirmExistingFile?:boolean;
     };
     visit: {
       chiefComplaint: string;
@@ -1265,7 +1270,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
               clinicLogo={clinicLogo}
               labels={labels}
               tileOrder={tileOrder}
-              patientCount={patients.length}
+              patientCount={filePatients.length}
               todayApptCount={todayApptCount}
               activeLabCount={activeLabCount}
               onNavigate={handleNavigateWithSubTab}
@@ -1288,7 +1293,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
             canAccessView(currentUser, 'patients') ? (
               <PatientsView
                 contacts={contacts}
-                patients={patients}
+                patients={filePatients}
                 appointments={appointments}
                 labCases={labCases}
                 isPrivacyMode={isPrivacyMode}
@@ -1315,7 +1320,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
 
           {activeView === 'patient-file' && activePatient && (
             canAccessView(currentUser, 'patient-file') ? (
-              <PatientFileView
+              activePatient.withoutFile ? <UnfiledVisitView key={activePatient.id} patient={activePatient} contact={contacts.find(c=>c.id===activePatient.contactId)} showFinance={!isPrivacyMode&&canPerformAction(currentUser,'view_patient_finance')} canPay={canPerformAction(currentUser,'register_payment')} onPay={handleAddPaymentInstallment} onBack={()=>handleNavigateWithSubTab('contacts')}/> : <PatientFileView
                 key={activePatient.id}
                 patient={activePatient}
                 appointments={appointments}
@@ -1380,7 +1385,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
               <LabView
                 labs={labs}
                 labCases={labCases}
-                patients={patients}
+                patients={filePatients}
                 crownPrices={crownPrices}
                 examinationFee={examinationFee}
                 onSaveProstheticOrder={canPerformAction(currentUser, 'add_session') ? handleSaveProstheticOrder : undefined}
@@ -1535,11 +1540,12 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
           <QuickWalkInModal
             isOpen={isWalkInModalOpen}
             onClose={() => setIsWalkInModalOpen(false)}
-            patients={patients}
+            patients={filePatients}
             serviceTypes={serviceTypes}
             clinicalPrices={clinicalPrices}
             defaultExamFee={examinationFee}
             onSaveWalkInVisit={handleSaveWalkInVisit}
+            allowWithoutFile={!!runtime}
             contacts={contacts}
           />
         )}
@@ -1572,7 +1578,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
           <SmartScheduleModal
             isOpen={isSmartScheduleOpen}
             onClose={() => setIsSmartScheduleOpen(false)}
-            patients={patients}
+            patients={filePatients}
             existingAppointments={appointments}
             onBookAppointment={handleSaveAppointment}
           />

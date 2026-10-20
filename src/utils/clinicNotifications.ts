@@ -50,7 +50,7 @@ export function buildClinicNotifications({ patients, appointments, labCases, tod
       readKey: JSON.stringify([id, balance]),
       type: 'finance',
       title: `رصيد متبقٍ: ${patient.name}`,
-      message: `متبقي ${balance.toLocaleString('ar-EG')} ج.م على الملف #${patient.id}؛ ليس إشعار تأخر عن موعد سداد.`,
+      message: `متبقي ${balance.toLocaleString('ar-EG')} ج.م على ${patient.withoutFile || patient.id.startsWith('unfiled:') ? 'زيارة بدون ملف' : `الملف #${patient.id}`}؛ ليس إشعار تأخر عن موعد سداد.`,
       date: 'متبقٍ',
       actionPayload: { patientId: patient.id },
     });

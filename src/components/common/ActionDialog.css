@@ -46,6 +46,8 @@
 .walkin-payment-summary { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-top: .85rem; padding: .75rem; border-radius: .75rem; background: #f1f5f9; color: #475569; font-size: .85rem; }
 .walkin-payment-summary strong { display: block; margin-top: .15rem; font-size: 1rem; color: #0f172a; }
 .walkin-hint { margin-top: .5rem; color: #64748b; font-size: .78rem; line-height: 1.7; }
+.walkin-dialog .walkin-acknowledge { display:flex; align-items:flex-start; gap:.5rem; }
+.walkin-dialog .walkin-acknowledge input[type='checkbox'] { inline-size:20px; block-size:20px; min-block-size:20px; flex:none; margin-block-start:3px; }
 .walkin-dialog .walkin-form { gap: .6rem; padding: .75rem; align-items: start; }
 .walkin-dialog .walkin-section { padding: .7rem; border-radius: .85rem; }
 .walkin-dialog .walkin-section h4 { margin-bottom: .5rem; font-size: .85rem; }

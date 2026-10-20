@@ -12,6 +12,7 @@ import { downloadLocalClinicBackup, localBackupSectionSummary, readLocalClinicBa
 import './ClinicContacts.css';
 import './DataTransferManagement.css';
 import {usePortableRuntime} from '../../portable/runtime';
+import {hasPatientFile} from '../../utils/patientFileIdentity';
 import {PortableBackupPanel} from './PortableBackupPanel';
 
 type AuthorizationKind = 'patients' | 'patient_finance' | 'financial_report' | 'full_backup';
@@ -120,7 +121,7 @@ export function LocalBackupRestoreDialog({ onAuthorize, onRestore, onClose }: {
   </div></div>;
 }
 
-export function DataTransferManagement({ patients, contacts, canTransferData = false, canViewPatients, canImportPatients, canManageContacts, canExportPatientFinance, canExportFinancialReports, canManageFullBackup = false, onGetFullBackupSnapshot, onRestoreFullData, onImportPatients, onAuthorizePatientImport, onImportContacts, onAuthorizeContactExport, onAuthorizeDataExport, onExportFinancialReport }: {
+export function DataTransferManagement({ patients: allPatients, contacts, canTransferData = false, canViewPatients, canImportPatients, canManageContacts, canExportPatientFinance, canExportFinancialReports, canManageFullBackup = false, onGetFullBackupSnapshot, onRestoreFullData, onImportPatients, onAuthorizePatientImport, onImportContacts, onAuthorizeContactExport, onAuthorizeDataExport, onExportFinancialReport }: {
   canTransferData?: boolean;
   patients: Patient[]; contacts: ClinicContact[]; canViewPatients: boolean; canImportPatients: boolean; canManageContacts: boolean; canExportPatientFinance: boolean; canExportFinancialReports: boolean;
   onImportPatients: (patients: Patient[]) => Promise<void>; onAuthorizePatientImport: () => void; onImportContacts: (rows: ContactImportInput[]) => Promise<ContactImportSummary>;
@@ -129,6 +130,7 @@ export function DataTransferManagement({ patients, contacts, canTransferData = f
 }) {
   const id = `data-transfer-${useId().replace(/[^\w-]/g, '')}`;
   const portable=usePortableRuntime();
+  const patients=useMemo(()=>allPatients.filter(hasPatientFile),[allPatients]);
   const [section, setSection] = useState<'patients' | 'contacts' | 'reports' | 'backup'>('patients'), [dialog, setDialog] = useState<'patients-import' | 'contacts-import' | 'contacts-export' | 'backup-restore' | null>(null);
   const [columns, setColumns] = useState(defaultColumns), [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const { showToast } = useToastAndConfirm();

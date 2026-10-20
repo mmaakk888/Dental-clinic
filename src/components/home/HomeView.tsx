@@ -9,6 +9,7 @@ import { calculateDailyCollections, getPatientFinancialSummary } from '../../uti
 import { canAccessView, canPerformAction } from '../../utils/rbac';
 import { getHomeActionAccess } from '../../utils/homeActions';
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
+import {hasPatientFile} from '../../utils/patientFileIdentity';
 import { getHomeClockDisplay } from '../../utils/homeClock';
 import { useHomeClock } from '../../hooks/useHomeClock';
 import { getHomeLayout } from '../../utils/homeLayout';
@@ -103,7 +104,7 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
 
   const showAlerts = (canAppointments && stats.noShow > 0)
     || (canLab && activeLabCount > 0) || (canViewExpenses && stats.spent > 0);
-  const searchIndex = useMemo(() => buildHomePatientSearch(canPatients ? patients : EMPTY_PATIENTS), [patients, canPatients]);
+  const searchIndex = useMemo(() => buildHomePatientSearch(canPatients ? patients.filter(hasPatientFile) : EMPTY_PATIENTS), [patients, canPatients]);
   const filteredPatients = useMemo(() => searchHomePatients(searchIndex, deferredSearch, 6), [searchIndex, deferredSearch]);
   const searchPending = searchQuery !== deferredSearch;
   useEffect(() => { setSelectedPatientIndex(0); }, [deferredSearch, filteredPatients]);
