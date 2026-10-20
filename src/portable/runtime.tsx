@@ -8,6 +8,7 @@ export interface PortableRuntime {
  storage:typeof LocalStorage; currentUser():User|null; authenticate(username:string,password:string):Promise<User>;
  action(action:string,args:unknown):Promise<any>; read(action:string):Promise<any>; refresh():Promise<void>; remember(value:boolean):Promise<void>; logout():Promise<void>;
  backupRequest(form?:FormData):Promise<Response>;
+ updateRequest(form?:FormData):Promise<Response>;
  prescriptionHeader():{doctorName:string;phone:string;address:string}|undefined;
  subscribe(listener:()=>void):()=>void; pending():boolean; error():string; retry():Promise<void>; cancel():Promise<void>;
 }
@@ -53,6 +54,7 @@ export function createPortableRuntime(endpoint:URL):PortableRuntime {
   async remember(value){await request({action:'auth.remember',args:{remember:value}});},
   async logout(){if(pending&&snapshot)recovery={operationId:pending.operationId,userId:snapshot.user.id};try{await request({action:'auth.logout',args:{}});}finally{pending=null;clear();}},
   async action(action,args){if(!snapshot)throw Error('سجّل الدخول أولًا.');if(recovery?.userId===snapshot.user.id)throw Error(lastError);if(busy)throw Error('انتظر انتهاء العملية.');if(pending&&(pending.action!==action||JSON.stringify(pending.args)!==JSON.stringify(args)))throw Error('راجع المحاولة السابقة أو ألغها قبل تسجيل عملية أخرى.');pending??={action,args:JSON.parse(JSON.stringify(args)),operationId:crypto.randomUUID(),expectedRevision:snapshot.revision};rememberOperation();return perform();},
+  async updateRequest(form){if(!snapshot||!['admin','doctor'].includes(snapshot.user.role))throw Error('تحديث النظام للمدير فقط.');if(pending||recovery?.userId===snapshot.user.id)throw Error('تحقق من العملية المعلقة قبل التحديث.');const response=await fetch(new URL('update.php',endpoint),{method:form?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:form?{'X-CSRF-Token':csrf}:{},...(form?{body:form}:{})});if(response.status===401)clear();return response;},
   subscribe(listener){listeners.add(listener);return()=>{listeners.delete(listener);};},pending:()=>!!pending||!!(recovery&&recovery.userId===snapshot?.user.id),error:()=>lastError,
   async retry(){if(recovery?.userId===snapshot?.user.id)await settleRecovery();else await perform();},async cancel(){if(recovery?.userId===snapshot?.user.id){await settleRecovery();return;}if(!pending||busy)return;busy=true;try{const result=await request({...pending,action:'operation.cancel',args:{}});pending=null;forgetOperation();lastError=result.committed?'العملية كانت محفوظة بالفعل؛ تم تحديث البيانات دون تكرارها.':'';accept(result);}finally{busy=false;emit();}}
  };

@@ -15,3 +15,5 @@ migration-private/
 *.clinicbackup
 clinic-decryption-key-*.json
 *.private.sql
+*.private.pem
+*.clinicupdate.zip

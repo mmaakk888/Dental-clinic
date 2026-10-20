@@ -13,6 +13,8 @@ return [
     'max_upload_bytes' => 153600,
     'max_logo_bytes' => 2097152,
     'allow_http_loopback' => false,
+    // Runtime capability checks still apply. No signing private key on the host.
+    'updates' => ['enabled'=>true,'max_zip_bytes'=>8388608],
     // No private decryption key belongs here. Configure credentials directly on
     // the new host, never in the UI, GitHub, a backup or JavaScript.
     'backup' => [

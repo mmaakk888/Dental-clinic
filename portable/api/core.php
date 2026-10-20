@@ -59,7 +59,9 @@ final class DB {
     }
     public function q(string $sql,array $args=[]): \PDOStatement {$s=$this->pdo->prepare($sql);$s->execute($args);return $s;}
     public function one(string $sql,array $args=[]): ?array { $v=$this->q($sql,$args)->fetch();return $v===false?null:$v; }
-    public function lock(): int { $suffix=$this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME)==='mysql'?' FOR UPDATE':'';$v=$this->one("SELECT value_json FROM dc_meta WHERE id='revision'".$suffix);if(!$v)reject('لم تكتمل تهيئة القاعدة.',503);return (int)decode($v['value_json']); }
+    /** Domain writers recheck maintenance AFTER taking the revision lock. */
+    public function lock(bool $maintenanceAllowed=false): int { $suffix=$this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME)==='mysql'?' FOR UPDATE':'';$v=$this->one("SELECT value_json FROM dc_meta WHERE id='revision'".$suffix);if(!$v)reject('لم تكتمل تهيئة القاعدة.',503);if(!$maintenanceAllowed)$this->guardMaintenance();return (int)decode($v['value_json']); }
+    public function guardMaintenance():void {if($this->get('update_maintenance'))reject('تحديث النظام جارٍ؛ الحفظ متوقف مؤقتًا لحماية البيانات. افتح صفحة تحديث النظام للمتابعة أو الاستعادة.',503,'maintenance');}
     public function get(string $key,mixed $default=null):mixed{$r=$this->one('SELECT value_json FROM dc_meta WHERE id=?',[$key]);return $r?decode($r['value_json']):$default;}
     public function set(string $key,mixed $value):void{if($this->one('SELECT id FROM dc_meta WHERE id=?',[$key]))$this->q('UPDATE dc_meta SET value_json=? WHERE id=?',[json($value),$key]);else $this->q('INSERT INTO dc_meta(id,value_json) VALUES (?,?)',[$key,json($value)]);}
 }

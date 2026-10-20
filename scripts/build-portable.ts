@@ -13,7 +13,7 @@ const artifacts = path.resolve('build/portable-artifacts');
 if (fs.existsSync(target) || fs.existsSync(artifacts)) {
   throw Error('Frozen release already exists. Rename build/portable-release AND build/portable-artifacts before preparing another release.');
 }
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md']) {
   if (!fs.existsSync(path.join('portable', file))) throw Error('Missing release document: ' + file);
 }
 await build({configFile: path.resolve('vite.portable.config.ts')});
@@ -29,7 +29,7 @@ for (const file of ['config.example.php', '.htaccess']) {
 // Private operational tools only; no legacy data migration exporters.
 fs.cpSync('portable/tools',path.join(privateDir,'portable/tools'),{recursive:true});
 fs.copyFileSync('portable/schema.sql', path.join(privateDir, 'schema.sql'));
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md']) {
   fs.copyFileSync(path.join('portable', file), path.join(privateDir, file));
 }
 const defaults = {
@@ -72,7 +72,7 @@ const filtered = sourceFiles.filter(file => {
   const relative = path.relative(process.cwd(), file).replaceAll('\\', '/');
   return !/(?:^|\/)(?:node_modules|\.git|\.firebase|migration-private|review-proofs|build|dist)(?:\/|$)/.test(relative)
     && !/(?:^|\/)(?:config\.php|.*\.private\.[^/]+|\.env(?!\.example$)[^/]*)$/.test(relative)
-    && !/\.(?:log|jpg|jpeg|png|zip|db|sqlite|clinicbackup)$/i.test(relative)
+    && !/\.(?:log|jpg|jpeg|png|zip|db|sqlite|clinicbackup|pem|key)$/i.test(relative)
     && !/(?:^|\/)clinic-decryption-key-[^/]+\.json$/i.test(relative);
 });
 for(const file of filtered)if(/"format"\s*:\s*"clinic-backup-key"/.test(fs.readFileSync(file,'utf8')))throw Error('Private decryption key file must not enter the source ZIP.');

@@ -29,6 +29,7 @@ const UserAccountsManagement = lazy(() => import('./UserAccountsManagement').the
 const AuditTrailView = lazy(() => import('./AuditTrailView').then(module => ({ default: module.AuditTrailView })));
 const WhatsAppManagement = lazy(() => import('./WhatsAppManagement').then(module => ({ default: module.WhatsAppManagement })));
 const DataTransferManagement = lazy(() => import('./DataTransferManagement').then(module => ({ default: module.DataTransferManagement })));
+const SystemUpdatePanel = lazy(() => import('./SystemUpdatePanel').then(module => ({ default: module.SystemUpdatePanel })));
 
 function SettingsSectionContent({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -166,6 +167,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const canManageFullBackup = fullBackupRequested && canDataTransfer;
   const allowedSettingsSections = settingsSections.filter(section =>
     section.key === 'users' ? canManageUsers
+      : section.key === 'updates' ? !!portable && !!currentUser && ['doctor','admin'].includes(currentUser.role)
       : ['excel', 'backup', 'system'].includes(section.key) ? canDataTransfer : true);
   const isAllowedSection = (value: string | undefined): value is SettingsSectionKey => allowedSettingsSections.some(section => section.key === value);
 
@@ -280,6 +282,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {activeSubTab === 'backup' && !canManageFullBackup && <div role="status" className="clinic-status-card">النسخ الاحتياطي متاح للحساب الإداري المصرّح له، خارج وضع الخصوصية.</div>}
         {activeSubTab === 'backup' && canManageFullBackup && <PortableBackupPanel onTransfer={() => handleSelectSubTab('excel')} />}
+        {activeSubTab === 'updates' && portable && canManageFullBackup && <SettingsSectionContent label="تحديث النظام"><SystemUpdatePanel /></SettingsSectionContent>}
+        {activeSubTab === 'updates' && !canManageFullBackup && <p role="status" className="clinic-status-card">التحديث متاح للمدير خارج وضع الخصوصية، بعد إنهاء العمليات المعلقة.</p>}
 
         {/* Audit Log SubTab */}
         {activeSubTab === 'audit' && (

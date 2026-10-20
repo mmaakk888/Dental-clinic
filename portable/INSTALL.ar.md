@@ -9,6 +9,8 @@
 
 ## 1. الدومين وHTTPS
 
+ميزة تحديث النظام الجديدة موضحة في UPDATE.ar.md: تتطلب ZipArchive وsodium ومجلدًا خاصًا قابلًا للكتابة خارج جذر الويب. لا تحتاج cron أو Node على الاستضافة. إذا كنت تحدث قاعدة قائمة، لا تُعد التثبيت أو استيراد schema.sql؛ استخدم مسار التحديث والنسخة الاحتياطية.
+
 أنشئ الدومين أو الفرعي، وحدد جذر الموقع الصحيح: public_html في cPanel أو htdocs في InfinityFree غالبًا. فعّل SSL من SSL/TLS Status → AutoSSL إن أتاحه المزود، أو أداة Free SSL Certificates في InfinityFree. أكمل التحقق والتثبيت، وافتح الرابط عبر HTTPS دون تحذير قبل تسجيل الدخول. اختر رابطًا ثابتًا مع www أو بدونه، وحوّل HTTP والاسم البديل إليه من لوحة الاستضافة.
 
 [دليل SSL في InfinityFree](https://forum.infinityfree.com/t/how-to-get-free-ssl-https-on-infinityfree/49323).

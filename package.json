@@ -12,7 +12,9 @@
     "preview:local": "tsx scripts/portable-local.ts preview",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=3 --test-timeout=180000 src/utils/*.test.ts src/components/appointments/*.test.ts",
-    "test:api": "node scripts/test-portable-api.mjs"
+    "test:api": "node scripts/test-portable-api.mjs",
+    "test:updates": "tsx scripts/test-system-update.ts",
+    "package:update": "tsx scripts/package-update.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

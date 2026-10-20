@@ -20,6 +20,12 @@ try {
     date_default_timezone_set($config['timezone']??'Africa/Cairo');$db=new DB($config);$auth=new Auth($db,$config);$store=new Store($db);$domain=new Domain($db,$config);
     $method=$_SERVER['REQUEST_METHOD']??'GET';$action=$_GET['action']??'session';
     if($method==='GET'){
+        if($action==='update-health'){
+            require_once __DIR__.'/version.php';$user=$auth->current();permit($user,'system.update');$job=$_GET['job']??'';
+            if(!is_string($job)||!preg_match('/^[a-f0-9]{32}$/D',$job)||$db->get('update_maintenance')!==$job||!hash_equals(hash_hmac('sha256','update-health:'.$job,$config['app_key']),$_GET['token']??''))reject('فحص غير مصرح.',403);
+            $db->pdo->beginTransaction();$db->lock(true);$snapshot=$store->snapshot($user);$db->pdo->commit();if(!is_array($snapshot['domain']??null))reject('فشل تشغيل طبقة البيانات.',503);
+            echo json(['ok'=>true,'version'=>Clinic\SYSTEM_VERSION,'proof'=>hash_hmac('sha256','update-health-confirm:'.$job.':'.Clinic\SYSTEM_VERSION,$config['app_key'])]);exit;
+        }
         if($action==='setup-status'){echo json(['ok'=>true,'csrf'=>$auth->csrf(),'installed'=>(bool)$db->one("SELECT id FROM dc_meta WHERE id='installation'")||(bool)$db->one('SELECT id FROM dc_users LIMIT 1')]);exit;}
         if($action==='brand-logo'){$settings=$db->get('settings',[]);$logo=$settings['clinicLogo']??'';$file=null;if(preg_match('/^api\/index\.php\?action=file&id=([A-Za-z0-9_\-:.]{1,128})$/D',$logo,$match))$file=$db->one("SELECT * FROM dc_files WHERE id=? AND owner_kind='logo' AND owner_id='clinic'",[$match[1]]);if(!$file)reject('لا يوجد شعار.',404);header('Content-Type: '.$file['mime']);echo $file['content'];exit;}
         if($action==='session'){
@@ -39,6 +45,7 @@ try {
     if((int)($_SERVER['CONTENT_LENGTH']??0)>4194304)reject('الطلب أكبر من الحد الآمن؛ استخدم أداة النقل للنسخ الكبيرة.',413);
     if(!str_starts_with($_SERVER['CONTENT_TYPE']??'','application/json'))reject('نوع طلب غير صالح.',415);
     $raw=file_get_contents('php://input',false,null,0,4194305);if($raw===false||strlen($raw)>4194304)reject('طلب كبير.',413);try{$input=decode($raw);}catch(JsonException){reject('JSON غير صالح.');}if(!is_array($input))reject();\Clinic\checkTree($input);$auth->guardCsrf();$action=text($input['action']??'',64);$args=$input['args']??[];if(!is_array($args))reject();
+    if($action!=='install')$db->guardMaintenance();
     if($action==='install'){
         if($db->one("SELECT id FROM dc_meta WHERE id='installation'")||$db->one('SELECT id FROM dc_users LIMIT 1'))reject('اكتمل التثبيت وأُغلق نهائيًا؛ سجّل الدخول بحساب المدير.',410);
         if(strlen($config['install_token']??'')<32||!hash_equals($config['install_token'],$args['installToken']??''))reject('رمز التهيئة غير صحيح.',403);
