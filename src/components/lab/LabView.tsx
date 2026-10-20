@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Microscope, ArrowRight, Plus, Phone, MapPin, DollarSign, Edit3, Trash2, CheckCircle, Search, TrendingUp, ChevronLeft, AlertCircle, Clock, CheckCircle2, Truck, AlertTriangle, Filter } from 'lucide-react';
+import { Crown, ArrowRight, Plus, Phone, MapPin, Banknote, Edit3, Trash2, CheckCircle, Search, TrendingUp, ChevronLeft, AlertCircle, Clock, CheckCircle2, Truck, AlertTriangle, Filter } from 'lucide-react';
 import { Lab, LabCase, Patient } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { EmptyState } from '../common/EmptyState';
@@ -7,6 +7,7 @@ import { allocateLabPayment, getLabCaseFinancials, labMoneyCents } from '../../u
 import { BalanceProgressMeter, VisualFinancialCard } from '../common/FinancialBadge';
 import { cloneLab } from '../../utils/labPricing';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useDialogDraftClose } from '../common/useDialogCloseGuard';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { ProstheticOrderForm } from '../ProstheticOrderForm';
 import type { ProstheticOrderInput } from '../../utils/prostheticWorkflow';
@@ -103,9 +104,6 @@ export const LabView: React.FC<LabViewProps> = ({
   const [labAddress, setLabAddress] = useState('');
   const [labNotes, setLabNotes] = useState('');
   const [labFormError, setLabFormError] = useState('');
-  const labDialogRef = useAppointmentDialog(isLabModalOpen, () => { if (!saving) setIsLabModalOpen(false); });
-  const caseDialogRef = useAppointmentDialog(isCaseModalOpen, () => { if (!saving) setIsCaseModalOpen(false); });
-  const paymentDialogRef = useAppointmentDialog(isPaymentModalOpen, () => { if (!saving) setIsPaymentModalOpen(false); });
 
   // Form State for Lab Case
   const [casePatientId, setCasePatientId] = useState('');
@@ -144,6 +142,12 @@ export const LabView: React.FC<LabViewProps> = ({
 
   // Payment Form State
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
+  const closeLabEditor = useDialogDraftClose(isLabModalOpen, saving, () => setIsLabModalOpen(false), { labName, labPhone, labAddress, labNotes });
+  const closeLabCase = useDialogDraftClose(isCaseModalOpen, saving, () => setIsCaseModalOpen(false), { casePatientId, caseServiceId, caseUnits, caseDeliveryDate, caseNote, caseSessionId });
+  const closeLabPayment = useDialogDraftClose(isPaymentModalOpen, saving, () => setIsPaymentModalOpen(false), { paymentAmount, paymentDate, paymentNote });
+  const labDialogRef = useAppointmentDialog(isLabModalOpen, closeLabEditor);
+  const caseDialogRef = useAppointmentDialog(isCaseModalOpen, closeLabCase);
+  const paymentDialogRef = useAppointmentDialog(isPaymentModalOpen, closeLabPayment);
 
   React.useEffect(() => {
     if (!canViewFinancials) {
@@ -448,7 +452,7 @@ export const LabView: React.FC<LabViewProps> = ({
           {canManagePrices && canViewFinancials && onManageLabPrices && <button
             type="button" onClick={() => onManageLabPrices(selectedLabId || undefined)}
             className="lab-pricing-shortcut"
-          ><DollarSign className="h-4 w-4" /> أسعار المعامل</button>}
+          ><Banknote className="h-4 w-4" /> أسعار المعامل</button>}
 
           {canViewFinancials && <button
             type="button"
@@ -525,7 +529,7 @@ export const LabView: React.FC<LabViewProps> = ({
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
               <div className="space-y-1">
                 <h1 className="text-2xl font-extrabold text-[#0f3d3e] font-tajawal flex items-center gap-2">
-                  <Microscope className="w-6 h-6 text-[#c9a227]" />
+                  <Crown className="w-6 h-6 text-[#c9a227]" />
                   {selectedLab.name}
                 </h1>
                 <div className="flex items-center gap-4 text-xs text-slate-600 flex-wrap pt-1">
@@ -654,7 +658,7 @@ export const LabView: React.FC<LabViewProps> = ({
         </div>
       ) : activeTab === 'labs' ? (
         <div className="lab-overview-grid">
-          {!labs.length && <div className="col-span-full"><EmptyState icon={<Microscope className="h-8 w-8" />} title="لا توجد معامل مسجلة بعد"
+          {!labs.length && <div className="col-span-full"><EmptyState icon={<Crown className="h-8 w-8" />} title="لا توجد معامل مسجلة بعد"
             description={canViewFinancials ? 'أضف المعمل، ثم حدّد خدماته وأسعاره من قسم أسعار المعامل.' : 'تظهر المعامل هنا بعد إضافتها من حساب الطبيب.'}
             ctaLabel={canViewFinancials ? 'إضافة معمل' : undefined} onCtaClick={canViewFinancials ? handleOpenAddLabModal : undefined} /></div>}
           {labs.map(lab => {
@@ -665,7 +669,7 @@ export const LabView: React.FC<LabViewProps> = ({
             return <button key={lab.id} type="button" className="lab-overview-card"
               aria-label={`عرض تفاصيل معمل ${lab.name}`} onClick={() => setSelectedLabId(lab.id)}>
               <span className="lab-card-heading">
-                <span className="lab-card-icon"><Microscope className="h-5 w-5" /></span>
+                <span className="lab-card-icon"><Crown className="h-5 w-5" /></span>
                 <span className="min-w-0 flex-1"><span className="lab-card-name">{lab.name}</span>
                   <span className="lab-card-contact">{lab.phone || lab.address || 'لم تُسجّل بيانات تواصل'}</span></span>
                 <ChevronLeft className="h-4 w-4 text-slate-400 shrink-0" />
@@ -809,7 +813,7 @@ export const LabView: React.FC<LabViewProps> = ({
           {/* Lab Cases List / Cards */}
           {filteredCases.length === 0 ? (
             <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
-              <Microscope className="w-10 h-10 text-slate-300 mx-auto" />
+              <Crown className="w-10 h-10 text-slate-300 mx-auto" />
               <p className="text-sm font-bold text-slate-700 font-tajawal">{labCases.length ? 'لا توجد حالات معمل تطابق التصفية الحالية' : 'لم تُسجّل أي تركيبة بعد'}</p>
               <p className="text-xs text-slate-500">{labCases.length ? 'جرّب تغيير التصفية أو البحث باسم آخر' : labs.length ? 'سجّل التركيبة من ملف المريض لربط الجلسة والحساب والمعمل معًا.' : 'أضف معملًا وخدماته وأسعاره أولًا، ثم اضبط المعمل الافتراضي من الإعدادات.'}</p>
               {!labCases.length && !labs.length && canViewFinancials && <button type="button" className="clinic-next-action" onClick={()=>setActiveTab('labs')}>تجهيز المعامل</button>}
@@ -929,7 +933,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <h2 id="lab-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 {editingLab ? 'تعديل بيانات المعمل' : 'إضافة معمل جديد'}
               </h2>
-              <button aria-label="إغلاق بيانات المعمل" onClick={() => { if (!saving) setIsLabModalOpen(false); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق بيانات المعمل" onClick={closeLabEditor} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
@@ -990,7 +994,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => { if (!saving) setIsLabModalOpen(false); }}
+                  onClick={closeLabEditor}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
                 >
                   إلغاء
@@ -1015,7 +1019,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <h2 id="lab-case-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 ربط جلسة سابقة بمعمل ({selectedLab.name})
               </h2>
-              <button aria-label="إغلاق إضافة الحالة" onClick={() => { if (!saving) setIsCaseModalOpen(false); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق إضافة الحالة" onClick={closeLabCase} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
@@ -1105,7 +1109,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => { if (!saving) setIsCaseModalOpen(false); }}
+                  onClick={closeLabCase}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
                 >
                   إلغاء
@@ -1130,7 +1134,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <h2 id="lab-payment-modal-title" className="text-base font-bold text-[#0f3d3e] font-tajawal">
                 سجل الحالة وتسديد المعمل
               </h2>
-              <button aria-label="إغلاق تسديد الدفعة" onClick={() => { if (!saving) setIsPaymentModalOpen(false); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button aria-label="إغلاق تسديد الدفعة" onClick={closeLabPayment} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 ✕
               </button>
             </div>
@@ -1161,7 +1165,7 @@ export const LabView: React.FC<LabViewProps> = ({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => { if (!saving) setIsPaymentModalOpen(false); }}
+                  onClick={closeLabPayment}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl cursor-pointer"
                 >
                   إلغاء

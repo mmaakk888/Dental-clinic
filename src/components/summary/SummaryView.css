@@ -22,7 +22,7 @@
 
 .summary-section-switcher--pinned {
   position: fixed;
-  inset-block-start: 12px;
+  inset-block-start: var(--finance-top, 12px);
   z-index: 35;
   box-shadow: 0 8px 28px rgb(15 23 42 / .13);
 }
@@ -85,6 +85,20 @@
   display: grid;
   gap: 1rem;
 }
+.summary-debtor-search { display: flex; align-items: center; gap: 9px; border: 1px solid #dce6e8; border-radius: 12px; padding: 4px 12px; background: #f8fbfb; min-width: 0; }
+.summary-debtor-search svg { width: 19px; height: 19px; flex-shrink: 0; color: #54716c; }
+.summary-debtor-search input { width: 100%; min-width: 0; min-height: 44px; background: transparent; font-size: 14px; outline: none; }
+.summary-debtor-search:focus-within { outline: 2px solid #2d8276; outline-offset: 2px; }
+.summary-debtor-search span { flex-shrink: 0; font-size: 12px; color: #627a80; }
+.summary-empty { display: grid; justify-items: center; text-align: center; gap: 8px; padding: 26px 14px; border: 1px dashed #cededb; border-radius: 14px; background: #f6fbf9; color: #436a62; font-size: 14px; line-height: 1.8; }
+.summary-empty p { margin: 0; font-size: 13px; color: #657f7b; }
+.summary-empty svg { width: 26px; height: 26px; }
+.summary-load-more { display: block; min-height: 44px; margin: 12px auto 0; padding: 8px 18px; border: 1px solid #d4e3df; border-radius: 11px; color: #235e54; background: #f2f8f5; font-weight: 800; cursor: pointer; }
+.summary-workspace button { touch-action: manipulation; }
+.summary-workspace :is(button, input, select):focus-visible { outline: 2px solid #2d8276; outline-offset: 2px; }
+.summary-workspace :is(input:not([type='checkbox']), select, button) { min-height: 44px; }
+.summary-workspace .summary-debtors h2 { line-height: 1.8; }
+.summary-metric-value bdi { unicode-bidi: isolate; }
 
 .summary-overview-heading {
   display: flex;

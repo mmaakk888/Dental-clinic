@@ -106,7 +106,7 @@ function summarySaveHarness(before: () => void = () => {}) {
     } };
   const resetInvoiceUpload = callback(summary, 'resetInvoiceUpload', dependencies);
   return { ...h, saved, persistence, save: callback(summary, 'handleSaveExpenseForm', { ...dependencies, resetInvoiceUpload }),
-    close: callback(summary, 'handleCloseExpenseModal', { ...dependencies, resetInvoiceUpload }) };
+    close: callback(summary, 'closeExpenseEditor', { ...dependencies, resetInvoiceUpload }) };
 }
 test('basic save accepted after busy rerender closes only its own draft and retains compressed-only payload', async () => {
   const h = summarySaveHarness(), pending = h.save({ preventDefault() {} });

@@ -4,6 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { WhatsappSettings } from '../types';
 import { WhatsAppComposer } from '../components/patient/WhatsAppComposer';
+import { ToastAndConfirmProvider } from '../components/common/ToastAndConfirm';
 
 const settings: WhatsappSettings = {
   apiKey: '', webhookUrl: '', senderNumber: '',
@@ -11,11 +12,11 @@ const settings: WhatsappSettings = {
   templates: { reminderTomorrow: '', newAppt: '', postOp: '', accountBalance: '' },
 };
 const recipient = { id: 'contact-only', name: 'اسم تجريبي بدون ملف', mobile: '٠١٠١٢٣٤٥٦٧٨', source: 'contact' as const };
-const renderCampaign = (consent: WhatsappSettings['campaignConsent'], message = 'أهلًا {patientName} من {clinicName}') => renderToStaticMarkup(React.createElement(WhatsAppComposer, {
+const renderCampaign = (consent: WhatsappSettings['campaignConsent'], message = 'أهلًا {patientName} من {clinicName}') => renderToStaticMarkup(React.createElement(ToastAndConfirmProvider,{children:React.createElement(WhatsAppComposer, {
   campaignRecipient: recipient,
   settings: { ...settings, campaignConsent: consent }, clinicName: 'عيادة تجريبية', onClose: () => {},
   campaign: { template: 'greeting', message, link: '', attachment: null, onOpened: () => {} },
-}));
+})}));
 
 test('campaign composer renders a contact identity without creating or reading a clinical patient', () => {
   const html = renderCampaign({ '201012345678': 'allowed' });

@@ -13,7 +13,7 @@ type LabelsWithNavigation = UILabels & { navigationLabels?: NavigationLabels };
 
 export const NAVIGATION_SECTIONS: readonly { key: NavigationSectionKey; label: string; description: string }[] = [
   { key: 'patients', label: 'المرضى', description: DEFAULT_UI_LABELS.tiles.patients.desc },
-  { key: 'contacts', label: 'جهات الاتصال', description: DEFAULT_UI_LABELS.tiles.contacts.desc },
+  { key: 'contacts', label: 'الأرقام', description: DEFAULT_UI_LABELS.tiles.contacts.desc },
   { key: 'appointments', label: 'المواعيد', description: DEFAULT_UI_LABELS.tiles.appointments.desc },
   { key: 'lab', label: 'التركيبات', description: DEFAULT_UI_LABELS.tiles.lab.desc },
   { key: 'summary', label: 'الماليات', description: DEFAULT_UI_LABELS.tiles.summary.desc },
@@ -49,9 +49,10 @@ export function getDeviceNavigationOrder(labels: unknown, tileOrder: unknown, de
 export function getNavigationLabel(input: unknown, key: NavigationKey): string {
   const labels = record(input);
   const explicit = nonblank(record(labels.navigationLabels)[key]);
-  if (explicit) return explicit;
+  if (explicit) return key === 'contacts' && explicit === 'جهات الاتصال' ? 'الأرقام' : explicit;
   if (key === 'home') return nonblank(record(labels.tabs).home) || 'الرئيسية';
   const customizedTitle = nonblank(record(record(labels.tiles)[key]).title);
+  if (key === 'contacts' && customizedTitle === 'جهات الاتصال') return 'الأرقام';
   if (customizedTitle && customizedTitle !== nonblank(DEFAULT_UI_LABELS.tiles[key]?.title)) return customizedTitle;
   return NAVIGATION_SECTIONS.find(section => section.key === key)?.label || 'الرئيسية';
 }

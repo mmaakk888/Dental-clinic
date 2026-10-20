@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Users, ContactRound, Calendar, Landmark, Microscope, Settings2 } from 'lucide-react';
+import { Home, Users, ContactRound, CalendarDays, WalletCards, Crown, Settings2 } from 'lucide-react';
 import { ActiveView, User, Appointment, LabCase, UILabels } from '../../types';
 import { getDeviceNavigationOrder, getNavigationItems } from '../../utils/clinicContent';
 import { canAccessView } from '../../utils/rbac';
@@ -11,7 +11,7 @@ interface Props {
   appointments?: Appointment[]; labCases?: LabCase[];
   onNavigate(view: ActiveView): void;
 }
-const navigationIcons = { home: Home, patients: Users, contacts: ContactRound, appointments: Calendar, lab: Microscope, summary: Landmark, settings: Settings2 };
+const navigationIcons = { home: Home, patients: Users, contacts: ContactRound, appointments: CalendarDays, lab: Crown, summary: WalletCards, settings: Settings2 };
 
 export const MobileBottomNav = React.memo(({ activeView, labels, tileOrder, currentUser, onNavigate }: Props) => {
   const items = getNavigationItems(labels, tileOrder).filter(item => canAccessView(currentUser, item.key))

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { bindDialogBackdrop, isTopDialog, lockDialogScroll } from '../../utils/dialogLifecycle';
 
 export function useAppointmentDialog(isOpen: boolean, onClose: () => void) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -8,8 +9,8 @@ export function useAppointmentDialog(isOpen: boolean, onClose: () => void) {
   useEffect(() => {
     if (!isOpen) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const releaseScroll = lockDialogScroll(document.body);
+    const releaseBackdrop = dialogRef.current ? bindDialogBackdrop(dialogRef.current, () => onCloseRef.current()) : () => {};
     const getControls = () => (Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
     ) || []) as HTMLElement[]).filter(element => !element.matches(':disabled') && element.getClientRects().length > 0);
@@ -18,11 +19,10 @@ export function useAppointmentDialog(isOpen: boolean, onClose: () => void) {
       (initial || getControls()[0] || dialogRef.current)?.focus();
     });
     const handleKeyDown = (event: KeyboardEvent) => {
-      const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'));
-      const topDialog = dialogs.filter(element => element.getClientRects().length > 0).at(-1);
-      if (topDialog && topDialog !== dialogRef.current) return;
+      if (!dialogRef.current || !isTopDialog(dialogRef.current)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopImmediatePropagation();
         onCloseRef.current();
       }
       if (event.key !== 'Tab') return;
@@ -44,8 +44,8 @@ export function useAppointmentDialog(isOpen: boolean, onClose: () => void) {
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused?.focus();
+      releaseBackdrop(); releaseScroll();
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
   }, [isOpen]);
 

@@ -31,7 +31,7 @@ test('contacts appear beside patients in the actual floating dock for legacy sav
   const account = user('admin');
   const html = renderNavigation(account);
   const patientsIndex = html.indexOf('title="المرضى"');
-  const contactsIndex = html.indexOf('title="جهات الاتصال"');
+  const contactsIndex = html.indexOf('title="الأرقام"');
   const appointmentsIndex = html.indexOf('title="المواعيد"');
   assert.ok(patientsIndex >= 0 && patientsIndex < contactsIndex && contactsIndex < appointmentsIndex);
   assert.ok(html.includes('lucide-contact-round'));
@@ -41,21 +41,21 @@ test('contacts in the floating dock follow patient access without requiring cont
   const account = user();
   account.permissions.patientView = true;
   const html = renderNavigation(account);
-  assert.ok(html.includes('title="جهات الاتصال"'));
+  assert.ok(html.includes('title="الأرقام"'));
   assert.ok(!html.includes('title="الإعدادات"'));
   account.permissions.patientView = false;
-  assert.ok(!renderNavigation(account).includes('title="جهات الاتصال"'));
+  assert.ok(!renderNavigation(account).includes('title="الأرقام"'));
 });
 
 test('the contact directory is marked as the current section in the dock', () => {
   const account = user();
   account.permissions.patientView = true;
-  assert.match(renderNavigation(account, 'contacts'), /aria-current="page" title="جهات الاتصال"/);
+  assert.match(renderNavigation(account, 'contacts'), /aria-current="page" title="الأرقام"/);
 });
 
 test('doctor and admin navigation follows centralized access despite legacy false permission flags', () => {
   for (const role of ['doctor', 'admin'] as const) {
     const html = renderNavigation(user(role));
-    for (const title of ['جهات الاتصال', 'المرضى', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']) assert.ok(html.includes(`title="${title}"`), `${role}: ${title}`);
+    for (const title of ['الأرقام', 'المرضى', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']) assert.ok(html.includes(`title="${title}"`), `${role}: ${title}`);
   }
 });

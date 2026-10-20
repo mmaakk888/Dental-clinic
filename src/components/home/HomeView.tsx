@@ -1,7 +1,7 @@
 import React, { useDeferredValue, useMemo, useState, useEffect, useRef } from 'react';
 import {
   AlertCircle, Banknote, Calendar, CheckCircle2, ChevronLeft, Clock,
-  FileText, Landmark, Microscope, Receipt, Search,
+  FileText, WalletCards, Crown, Receipt, Search,
   UserPlus, X
 } from 'lucide-react';
 import { ActiveView, Appointment, Expense, Patient, UILabels, User as UserType } from '../../types';
@@ -182,8 +182,8 @@ export const HomeView: React.FC<HomeViewProps> = React.memo(({
         {canAppointments && <MetricCard title="مواعيد اليوم" value={stats.dayAppointments.length} note={stats.waiting + ' في الانتظار · ' + stats.completed + ' تم الحضور'} icon={<Calendar />} tone="amber" onClick={() => onNavigate('appointments')} />}
         {canViewCollections && <MetricCard title="تحصيل اليوم" value={money(stats.collected, isPrivacyMode)} note={actionAccess.report ? 'من دفع اليوم والخدمات المسجلة' : 'إجمالي المبالغ المحصّلة اليوم'} icon={<Banknote />} tone="emerald"
           onClick={actionAccess.report && onOpenDailyReport ? onOpenDailyReport : undefined} />}
-        {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<Landmark />} tone="rose" onClick={canFinance ? () => onNavigate('summary') : undefined} />}
-        {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Microscope />} tone="purple" onClick={() => onNavigate('lab')} />}
+        {canViewRemaining && <MetricCard title="الأرصدة المتبقية" value={money(stats.outstanding, isPrivacyMode)} note="مستحقات ملفات المرضى" icon={<WalletCards />} tone="rose" onClick={canFinance ? () => onNavigate('summary') : undefined} />}
+        {canLab && <MetricCard title="حالات المعمل" value={activeLabCount} note="حالات لم تُغلق بعد" icon={<Crown />} tone="purple" onClick={() => onNavigate('lab')} />}
       </section>}
 
         {key === 'schedule' && canAppointments && <section className="dashboard-panel" data-home-section="schedule">

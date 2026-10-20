@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Camera, Sparkles, Check, AlertCircle, X, Trash2, Image as ImageIcon, Ruler } from 'lucide-react';
 import { AiService, EndodonticAnalysis } from '../../services/aiService';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 
 interface EndodonticHelperModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<EndodonticAnalysis | null>(null);
+  const dialogRef = useAppointmentDialog(isOpen, () => { if (!isAnalyzing) onClose(); });
 
   if (!isOpen) return null;
 
@@ -61,7 +63,7 @@ export const EndodonticHelperModal: React.FC<EndodonticHelperModalProps> = ({
 
   return (
     <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[90dvh] overflow-hidden flex flex-col">
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="مساعد علاج الجذور" className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[90dvh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-cyan-950 via-teal-900 to-slate-900 text-white flex items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">

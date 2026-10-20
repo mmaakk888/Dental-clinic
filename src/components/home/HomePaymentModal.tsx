@@ -7,6 +7,7 @@ import { paymentSessionRemaining as remainingFor, validateHomePayment } from '..
 import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePatientSearch';
 import { localDateISO } from '../appointments/appointmentScheduling';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useDialogDraftClose } from '../common/useDialogCloseGuard';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import '../common/ActionDialog.css';
 
@@ -30,7 +31,8 @@ export function HomePaymentModal({ patients, showRemaining, onClose, onSave, onO
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const closeDialog = () => { if (!savingRef.current) onClose(); };
+  const requestClose = useDialogDraftClose(true, saving, onClose, { patientId, sessionId, amount });
+  const closeDialog = () => { if (!savingRef.current) requestClose(); };
   const dialogRef = useAppointmentDialog(true, closeDialog);
   const patient = useMemo(() => patients.find(item => item.id === patientId), [patients, patientId]);
   const sessions = patient?.sessions.filter(item => remainingFor(item) > 0) || [];

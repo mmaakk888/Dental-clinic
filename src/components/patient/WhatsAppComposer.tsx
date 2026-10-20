@@ -6,6 +6,8 @@ import { getWhatsAppDraftTemplate, prepareFreshWhatsAppAction, prepareSafeWhatsA
 import { useProtectedWhatsAppAction } from '../../hooks/useProtectedWhatsAppAction';
 import { appointmentTimeMinutes, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import type { CampaignRecipient } from '../../utils/campaigns';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
+import {useDialogDraftClose} from '../common/useDialogCloseGuard';
 
 interface CommonProps {
   key?: string;
@@ -49,14 +51,6 @@ function WhatsAppComposerBody(props: Props) {
   const recipient = props.campaignRecipient ?? props.patient;
   const patient = !campaign ? props.patient : undefined;
   const appointments = props.appointments ?? [];
-  const dialogRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    dialogRef.current?.focus();
-    return () => { document.body.style.overflow = overflow; previous?.focus(); };
-  }, []);
   const [template, setTemplate] = useState(campaign?.template ?? 'reminderTomorrow');
   const [appointmentId, setAppointmentId] = useState('manual');
   const [date, setDate] = useState('');
@@ -68,6 +62,9 @@ function WhatsAppComposerBody(props: Props) {
   const authorizeProtected = useProtectedWhatsAppAction(props.cloudActions, setNotice);
   const [sharing, setSharing] = useState(false);
   const sharingRef = useRef(false);
+  const requestClose = useDialogDraftClose(true, sharing, onClose, { template, appointmentId, date, time, edited, link, attachment: attachment ? [attachment.name, attachment.size, attachment.lastModified] : null });
+  const closeDialog = () => { if (!sharingRef.current) requestClose(); };
+  const dialogRef = useAppointmentDialog(true, closeDialog);
   const options = { reminderTomorrow: 'تذكير بالموعد', newAppt: 'تأكيد موعد', ...(canViewPatientFinance && !campaign ? { accountBalance: 'الرصيد المتبقي' } : {}), postOp: 'تعليمات عامة',
     ...Object.fromEntries(Object.entries(extraMessageTemplates).map(([key, value]) => [key, value.title])) };
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -101,14 +98,14 @@ function WhatsAppComposerBody(props: Props) {
     : prepareFreshWhatsAppAction(input, props.readSettings ?? (() => { throw Error('تعذر قراءة أحدث إعدادات واتساب.'); }), props.onAuthorizeSend); };
   return <div className="clinic-modal-overlay fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3" dir="rtl">
     <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تجهيز رسالة واتساب" onKeyDown={e => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+      if (e.key === 'Escape') { e.stopPropagation(); closeDialog(); }
       if (e.key !== 'Tab') return;
       const items = Array.from(dialogRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') || []) as HTMLElement[];
       const first = items[0], last = items[items.length - 1];
       if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { e.preventDefault(); last?.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
     }} className="clinic-modal-panel w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 space-y-4">
-      <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg min-w-0 break-words">رسالة إلى {recipient.name}</h2><button type="button" onClick={onClose} className="p-3 min-h-[44px] shrink-0 rounded-xl bg-slate-100">إغلاق</button></div>
+      <div className="flex items-center justify-between gap-2"><h2 className="font-bold text-lg min-w-0 break-words">رسالة إلى {recipient.name}</h2><button type="button" disabled={sharing} onClick={closeDialog} className="p-3 min-h-[44px] shrink-0 rounded-xl bg-slate-100">إغلاق</button></div>
       <p className="text-sm text-slate-600">رقم المستلم: <bdi dir="ltr">{validPhone ? `+${phone}` : recipient.mobile}</bdi></p>
       <p className="text-sm text-slate-600">تجهّز الرسالة هنا ثم تراجعها وتضغط إرسال داخل واتساب.</p>
       <p className="text-xs text-slate-500">{campaign ? 'راجع الاسم والرقم ونص الحملة قبل الإرسال. لا تُرسل عروضاً إلا لمن وافق على استقبالها.' : 'راجع التاريخ والتعليمات الطبية والمبلغ قبل الإرسال. لا تُرسل عروضاً إلا لمن وافق على استقبالها.'}</p>

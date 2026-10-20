@@ -30,6 +30,10 @@
 .clinic-workspace :where(.overflow-x-auto) { max-inline-size: 100%; overscroll-behavior-inline: contain; }
 .clinic-modal-panel :where(input,select,textarea) { max-inline-size: 100%; }
 .clinic-modal-panel :where(form,fieldset,.grid) { min-inline-size: 0; }
+.clinic-modal-panel :where(button) { min-block-size: 44px; }
+.clinic-modal-panel :where(button[aria-label^='إغلاق'],button[aria-label^='إلغاء وإغلاق']) { min-inline-size: 44px; }
+.clinic-modal-panel :where(button):disabled { cursor: not-allowed; }
+.clinic-modal-panel :where(h2,h3) { overflow-wrap: anywhere; line-height: 1.6; }
 .clinic-empty-state { padding: clamp(24px,4vw,40px) 18px; margin-block: 16px; gap: 0; }
 .clinic-empty-state > .clinic-empty-icon {
   inline-size: 58px; block-size: 58px; color: var(--primary);

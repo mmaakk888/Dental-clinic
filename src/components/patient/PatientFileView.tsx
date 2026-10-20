@@ -10,13 +10,15 @@ import { ProstheticOrderForm } from '../ProstheticOrderForm';
 import type { ProstheticOrderInput } from '../../utils/prostheticWorkflow';
 import {
   ArrowRight, Phone, MessageCircle, Edit3, Trash2, Plus,
-  ChevronDown, ChevronUp, DollarSign, Microscope, Calendar, CheckCircle,
+  ChevronDown, ChevronUp, Banknote, Microscope, Calendar, CheckCircle,
   Clock, Copy, Send, CheckCircle2, UserCheck, XCircle, Share2, Mail,
   MessageSquare, MoreHorizontal, Sparkles, Activity, FileText, Check,
-  AlertTriangle, X, Wallet, History, ChevronRight, ArrowUp, Layers, Eye
+  AlertTriangle, X, Wallet, History, ChevronRight, ArrowUp, Layers, Eye, Crown
 } from 'lucide-react';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
+import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useDialogDraftClose } from '../common/useDialogCloseGuard';
 import { ExaminationFeeToggle } from '../common/ExaminationFeeToggle';
 import { ToothSelectionGrid } from '../common/ToothSelectionGrid';
 import {
@@ -422,6 +424,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [paymentDate, setPaymentDate] = useState<string>(clinicToday());
   const paymentSession = patient.sessions.find(session => session.id === selectedSessionForPayment?.id);
   const paymentPresentation = getPatientCollectionPresentation(patient, paymentSession, canRevealRemainingBalance);
+  const serviceDraft = { serviceType, manualAmount, paidNow, serviceDate, includeExaminationFee, treatmentStage, rootCanalStatus, serviceNotes };
+  const closeToothService = useDialogDraftClose(!!toothSheetId, saving, () => setToothSheetId(null), serviceDraft);
+  const closeService = useDialogDraftClose(isServiceModalOpen, saving, () => setIsServiceModalOpen(false), { ...serviceDraft, selectedToothId });
+  const closePayment = useDialogDraftClose(isPaymentModalOpen, saving, () => setIsPaymentModalOpen(false), { paymentAmount, paymentDate });
+  const closeAppointment = useDialogDraftClose(isApptModalOpen, saving, () => setIsApptModalOpen(false), { apptDate, apptTime, apptType, apptDoctor, apptDuration, apptNotes });
+  const closeEditPatient = useDialogDraftClose(isEditPatientModalOpen, saving, () => setIsEditPatientModalOpen(false), { editName, editMobile, editAge, editGender, editAllergy, editNotes });
+  const toothDialogRef = useAppointmentDialog(!!toothSheetId && canEditPatients, closeToothService);
+  const serviceDialogRef = useAppointmentDialog(isServiceModalOpen && canEditPatients, closeService);
+  const paymentDialogRef = useAppointmentDialog(isPaymentModalOpen && canRegisterPayment, closePayment);
+  const appointmentDialogRef = useAppointmentDialog(isApptModalOpen && canManageAppointments, closeAppointment);
+  const editPatientDialogRef = useAppointmentDialog(isEditPatientModalOpen && canEditPatients, closeEditPatient);
 
   useEffect(() => {
     if (!canRevealRemainingBalance && isPaymentAmountDefault) {
@@ -693,7 +706,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
         <div className="patient-file-topline">
           <button type="button" onClick={onBack} className="patient-file-back">
             <ArrowRight aria-hidden="true" />
-            <span>{origin === 'contacts' ? 'جهات الاتصال' : origin === 'appointments' ? 'المواعيد' : 'المرضى'}</span>
+            <span>{origin === 'contacts' ? 'الأرقام' : origin === 'appointments' ? 'المواعيد' : origin === 'lab' ? 'التركيبات' : 'المرضى'}</span>
           </button>
           <div className="patient-file-header-tools">
             <span className="patient-file-number"><FileText aria-hidden="true" />ملف <bdi dir="ltr">#{patient.id}</bdi></span>
@@ -722,7 +735,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
         </div>}
         {(canEditPatients || canRegisterPayment || canManageAppointments) && <div className="patient-file-actions">
           {canEditPatients && <button type="button" onClick={() => handleOpenServiceModal()} className="patient-file-action patient-file-action--primary"><Plus aria-hidden="true" /><span>تسجيل خدمة</span></button>}
-          {canEditPatients && onSaveProstheticOrder && <button type="button" onClick={() => openProstheticOrder()} className="patient-file-action patient-file-action--prosthetic"><Layers aria-hidden="true" /><span>تركيبة جديدة</span></button>}
+          {canEditPatients && onSaveProstheticOrder && <button type="button" onClick={() => openProstheticOrder()} className="patient-file-action patient-file-action--prosthetic"><Crown aria-hidden="true" /><span>تركيبة جديدة</span></button>}
           {canRegisterPayment && <button type="button" onClick={() => handleOpenPaymentModal()} className="patient-file-action patient-file-action--payment"><Wallet aria-hidden="true" /><span>تحصيل دفعة</span></button>}
           {canManageAppointments && <button type="button" onClick={() => handleOpenAddApptModal()} className="patient-file-action patient-file-action--appointment"><Calendar aria-hidden="true" /><span>حجز موعد</span></button>}
         </div>}
@@ -736,7 +749,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       <div className="patient-file-clinical-strip" aria-label="ملخص الزيارات">
         <span><History aria-hidden="true" /><strong>{patient.sessions.length}</strong> جلسات</span>
         <span><Layers aria-hidden="true" /><strong>{treatedTeethCount}</strong> أسنان مسجّلة</span>
-        <span><Microscope aria-hidden="true" /><strong>{labCasesCount}</strong> جلسات تركيبات</span>
+        <span><Crown aria-hidden="true" /><strong>{labCasesCount}</strong> جلسات تركيبات</span>
         {patient.notes?.trim() && <span className="patient-file-note"><FileText aria-hidden="true" />{patient.notes}</span>}
       </div>
 
@@ -1141,7 +1154,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
             <div className="bg-white rounded-3xl p-4 sm:p-6 border border-slate-200/90 shadow-sm space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <h3 className="text-base font-black text-[#0f3d3e] flex items-center gap-2">
-                  <DollarSign className="w-5 h-5 text-[#0f3d3e]" />
+                  <Banknote className="w-5 h-5 text-[#0f3d3e]" />
                   <span>الملخص المالي والرصيد المالي للمريض</span>
                 </h3>
 
@@ -1321,7 +1334,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       {/* 8.1 Tooth Details & Quick Service Bottom Sheet */}
       {canEditPatients && toothSheetId && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex flex-col justify-end md:items-center md:justify-center bg-slate-900/60 backdrop-blur-xs p-0 md:p-4 animate-fadeIn">
-          <div id="toothServiceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-t-3xl md:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll animate-slideUp">
+          <div ref={toothDialogRef} tabIndex={-1} id="toothServiceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-t-3xl md:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll animate-slideUp">
             {/* Sheet Drag Handle */}
             <div className="w-12 h-1.5 bg-slate-300 rounded-full mx-auto md:hidden" />
 
@@ -1340,10 +1353,10 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
 
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setToothSheetId(null); }}
+                disabled={saving} onClick={closeToothService}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
-                ✕
+                <X aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
 
@@ -1464,17 +1477,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       {/* 8.2 Standard Service Modal */}
       {canEditPatients && isServiceModalOpen && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="serviceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto modal-scroll">
+          <div ref={serviceDialogRef} tabIndex={-1} id="serviceModal" role="dialog" aria-modal="true" aria-label="تسجيل خدمة" className="clinic-modal-panel bg-white rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-lg font-bold text-[#0f3d3e]">
                 تسجيل خدمة طبية جديدة
               </h2>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsServiceModalOpen(false); }}
+                disabled={saving} onClick={closeService}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
-                ✕
+                <X aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
 
@@ -1556,7 +1569,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsServiceModalOpen(false); }}
+                  disabled={saving} onClick={closeService}
                   className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl cursor-pointer min-h-[44px]"
                 >
                   إلغاء وإغلاق
@@ -1576,17 +1589,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       {/* 8.3 Payment Modal */}
       {canRegisterPayment && isPaymentModalOpen && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="paymentModal" role="dialog" aria-modal="true" aria-label="تحصيل دفعة" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div ref={paymentDialogRef} tabIndex={-1} id="paymentModal" role="dialog" aria-modal="true" aria-label="تحصيل دفعة" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 تحصيل دفعة مالية جديدة
               </h2>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsPaymentModalOpen(false); }}
+                disabled={saving} onClick={closePayment}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
-                ✕
+                <X aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
 
@@ -1651,7 +1664,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsPaymentModalOpen(false); }}
+                  disabled={saving} onClick={closePayment}
                   className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl cursor-pointer min-h-[44px]"
                 >
                   إلغاء وإغلاق
@@ -1671,17 +1684,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       {/* 8.4 Appointment Modal */}
       {canManageAppointments && isApptModalOpen && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
+          <div ref={appointmentDialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={editingAppt ? 'تعديل موعد العيادة' : 'حجز موعد جديد للمريض'} className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 {editingAppt ? 'تعديل موعد العيادة' : 'حجز موعد جديد للمريض'}
               </h2>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsApptModalOpen(false); }}
+                disabled={saving} onClick={closeAppointment}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
-                ✕
+                <X aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
 
@@ -1744,7 +1757,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsApptModalOpen(false); }}
+                  disabled={saving} onClick={closeAppointment}
                   className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl cursor-pointer min-h-[44px]"
                 >
                   إلغاء وإغلاق
@@ -1764,17 +1777,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       {/* 8.5 Edit Patient Demographics Modal */}
       {canEditPatients && isEditPatientModalOpen && (
         <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div id="editPatientModal" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div ref={editPatientDialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="تعديل بيانات المريض" id="editPatientModal" className="clinic-modal-panel bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-[#0f3d3e]">
                 تعديل بيانات ملف المريض #{patient.id}
               </h2>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsEditPatientModalOpen(false); }}
+                disabled={saving} onClick={closeEditPatient}
                 className="p-2 text-slate-400 hover:text-slate-600 cursor-pointer rounded-xl bg-slate-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
-                ✕
+                <X aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
 
@@ -1872,7 +1885,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsEditPatientModalOpen(false); }}
+                  disabled={saving} onClick={closeEditPatient}
                   className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl cursor-pointer min-h-[44px]"
                 >
                   إلغاء وإغلاق

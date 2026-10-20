@@ -1,4 +1,5 @@
 import { Expense } from '../types';
+import {sumFinancialAmounts} from './financials';
 
 export type ExpenseType = NonNullable<Expense['expenseType']>;
 
@@ -10,9 +11,9 @@ export function getExpensePaymentSummary(expense: Pick<Expense, 'amount' | 'paid
   const paid = expense.paidAmount !== undefined
     ? Math.min(total, positiveAmount(expense.paidAmount))
     : expense.remainingAmount !== undefined
-      ? Math.max(0, total - positiveAmount(expense.remainingAmount))
+      ? Math.max(0, sumFinancialAmounts([total, -positiveAmount(expense.remainingAmount)]))
       : expense.paymentMethod === 'credit' || expense.paymentMethod === 'deferred' ? 0 : total;
-  return { total, paid, remaining: Math.max(0, total - paid) };
+  return { total, paid, remaining: Math.max(0, sumFinancialAmounts([total, -paid])) };
 }
 
 // A basic editor only submits its visible fields; retain invoice metadata and items.
@@ -78,7 +79,7 @@ export function expensesForMonth(expenses: Expense[], month: string | 'all') {
 
 export function expenseBreakdown(expenses: Expense[]) {
   return expenses.reduce<Record<ExpenseType, number>>((result, expense) => {
-    result[inferExpenseType(expense)] += Number(expense.amount) || 0;
+    result[inferExpenseType(expense)] = sumFinancialAmounts([result[inferExpenseType(expense)], Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : 0]);
     return result;
   }, { rent: 0, electricity: 0, water: 0, salary: 0, supplies: 0, maintenance: 0, other: 0 });
 }

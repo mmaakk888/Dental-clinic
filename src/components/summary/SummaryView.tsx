@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { ArrowRight, Banknote, TrendingUp, Plus, Trash2, Receipt, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2, Users, Zap, Droplets, Package } from 'lucide-react';
+import { ArrowRight, Banknote, TrendingUp, Plus, Trash2, Receipt, Edit3, Pin, Camera, Image as ImageIcon, Eye, X, FileText, Search, Sparkles, Building2, BarChart2, Users, Zap, Droplets, Package, CheckCircle2 } from 'lucide-react';
 import { Patient, LabCase, Expense, MaterialUsage } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
@@ -7,6 +7,9 @@ import { BalanceProgressMeter } from '../common/FinancialBadge';
 import { InvoiceOcrModal } from './InvoiceOcrModal';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
 import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
+import {useDialogDraftClose} from '../common/useDialogCloseGuard';
+import {buildClinicFinanceOverview} from '../../utils/financeOverview';
+import {sumFinancialAmounts} from '../../utils/financials';
 import { SupplierAnalyticsView } from './SupplierAnalyticsView';
 import { getPatientFinancialSummary } from '../../utils/financials';
 import { expenseBreakdown, expensesForMonth, getExpensePaymentSummary, inferExpenseType, isExpenseInvoiceTotalLocked } from '../../utils/expenseUtils';
@@ -79,7 +82,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const switcherRef = useRef<HTMLDivElement>(null);
   const sectionContentRef = useRef<HTMLDivElement>(null);
   const shouldScrollToSection = useRef(false);
-  const [switcherLayout, setSwitcherLayout] = useState({ pinned: false, left: 0, width: 0, height: 0 });
+  const [switcherLayout, setSwitcherLayout] = useState({ pinned: false, left: 0, width: 0, height: 0, top: 12 });
   const sections = [
     { key: 'overview' as SummaryTab, label: 'الملخص المالي', icon: BarChart2, visible: true },
     { key: 'expenses' as SummaryTab, label: 'المصروفات', icon: Receipt, visible: canViewExpenses },
@@ -98,7 +101,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     if (!content) return;
     shouldScrollToSection.current = false;
     const barHeight = switcherRef.current?.getBoundingClientRect().height || 64;
-    window.scrollTo({ top: Math.max(0, window.scrollY + content.getBoundingClientRect().top - barHeight - 28),
+    const top = Math.max(12, (document.querySelector('.clinic-topbar')?.getBoundingClientRect().bottom ?? 0) + 8);
+    window.scrollTo({ top: Math.max(0, window.scrollY + content.getBoundingClientRect().top - barHeight - top - 12),
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   };
 
@@ -115,9 +119,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       const bar = switcherRef.current;
       if (!anchor || !bar) return;
       const bounds = anchor.getBoundingClientRect();
-      const next = { pinned: bounds.top < 12, left: bounds.left, width: bounds.width, height: bar.getBoundingClientRect().height };
+      const top = Math.max(12, (document.querySelector('.clinic-topbar')?.getBoundingClientRect().bottom ?? 0) + 8);
+      const next = { pinned: bounds.top < top, left: bounds.left, width: bounds.width, height: bar.getBoundingClientRect().height, top };
       setSwitcherLayout(previous => previous.pinned === next.pinned && Math.abs(previous.left - next.left) < .5
-        && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 ? previous : next);
+        && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 && Math.abs(previous.top - next.top)<.5 ? previous : next);
     };
     const scheduleMeasure = () => {
       cancelAnimationFrame(frame);
@@ -137,6 +142,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     };
   }, []);
   const [expenseSearchQuery, setExpenseSearchQuery] = useState('');
+  const [debtorQuery, setDebtorQuery] = useState('');
+  const [debtorLimit, setDebtorLimit] = useState(30);
+  React.useEffect(() => setDebtorLimit(30), [debtorQuery]);
 
   // ERP Modals State
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
@@ -187,9 +195,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   const [expenseType, setExpenseType] = useState<NonNullable<Expense['expenseType']>>('supplies');
   const monthExpenses = useMemo(() => expensesForMonth(expenses, expenseMonth), [expenses, expenseMonth]);
   const monthlyBreakdown = useMemo(() => expenseBreakdown(monthExpenses), [monthExpenses]);
-  const monthlyTotal = monthExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-  const monthlyPaid = monthExpenses.reduce((sum, expense) => sum + getExpensePaymentSummary(expense).paid, 0);
-  const monthlyRemaining = monthExpenses.reduce((sum, expense) => sum + getExpensePaymentSummary(expense).remaining, 0);
+  const monthlyTotal = sumFinancialAmounts(monthExpenses.map(expense => Number(expense.amount || 0)));
+  const monthlyPaid = sumFinancialAmounts(monthExpenses.map(expense => getExpensePaymentSummary(expense).paid));
+  const monthlyRemaining = sumFinancialAmounts(monthExpenses.map(expense => getExpensePaymentSummary(expense).remaining));
   const isInvoiceTotalLocked = !!editingExpense && isExpenseInvoiceTotalLocked(editingExpense);
   const filteredExpenses = useMemo(() => monthExpenses.filter(expense => {
     if (expenseFilterCategory === 'fixed' && !(expense.isFixed || expense.category === 'fixed')) return false;
@@ -220,7 +228,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   }, [activeTab, canViewExpenses, canViewAnalytics]);
 
   // Close Expense Modal Handler
-  const handleCloseExpenseModal = () => {
+  const closeExpenseEditor = () => {
     if (!invoiceAccessRef.current.mounted || invoiceAccessRef.current.saving || invoiceUploadRef.current.editor !== invoiceEditor) return;
     invoiceAccessRef.current.expenseOpen = false;
     resetInvoiceUpload();
@@ -229,6 +237,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       onCloseAddExpenseModal();
     }
   };
+  const handleCloseExpenseModal = useDialogDraftClose(isExpenseModalOpen && canViewExpenses, saving, closeExpenseEditor,
+    { expenseTitle, expenseCategory, expenseType, expenseAmount, expensePaid, expenseDate, expenseNote, isFixedExpense, expenseInvoiceImage });
+  const closeInvoiceLightbox = () => setActiveInvoiceLightbox(null);
+  const invoiceLightboxRef = useAppointmentDialog(Boolean(activeInvoiceLightbox) && canViewExpenses, closeInvoiceLightbox);
 
   // Open modal if external trigger opens add expense
   const expenseEditorDialogRef=useAppointmentDialog(isExpenseModalOpen&&canViewExpenses,handleCloseExpenseModal);
@@ -246,6 +258,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       setExpenseCategory('supplies');
       setExpenseType('supplies');
       setExpenseAmount('');
+      setExpensePaid('');
       setExpenseDate(localDateKey());
       setExpenseNote('');
       setIsFixedExpense(false);
@@ -267,45 +280,17 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
   }, [isExpenseModalOpen, activeInvoiceLightbox]);
 
   // Aggregate Financial Metrics
-  const { totalRequired, totalPaid, totalRemain, totalLabCosts, totalLabPaid, totalLabRemaining,
-    totalExpensesAmount, totalExpensesPaid, totalExpenseRemaining, cashBalance } = useMemo(() => {
-    let req = 0;
-    let paid = 0;
-    let rem = 0;
-
-    patients.forEach(p => {
-      const financial = getPatientFinancialSummary(p);
-      req += Math.max(0, financial.totalRequired - financial.totalDiscounts);
-      paid += financial.totalCollected;
-      rem += financial.totalRemaining;
-    });
-
-    const safeAmount = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
-    const labCosts = labCases.reduce((acc, c) => acc + safeAmount(c.labTotal), 0);
-    const labPaid = labCases.reduce((acc, c) => acc + safeAmount(c.labPaid), 0);
-    const labRemaining = labCases.reduce((acc, c) => acc + Math.max(0, safeAmount(c.labTotal) - safeAmount(c.labPaid)), 0);
-    const expensePayments = expenses.map(getExpensePaymentSummary);
-    const expAmt = expensePayments.reduce((acc, e) => acc + e.total, 0);
-    const expPaid = expensePayments.reduce((acc, e) => acc + e.paid, 0);
-    const expRemaining = expensePayments.reduce((acc, e) => acc + e.remaining, 0);
-
-    return {
-      totalRequired: req,
-      totalPaid: paid,
-      totalRemain: rem,
-      totalLabCosts: labCosts,
-      totalLabPaid: labPaid,
-      totalLabRemaining: labRemaining,
-      totalExpensesAmount: expAmt,
-      totalExpensesPaid: expPaid,
-      totalExpenseRemaining: expRemaining,
-      cashBalance: paid - labPaid - expPaid
-    };
-  }, [patients, labCases, expenses]);
+  const { totalPaid, totalRemain, totalLabCosts, totalLabPaid, totalLabRemaining,
+    totalExpensesAmount, totalExpensesPaid, totalExpenseRemaining, cashBalance, debtors } = useMemo(
+      () => buildClinicFinanceOverview(patients, labCases, expenses), [patients, labCases, expenses]);
+  const filteredDebtors = useMemo(() => {
+    const query = debtorQuery.trim().toLocaleLowerCase('ar');
+    return !query ? debtors : debtors.filter(({patient}) => [patient.name, patient.id, patient.mobile || ''].some(value => value.toLocaleLowerCase('ar').includes(query)));
+  }, [debtors, debtorQuery]);
 
   const maskMoney = (amt: number) => {
     if (isPrivacyMode) return '*** ج.م';
-    return `${amt.toLocaleString()} ج.م`;
+    return `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(Number.isFinite(amt) ? amt : 0)} ج.م`;
   };
 
   const handleInvoiceFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -395,6 +380,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
     if (!Number.isFinite(amt) || amt <= 0) {
       showToast('يرجى كتابة قيمة مصروف صحيحة أكبر من الصفر', 'warning');
       return;
+    }
+    const collected = typeof expensePaid === 'number' ? expensePaid : 0;
+    if (portable && !editingExpense && (!Number.isFinite(collected) || collected < 0 || collected > amt)) {
+      showToast('المدفوع الفعلي يجب أن يكون بين صفر وإجمالي المصروف.', 'warning'); return;
     }
     if (!expenseDate) {
       showToast('يرجى تحديد تاريخ المصروف', 'warning');
@@ -492,7 +481,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       <div ref={switcherAnchorRef} className="summary-switcher-anchor" style={{ height: switcherLayout.height || undefined }}>
         <div ref={switcherRef} role="tablist" aria-label="أقسام الماليات"
           className={'summary-section-switcher' + (switcherLayout.pinned ? ' summary-section-switcher--pinned' : '')}
-          style={switcherLayout.pinned ? { left: switcherLayout.left, width: switcherLayout.width } : undefined}>
+          style={switcherLayout.pinned ? { left: switcherLayout.left, width: switcherLayout.width, '--finance-top': `${switcherLayout.top}px` } as React.CSSProperties : undefined}>
           {sections.map(section => <button key={section.key} type="button" id={'finance-tab-' + section.key} role="tab"
             aria-selected={activeTab === section.key} aria-controls="finance-section-content" tabIndex={activeTab === section.key ? 0 : -1}
             onClick={() => switchSection(section.key)} onKeyDown={event => {
@@ -514,7 +503,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
       {activeTab === 'overview' && canViewReports && (
         <div className="summary-overview">
-          <div className="summary-overview-heading"><h2>الملخص المالي</h2><span>إجمالي السجلات المسجلة</span></div>
+          <div className="summary-overview-heading"><h2>الملخص المالي</h2><span>كل الفترات · مبالغ مسجّلة فعلًا، وليست توقعات</span></div>
           <div className="summary-metrics">
             <SummaryMetric title="المحصّل من المرضى" value={maskMoney(totalPaid)} icon={<Banknote />} tone="green"
               note={`مستحقات لم تُحصّل: ${maskMoney(totalRemain)}`} />
@@ -528,7 +517,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
           {canViewProfits && <div className="summary-liabilities">
             <div><strong>التزامات لم تُسدد</strong><span>المبالغ المستحقة للمعامل{canViewExpenses && ' والموردين'}</span></div>
-            <bdi>{maskMoney(totalLabRemaining + (canViewExpenses ? totalExpenseRemaining : 0))}</bdi>
+            <bdi>{maskMoney(sumFinancialAmounts([totalLabRemaining, canViewExpenses ? totalExpenseRemaining : 0]))}</bdi>
             <p>للمعامل: {maskMoney(totalLabRemaining)}{canViewExpenses && <> · للموردين والمصروفات: {maskMoney(totalExpenseRemaining)}</>}</p>
           </div>}
 
@@ -541,15 +530,11 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
               </span>
             </h2>
 
+            {isPrivacyMode ? <p role="status" className="summary-empty">أسماء أصحاب المستحقات وتفاصيل حساباتهم مخفية في وضع الخصوصية.</p> : <>
+            <label className="summary-debtor-search"><Search aria-hidden="true"/><input type="search" aria-label="بحث في المستحقات بالاسم أو رقم الملف أو الهاتف" placeholder="ابحث بالاسم أو رقم الملف أو الهاتف" value={debtorQuery} onChange={event=>setDebtorQuery(event.target.value)}/><span>{filteredDebtors.length} نتيجة</span></label>
+            {!filteredDebtors.length && <div className="summary-empty" role="status"><CheckCircle2 aria-hidden="true"/><strong>{debtorQuery ? 'لا توجد نتائج مطابقة' : 'لا توجد مستحقات مرضى حاليًا'}</strong><p>{debtorQuery ? 'جرّب اسمًا أو رقمًا آخر.' : 'تظهر هنا أرصدة الخدمات عند تسجيلها؛ لا توجد مبالغ افتراضية.'}</p></div>}
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden">
-              {patients
-                .map(p => {
-                  const financial = getPatientFinancialSummary(p);
-                  return { ...p, req: Math.max(0, financial.totalRequired - financial.totalDiscounts), pd: financial.totalCollected, rem: financial.totalRemaining };
-                })
-                .filter(p => p.rem > 0)
-                .sort((a, b) => b.rem - a.rem)
-                .map(p => (
+              {filteredDebtors.slice(0, debtorLimit).map(({patient:p, financial}) => (
                   <div key={p.id} className="p-4 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -561,9 +546,9 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
 
                     <div className="w-full sm:w-72">
                       {isPrivacyMode ? <span className="text-slate-400 text-xs">التفاصيل المالية مخفية</span> : <BalanceProgressMeter
-                        total={p.req}
-                        paid={p.pd}
-                        remaining={p.rem}
+                        total={Math.max(0, sumFinancialAmounts([financial.totalRequired,-financial.totalDiscounts]))}
+                        paid={financial.totalCollected}
+                        remaining={financial.totalRemaining}
                         size="sm"
                         type="patient"
                       />}
@@ -571,6 +556,8 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   </div>
                 ))}
             </div>
+            {filteredDebtors.length>debtorLimit && <button type="button" className="summary-load-more" onClick={()=>setDebtorLimit(value=>value+30)}>عرض ٣٠ سجلًا آخر</button>}
+            </>}
           </div>
         </div>
       )}
@@ -713,7 +700,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   expenseFilterCategory === 'supplies' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                📦 خامات ومستلزمات ({monthExpenses.filter(e => e.category === 'supplies').length})
+                خامات ومستلزمات ({monthExpenses.filter(e => e.category === 'supplies').length})
               </button>
               <button
                 type="button"
@@ -722,7 +709,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   expenseFilterCategory === 'fixed' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-900 border border-amber-200'
                 }`}
               >
-                📌 ثابتة ({monthExpenses.filter(e => e.isFixed || e.category === 'fixed').length})
+                ثابتة ({monthExpenses.filter(e => e.isFixed || e.category === 'fixed').length})
               </button>
             </div>
           </div>
@@ -888,10 +875,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   onChange={e => { const category = e.target.value as Expense['category']; setExpenseCategory(category); setExpenseType(category === 'supplies' ? 'supplies' : category === 'maintenance' ? 'maintenance' : 'other'); }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0f3d3e]"
                 >
-                  <option value="fixed">📌 مصروفات ثابتة (إيجارات/راتب سكرتيرة/كهرباء)</option>
-                  <option value="supplies">📦 خامات ومستلزمات طبيب</option>
-                  <option value="maintenance">🛠️ صيانة وتشغيل الأجهزة</option>
-                  <option value="other">💬 مصروفات نثرية وأخرى</option>
+                  <option value="fixed">مصروفات ثابتة (إيجارات/راتب سكرتيرة/كهرباء)</option>
+                  <option value="supplies">خامات ومستلزمات طبيب</option>
+                  <option value="maintenance">صيانة وتشغيل الأجهزة</option>
+                  <option value="other">مصروفات نثرية وأخرى</option>
                 </select>
               </div>
 
@@ -902,7 +889,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   setExpenseType(type);
                   setExpenseCategory(type === 'supplies' ? 'supplies' : type === 'maintenance' ? 'maintenance' : type === 'other' ? 'other' : 'fixed');
                 }} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold">
-                  <option value="rent">🏢 إيجار</option><option value="electricity">⚡ كهرباء</option><option value="water">💧 مياه</option><option value="salary">👩‍💼 رواتب</option><option value="supplies">📦 خامات ومستلزمات</option><option value="maintenance">🛠️ صيانة</option><option value="other">أخرى</option>
+                  <option value="rent">إيجار</option><option value="electricity">كهرباء</option><option value="water">مياه</option><option value="salary">رواتب</option><option value="supplies">خامات ومستلزمات</option><option value="maintenance">صيانة</option><option value="other">أخرى</option>
                 </select>
               </div>
 
@@ -919,10 +906,6 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                 </div>
               </label>
 
-              {portable&&!editingExpense&&<label className="block text-sm font-bold">المدفوع الفعلي الآن (ج.م)
-                <input type="number" min="0" max={expenseAmount||0} step="0.01" value={expensePaid} onChange={event=>setExpensePaid(event.target.value===''?'':Number(event.target.value))} className="mt-2 w-full rounded-xl border p-3" placeholder="0"/>
-                <small className="block text-slate-500">ترك الحقل فارغًا يعني لم تُسجّل دفعة، وليس سداد المصروف تلقائيًا.</small>
-              </label>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -930,6 +913,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   </label>
                   <input
                     type="number"
+                    aria-label="إجمالي المصروف بالجنيه"
                     required
                     min="0.01"
                     step="0.01"
@@ -948,6 +932,7 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   </label>
                   <input
                     type="date"
+                    aria-label="تاريخ المصروف أو الفاتورة"
                     required
                     value={expenseDate}
                     onChange={e => setExpenseDate(e.target.value)}
@@ -955,6 +940,11 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
                   />
                 </div>
               </div>
+
+              {portable&&!editingExpense&&<label className="block text-sm font-bold">المدفوع الفعلي الآن (ج.م)
+                <input type="number" min="0" max={expenseAmount||0} step="0.01" value={expensePaid} onChange={event=>setExpensePaid(event.target.value===''?'':Number(event.target.value))} className="mt-2 w-full rounded-xl border p-3" placeholder="0"/>
+                <small className="block text-slate-500">ترك الحقل فارغًا يعني لم تُسجّل دفعة، وليس سداد المصروف تلقائيًا.</small>
+              </label>}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات إضافية</label>
@@ -1057,9 +1047,10 @@ export const SummaryView: React.FC<SummaryViewProps> = React.memo(({
       {activeInvoiceLightbox && canViewExpenses && (
         <div 
           onClick={() => setActiveInvoiceLightbox(null)}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 overflow-y-auto animate-fadeIn"
+          className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 overflow-y-auto animate-fadeIn"
         >
           <div 
+            ref={invoiceLightboxRef} role="dialog" aria-modal="true" aria-label="معاينة صورة الفاتورة" tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             className="bg-slate-900 rounded-3xl max-w-2xl w-full p-5 text-white shadow-2xl border border-slate-700 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto min-w-0"
           >

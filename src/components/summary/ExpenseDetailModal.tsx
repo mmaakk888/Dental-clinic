@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ZoomIn, ZoomOut, RotateCw, Maximize2, Download, Receipt, Building2, Phone, MapPin, Calendar, CreditCard, DollarSign, AlertTriangle, ShieldCheck, Clock, FileText, CheckCircle2, ChevronRight } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCw, Maximize2, Download, Receipt, Building2, Phone, MapPin, Calendar, CreditCard, Banknote, AlertTriangle, ShieldCheck, Clock, FileText, CheckCircle2, ChevronRight } from 'lucide-react';
 import { Expense, ExpenseItem } from '../../types';
 import { getExpensePaymentSummary } from '../../utils/expenseUtils';
 import { downloadAuthorizedImage } from '../../utils/authorizedDataOutput';
@@ -7,6 +7,8 @@ import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import {usePortableRuntime} from '../../portable/runtime';
 import {canPerformAction} from '../../utils/rbac';
 import {localDateISO} from '../appointments/appointmentScheduling';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
+import {useDialogCloseGuard} from '../common/useDialogCloseGuard';
 
 interface ExpenseDetailModalProps {
   expense: Expense | null;
@@ -36,47 +38,17 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const fullscreenRef = useRef<HTMLDivElement>(null);
+  const requestClose = useDialogCloseGuard(isOpen, Boolean(payment.trim()), paying, onClose);
+  const closeDetail = () => { if (!payingRef.current) requestClose(); };
+  const modalRef = useAppointmentDialog(isOpen && !isFullscreenImage, closeDetail);
+  const fullscreenRef = useAppointmentDialog(isOpen && isFullscreenImage, () => setIsFullscreenImage(false));
 
   useEffect(() => {
     setZoomLevel(1);
     setRotationDegree(0);
     setIsFullscreenImage(false);
+    setPayment(''); setPaymentDate(localDateISO());
   }, [expense?.id, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const priorOverflow = document.body.style.overflow;
-    const priorFocus = document.activeElement as HTMLElement | null;
-    document.body.style.overflow = 'hidden';
-    const activeModal = isFullscreenImage ? fullscreenRef.current : modalRef.current;
-    activeModal?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        if (isFullscreenImage) setIsFullscreenImage(false); else onClose();
-      }
-      if (event.key === 'Tab' && activeModal) {
-        const controls = (Array.from(activeModal.querySelectorAll('button, a[href], input, select, textarea, [tabindex="0"]')) as HTMLElement[])
-          .filter(element => !element.hasAttribute('disabled') && element.getClientRects().length > 0);
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (!first) { event.preventDefault(); activeModal.focus(); }
-        else if (event.shiftKey && (document.activeElement === first || document.activeElement === activeModal)) {
-          event.preventDefault(); last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault(); first.focus();
-        }
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.body.style.overflow = priorOverflow;
-      document.removeEventListener('keydown', onKeyDown);
-      if (priorFocus?.isConnected) priorFocus.focus();
-    };
-  }, [isOpen, isFullscreenImage, onClose]);
 
   if (!isOpen || !expense) return null;
   const financial = getExpensePaymentSummary(expense);
@@ -116,8 +88,8 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
   };
 
   return (
-    <div onClick={onClose} className="clinic-modal-overlay fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
-      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="expense-detail-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
+    <div onClick={closeDetail} className="clinic-modal-overlay fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-busy={paying} aria-labelledby="expense-detail-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92dvh] flex flex-col overflow-hidden">
         
         {/* ERP Invoice Header */}
         <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex flex-wrap gap-3 items-center justify-between border-b border-slate-800">
@@ -146,7 +118,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
             {onEdit && (
               <button
                 type="button"
-                onClick={() => { onClose(); onEdit(expense); }}
+                disabled={paying} onClick={() => { if (!payingRef.current) { onClose(); onEdit(expense); } }}
                 className="px-3.5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition cursor-pointer shadow-xs"
               >
                 تعديل البيانات
@@ -154,7 +126,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
             )}
             <button
               type="button"
-              onClick={onClose}
+              disabled={paying} onClick={closeDetail}
               aria-label="إغلاق تفاصيل الفاتورة"
               className="p-2 min-h-11 min-w-11 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
             >
@@ -400,7 +372,7 @@ export const ExpenseDetailModal: React.FC<ExpenseDetailModalProps> = ({
           <span className="text-xs text-slate-500 font-medium break-all">معرّف الفاتورة: {expense.id}</span>
           <button
             type="button"
-            onClick={onClose}
+            disabled={paying} onClick={closeDetail}
             className="px-5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white rounded-xl transition cursor-pointer shadow-xs"
           >
             إغلاق

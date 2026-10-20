@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { TrendingUp, Package, Building2, AlertTriangle, ArrowUpRight, ArrowDownRight, DollarSign, PieChart, Layers, Search, RefreshCw, BarChart2 } from 'lucide-react';
+import { TrendingUp, Package, Building2, AlertTriangle, ArrowUpRight, ArrowDownRight, Banknote, PieChart, Layers, Search, RefreshCw, BarChart2 } from 'lucide-react';
 import { Expense, ExpenseItem, MaterialUsage } from '../../types';
 import { MaterialInventoryPanel } from './MaterialInventoryPanel';
 import { getExpensePaymentSummary } from '../../utils/expenseUtils';
@@ -183,7 +183,7 @@ export const SupplierAnalyticsView: React.FC<SupplierAnalyticsViewProps> = ({
 
         <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-indigo-950 text-white shadow-2xs flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-emerald-400 shrink-0">
-            <DollarSign className="w-6 h-6" />
+            <Banknote className="w-6 h-6" />
           </div>
           <div>
             <span className="text-xs font-bold text-indigo-200/80">قيمة مشتريات الخامات</span>

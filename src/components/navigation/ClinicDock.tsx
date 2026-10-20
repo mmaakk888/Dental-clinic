@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, MoreHorizontal, X, type LucideIcon } from 'lucide-react';
 import type { DockAppearance } from '../../types';
 import { splitMobileNavigation } from '../../utils/dockAppearance';
+import {lockDialogScroll} from '../../utils/dialogLifecycle';
 
 export interface ClinicDockItem { key: string; label: string; description?: string; icon: LucideIcon }
 export interface ClinicDockProps {
@@ -16,13 +17,13 @@ export function ClinicDock(props: ClinicDockProps) {
   const [open, setOpen] = useState(false);
   const latest = useRef(props); latest.current = props;
   const dock = useRef<HTMLElement>(null), dialog = useRef<HTMLDialogElement>(null), more = useRef<HTMLButtonElement>(null);
+  const outsideMore = useRef(false);
   const { visible, extra } = splitMobileNavigation(props.items, props.appearance);
   useEffect(() => {
     if (!open || props.disabled) return;
-    const element = dialog.current, oldOverflow = document.body.style.overflow;
+    const element = dialog.current, releaseScroll = lockDialogScroll(document.body);
     if (element && !element.open) element.showModal();
-    document.body.style.overflow = 'hidden';
-    return () => { element?.close(); document.body.style.overflow = oldOverflow; if (more.current?.isConnected) more.current.focus(); };
+    return () => { element?.close(); releaseScroll(); if (more.current?.isConnected) more.current.focus(); };
   }, [open, props.disabled]);
   useEffect(() => { setOpen(false); }, [props.selected, props.items, props.disabled]);
   useEffect(() => {
@@ -53,7 +54,7 @@ export function ClinicDock(props: ClinicDockProps) {
       <div className="clinic-dock-web-set">{props.desktopItems.map(item)}</div>
     </nav>
     {open && !props.disabled && <dialog ref={dialog} id="clinic-more-menu" aria-label="المزيد من أقسام العيادة" className="clinic-dock-dialog" dir="rtl"
-      onCancel={() => setOpen(false)} onClose={() => setOpen(false)} onClick={event => { if (event.target === event.currentTarget) setOpen(false); }}>
+      onCancel={() => setOpen(false)} onClose={() => setOpen(false)} onPointerDown={event => { const r=event.currentTarget.getBoundingClientRect(); outsideMore.current=event.target===event.currentTarget && event.button===0 && (event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom); }} onClick={event => { if (event.target === event.currentTarget && outsideMore.current) setOpen(false); outsideMore.current=false; }}>
       <div className="p-5 space-y-4"><header className="flex items-center justify-between gap-3"><h2 className="text-lg font-bold">باقي الأقسام</h2>
         <button type="button" autoFocus aria-label="إغلاق قائمة الأقسام" className="clinic-dock-close" onClick={() => setOpen(false)}><X size={20} /></button></header>
         <div className="grid gap-2">{extra.map(row => <button type="button" key={row.key} className="clinic-dock-option" onClick={() => navigate(row.key)} aria-current={props.selected === row.key ? 'page' : undefined}>

@@ -24,10 +24,24 @@ test('legacy order adds contacts beside patients without disturbing custom secti
   assert.deepEqual(normalizeNavigationOrder(['summary', 'settings']), ['summary', 'settings', 'patients', 'contacts', 'appointments', 'lab']);
 });
 test('legacy default tile names resolve to canonical short navigation labels, not patient tab names', () => {
-  assert.deepEqual(NAVIGATION_SECTIONS.map(section => getNavigationLabel(DEFAULT_UI_LABELS, section.key)), ['المرضى', 'جهات الاتصال', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']);
+  assert.deepEqual(NAVIGATION_SECTIONS.map(section => getNavigationLabel(DEFAULT_UI_LABELS, section.key)), ['المرضى', 'الأرقام', 'المواعيد', 'التركيبات', 'الماليات', 'الإعدادات']);
   assert.equal(getNavigationLabel(DEFAULT_UI_LABELS, 'lab'), 'التركيبات');
   assert.equal(DEFAULT_UI_LABELS.tabs.lab, 'حالات المعمل');
   assert.equal(getNavigationLabel(DEFAULT_UI_LABELS, 'home'), 'الرئيسية');
+});
+
+test('saved old contact caption is shortened at display time without rewriting settings or routes', () => {
+  const labels = { navigationLabels: { contacts: 'جهات الاتصال' }, tiles: { contacts: { title: 'جهات الاتصال' } } };
+  const before = JSON.stringify(labels);
+  assert.equal(getNavigationLabel(labels, 'contacts'), 'الأرقام');
+  assert.equal(JSON.stringify(labels), before);
+  assert.equal(getNavigationItems(labels, ['contacts'])[1].key, 'contacts');
+});
+
+test('custom contact captions and independent section order remain owned by the clinic', () => {
+  assert.equal(getNavigationLabel({ navigationLabels: { contacts: 'دليل العيادة' } }, 'contacts'), 'دليل العيادة');
+  const order = ['summary', 'appointments', 'patients', 'contacts', 'settings', 'lab'];
+  assert.deepEqual(normalizeNavigationOrder(order), order);
 });
 test('explicit navigation labels beat custom tile titles and home uses its dedicated fallback', () => {
   const draft = makeDraft();

@@ -4,6 +4,7 @@ import { User as UserType } from '../../types';
 import { canUserLoginNow } from '../../utils/accessControl';
 import { ClinicLogo } from '../common/ClinicLogo';
 import {usePortableRuntime} from '../../portable/runtime';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 
 interface LoginModalProps {
   users: UserType[];
@@ -32,7 +33,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   // Forgot Password Modal State
   const [isForgotOpen, setIsForgotOpen] = useState(false);
-  const recoveryRef = useRef<HTMLDivElement>(null);
+  const recoveryRef = useAppointmentDialog(isForgotOpen, () => setIsForgotOpen(false));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -79,12 +80,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const closeForgotModal = () => setIsForgotOpen(false);
 
-  useEffect(() => {
-    if (!isForgotOpen) return;
-    const previous = document.activeElement as HTMLElement | null;
-    recoveryRef.current?.focus();
-    return () => previous?.focus();
-  }, [isForgotOpen]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center min-h-screen w-full bg-[#060b18] overflow-y-auto font-['Cairo',sans-serif] select-none touch-manipulation dir-rtl p-4 sm:p-6">

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ShieldCheck, CheckCircle2, XCircle, Clock, AlertTriangle, UserCheck, X } from 'lucide-react';
 import { DeviceSecurity, PendingApprovalRequest } from '../../utils/deviceSecurity';
 import { User } from '../../types';
+import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 
 interface ApprovalQueueModalProps {
   isOpen: boolean;
@@ -21,6 +22,7 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
   const [requests, setRequests] = useState<PendingApprovalRequest[]>(() => DeviceSecurity.getApprovalRequests());
   const [activeTab, setActiveTab] = useState<'pending' | 'processed'>('pending');
   const [doctorNotes, setDoctorNotes] = useState<Record<string, string>>({});
+  const dialogRef = useAppointmentDialog(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -37,7 +39,7 @@ export const ApprovalQueueModal: React.FC<ApprovalQueueModalProps> = ({
 
   return (
     <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden">
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="مركز أذونات وتأكيدات الطبيب" className="clinic-modal-panel clinic-modal-panel--framed bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="shrink-0 p-4 sm:p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">

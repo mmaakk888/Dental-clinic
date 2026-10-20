@@ -7,7 +7,8 @@
 .clinic-dock[data-dock-size='large'] .clinic-dock-mobile-set .clinic-dock-item svg { width: 26px; height: 26px; }
 .clinic-dock[data-show-labels='false'] .clinic-dock-mobile-set .clinic-dock-label { display: none; }
 .clinic-dock[data-dock-size] .clinic-dock-item { min-width: 44px; }
-.clinic-dock[data-dock-size] .clinic-dock-label { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.clinic-dock[data-dock-size] .clinic-dock-label { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.clinic-dock .clinic-dock-icon svg { stroke-width: 1.8; flex-shrink: 0; }
 .clinic-dock[data-dock-size] .clinic-dock-forced-more { display: none; }
 .clinic-dock .clinic-dock-more.has-desktop-more { display: flex; }
 .clinic-dock-dialog { animation: clinic-more-enter 180ms ease-out; }

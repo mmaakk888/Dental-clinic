@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ActiveView, User as UserType, Appointment, LabCase, Patient } from '../../types';
 import { 
-  Home, Smartphone, Users, ContactRound, Calendar, Microscope, Landmark, Sliders,
+  Home, Smartphone, Users, ContactRound, Calendar, Crown, WalletCards, Sliders,
   ChevronRight, ChevronLeft, X, Palette, Layout, MessageCircle, Pill, 
   Cloud, ShieldAlert, FileSpreadsheet, Server, LogOut, UserCheck, Sparkles, Compass
 } from 'lucide-react';
@@ -68,8 +68,8 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
     },
     {
       key: 'contacts' as ActiveView,
-      label: 'جهات الاتصال',
-      desc: 'أسماء وأرقام بدون ملفات مرضى',
+      label: 'الأرقام',
+      desc: 'أرقام الملفات والأسماء المستقلة',
       icon: <ContactRound className="w-5 h-5 text-emerald-400" />,
       allowed: canAccessView(currentUser, 'contacts')
     },
@@ -85,7 +85,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       key: 'lab' as ActiveView, 
       label: 'التركيبات', 
       desc: 'تتبع حالات ومستحقات التركيبات',
-      icon: <Microscope className="w-5 h-5 text-teal-400" />, 
+      icon: <Crown className="w-5 h-5 text-teal-400" />, 
       badge: pendingLabCount,
       allowed: canAccessView(currentUser, 'lab')
     },
@@ -93,7 +93,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = React.memo(({
       key: 'summary' as ActiveView, 
       label: 'المالية والتقارير', 
       desc: 'سجل المصروفات والإيرادات',
-      icon: <Landmark className="w-5 h-5 text-indigo-400" />, 
+      icon: <WalletCards className="w-5 h-5 text-indigo-400" />, 
       allowed: canAccessView(currentUser, 'summary')
     },
     { 

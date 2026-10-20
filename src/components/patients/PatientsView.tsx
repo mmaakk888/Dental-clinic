@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
+import {useDialogDraftClose} from '../common/useDialogCloseGuard';
 import { 
   Search, 
   ContactRound,
@@ -120,7 +121,6 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   // Modals & Bottom Sheets State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
-  const patientEditorDialogRef=useAppointmentDialog(isModalOpen,()=>{if(!saving)setIsModalOpen(false);});
 
   // Bound mounted cards; reveal more explicitly instead of mounting the full directory.
   const [visibleCount, setVisibleCount] = useState(30);
@@ -159,6 +159,11 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
   const [allergy, setAllergy] = useState('');
   const [showMedicalField, setShowMedicalField] = useState(false);
   const [notes, setNotes] = useState('');
+  const closePatientEditor = useDialogDraftClose(isModalOpen, saving, () => setIsModalOpen(false), { fileNo, name, mobile, age, allergy, notes });
+  const closeQuickAppointment = useDialogDraftClose(!!quickApptPatient, saving, () => setQuickApptPatient(null), { quickApptDate, quickApptTime, quickApptService });
+  const patientEditorDialogRef = useAppointmentDialog(isModalOpen, closePatientEditor);
+  const quickAppointmentRef = useAppointmentDialog(!!quickApptPatient, closeQuickAppointment);
+  const patientOptionsRef = useAppointmentDialog(!!activeBottomSheetPatient, () => setActiveBottomSheetPatient(null));
   const registrationIndex = useMemo(() => createPatientRegistrationIndex(patients, contacts), [patients, contacts]);
   const registrationWarnings = useMemo(() => isModalOpen ? findPatientRegistrationMatches(registrationIndex,
     { name, mobile }, { excludePatientId: editingPatient?.id }) : [], [isModalOpen, registrationIndex, name, mobile, editingPatient?.id]);
@@ -432,7 +437,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
           </div>
         </div>
         <div className="patients-page-actions">
-          {onOpenContacts && (capabilities ? capabilities.viewPatients : canPerformAction(currentUser ?? null, 'view_patients')) && <button type="button" onClick={onOpenContacts} className="patients-secondary-button" title="أسماء وأرقام بدون ملفات مرضى"><ContactRound aria-hidden="true" /><span>جهات الاتصال</span></button>}
+          {onOpenContacts && (capabilities ? capabilities.viewPatients : canPerformAction(currentUser ?? null, 'view_patients')) && <button type="button" onClick={onOpenContacts} className="patients-secondary-button" title="الأسماء والأرقام من الملفات والأرقام المستقلة"><ContactRound aria-hidden="true" /><span>الأرقام</span></button>}
           {canEditPatient && <button type="button" onClick={handleOpenAddModal} className="patients-add-button"><UserPlus /><span>إضافة مريض</span></button>}
         </div>
       </header>
@@ -518,13 +523,8 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
 
       {/* 5. Touch Options Bottom Sheet (قائمة الخيارات السريعة للمريض) */}
       {activeBottomSheetPatient && (
-        <>
-          <div 
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 animate-fadeIn transition-opacity cursor-pointer"
-            onClick={() => setActiveBottomSheetPatient(null)}
-          />
-
-          <div className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-3">
+        <div className="clinic-modal-overlay fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 animate-fadeIn">
+          <div ref={patientOptionsRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="خيارات ملف المريض" className="clinic-modal-sheet fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200/90 p-4 sm:p-5 max-w-lg mx-auto animate-slideUp font-cairo dir-rtl max-h-[90dvh] overflow-y-auto pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-3">
             {/* Drag Handle & Patient Header */}
             <div className="relative pb-2 border-b border-slate-100">
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-3" />
@@ -672,13 +672,13 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               )}
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* 6. Quick Appointment Modal */}
       {quickApptPatient && (
-        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn" role="dialog" aria-modal="true" aria-labelledby="patient-quick-appointment-title">
-          <div className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 relative font-cairo dir-rtl max-h-[90dvh] overflow-y-auto modal-scroll">
+        <div className="clinic-modal-overlay fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
+          <div ref={quickAppointmentRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="patient-quick-appointment-title" className="clinic-modal-panel bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 relative font-cairo dir-rtl max-h-[90dvh] overflow-y-auto modal-scroll">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div>
                 <h3 id="patient-quick-appointment-title" className="font-black text-base text-slate-900 font-tajawal">
@@ -688,7 +688,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </div>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setQuickApptPatient(null); }}
+                disabled={saving} onClick={closeQuickAppointment}
                 aria-label="إغلاق حجز الموعد"
                 className="w-11 h-11 shrink-0 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
               >
@@ -737,7 +737,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setQuickApptPatient(null); }}
+                  disabled={saving} onClick={closeQuickAppointment}
                   className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer min-h-[44px]"
                 >
                   إلغاء
@@ -768,7 +768,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               </h2>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
+                disabled={saving} onClick={closePatientEditor}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer min-h-[44px]"
               >
                 إلغاء وإغلاق
@@ -892,7 +892,7 @@ export const PatientsView: React.FC<PatientsViewProps> = React.memo(({
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
+                  disabled={saving} onClick={closePatientEditor}
                   className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer min-h-[44px]"
                 >
                   إلغاء

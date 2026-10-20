@@ -11,6 +11,12 @@
 .patient-file-icon { width: 44px; padding: 10px; border: 1px solid #e0e9eb; background: #fff; }
 .patient-file-icon--danger { color: #b42341; background: #fff1f3; }
 .patient-file svg { flex-shrink: 0; }
+.patient-file-header-tools { flex-wrap: wrap; justify-content: flex-end; }
+.patient-file-tabs button span { overflow-wrap: normal; white-space: nowrap; }
+.patient-file :is(.patient-file-icon,.patient-file-back,.patient-session-collect,.patient-session-details-button) svg { stroke-width: 1.8; }
+.patient-file button:disabled { cursor: not-allowed; opacity: .55; }
+.patient-file button:not(:disabled) { transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
+.patient-balance-heading button { min-height: 44px; }
 .patient-file-back svg, .patient-file-icon svg, .patient-file-contact-actions svg { width: 18px; height: 18px; }
 .patient-file-number { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; background: #eaf4f1; border: 1px solid #d4e8e0; border-radius: 9px; font-size: 12px; font-weight: 800; color: #24575b; overflow-wrap: anywhere; }
 .patient-file-number svg { width: 14px; height: 14px; }
@@ -155,7 +161,7 @@
   .patient-file-contact-actions > * { padding-inline: 9px; font-size: 12px; }
   .patient-file-avatar { width: 42px; height: 42px; font-size: 18px; }
   .patient-file-name h1 { font-size: 22px; }
-  .patient-file-overview .patient-balance { padding: 12px; display: flex; flex-direction: column; justify-content: center; }
+  .patient-file-overview .patient-balance { padding: 14px; display: grid; align-self: start; align-content: start; }
   .patient-file-overview .patient-balance-values > div { padding: 9px; }
   .patient-file-overview .patient-balance-values dd { font-size: 23px; }
   .patient-file-overview .patient-balance-values dt { font-size: 11px; }

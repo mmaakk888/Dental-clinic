@@ -9,6 +9,7 @@ import { walkInExaminationDefault } from '../utils/walkInDraft';
 import { useAppointmentDialog } from './appointments/useAppointmentDialog';
 import { useToastAndConfirm } from './common/ToastAndConfirm';
 import { useConfirmedAction } from './common/useConfirmedAction';
+import { useDialogDraftClose } from './common/useDialogCloseGuard';
 import { ExaminationFeeToggle } from './common/ExaminationFeeToggle';
 import { ToothSelectionGrid } from './common/ToothSelectionGrid';
 import './ProstheticOrderForm.css';
@@ -40,8 +41,6 @@ export function ProstheticOrderForm({ patient, patients = [], crownPrices, exami
   const committing = useRef(false);
   const operationId = useRef<string | null>(null);
   if (!operationId.current) operationId.current = crypto.randomUUID();
-  const close = () => { if (!committing.current) onClose(); };
-  const dialogRef = useAppointmentDialog(true, close);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [patientId, setPatientId] = useState('');
@@ -59,6 +58,10 @@ export function ProstheticOrderForm({ patient, patients = [], crownPrices, exami
   const [date, setDate] = useState(today);
   const [deliveryExpectedDate, setDeliveryExpectedDate] = useState('');
   const [note, setNote] = useState('');
+  const requestClose = useDialogDraftClose(true, saving || committing.current, onClose,
+    { patientId, kind, material, units, teethIds, withExamination, paidText, date, deliveryExpectedDate, note });
+  const close = () => { if (!committing.current) requestClose(); };
+  const dialogRef = useAppointmentDialog(true, close);
   const unitPrice = getPatientProstheticPrice(material, { crownPrices });
   const configuredExamFee = walkInExaminationDefault(examinationFee);
   const examAmount = withExamination ? configuredExamFee : 0;

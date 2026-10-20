@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Sparkles, Check, Trash2, X, FileText, Upload, Plus, Copy, AlertTriangle, HelpCircle, Calculator, Building2, Phone, CreditCard, DollarSign, Layers, Calendar, Clock, RefreshCw, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
+import { Camera, Sparkles, Check, Trash2, X, FileText, Upload, Plus, Copy, AlertTriangle, HelpCircle, Calculator, Building2, Phone, CreditCard, Banknote, Layers, Calendar, Clock, RefreshCw, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
 import { AiService, ExtractedInvoice } from '../../services/aiService';
 import { Expense, ExpenseItem, PriceVarianceAlert } from '../../types';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
@@ -7,6 +7,7 @@ import { localDateISO, isValidAppointmentDate } from '../appointments/appointmen
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { assertUniqueSupplierInvoice } from '../../utils/expenseUtils';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useDialogCloseGuard } from '../common/useDialogCloseGuard';
 import { invoiceFinancialDraft } from '../../utils/invoiceFinancialDraft';
 import '../common/ActionDialog.css';
 
@@ -63,7 +64,6 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
     setHasInvoiceDraft(false);
     accessRef.current.onClose();
   };
-  const dialogRef = useAppointmentDialog(isOpen, handleClose);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [hasInvoiceDraft, setHasInvoiceDraft] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -104,6 +104,8 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
   // Image Zoom State
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotationDegree, setRotationDegree] = useState(0);
+  const requestClose = useDialogCloseGuard(isOpen, hasInvoiceDraft || !!imagePreview || lineItems.length > 0 || !!title || !!supplierName, saving, handleClose);
+  const dialogRef = useAppointmentDialog(isOpen, requestClose);
 
   const resetInvoiceDraft = () => {
     setImagePreview(null); setInvoiceImageSize(null); setExtractedData(null);
@@ -441,7 +443,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
   if (!isOpen) return null;
   return (
-    <div onClick={handleClose} aria-busy={saving || isExtracting || isCompressing} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
+    <div onClick={requestClose} aria-busy={saving || isExtracting || isCompressing} className="clinic-modal-overlay fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn font-cairo dir-rtl">
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="invoice-action-title" tabIndex={-1} dir="rtl" data-action-tone="rose" onClick={(e) => e.stopPropagation()} className="clinic-modal-panel clinic-modal-panel--framed clinic-action-dialog bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-5xl flex flex-col overflow-hidden">
         
         {/* Header */}
@@ -455,7 +457,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
               <p>صورة الفاتورة والأصناف، ثم مراجعة صريحة قبل الحفظ.</p>
             </div>
           </div>
-          <button type="button" disabled={saving} onClick={handleClose} aria-label="إلغاء وإغلاق الفاتورة" className="clinic-action-close">
+          <button type="button" disabled={saving} onClick={requestClose} aria-label="إلغاء وإغلاق الفاتورة" className="clinic-action-close">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -888,7 +890,7 @@ export const InvoiceOcrModal: React.FC<InvoiceOcrModalProps> = ({
 
         {/* Modal Footer */}
         <div className="clinic-action-footer">
-          <button type="button" disabled={saving} onClick={handleClose} className="clinic-action-cancel">
+          <button type="button" disabled={saving} onClick={requestClose} className="clinic-action-cancel">
             إلغاء وإغلاق
           </button>
           {hasInvoiceDraft && (

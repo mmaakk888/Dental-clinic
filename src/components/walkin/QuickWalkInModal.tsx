@@ -6,6 +6,7 @@ import { buildHomePatientSearch, searchHomePatients } from '../../utils/homePati
 import { getWalkInServiceOptions, nextWalkInFileNumber, validateWalkInAmounts, walkInExaminationDefault } from '../../utils/walkInDraft';
 import { getToothLabel } from '../../utils/toothUtils';
 import { useAppointmentDialog } from '../appointments/useAppointmentDialog';
+import { useDialogDraftClose } from '../common/useDialogCloseGuard';
 import { useToastAndConfirm } from '../common/ToastAndConfirm';
 import { useConfirmedAction } from '../common/useConfirmedAction';
 import { createPatientRegistrationIndex, findPatientRegistrationMatches } from '../../utils/patientRegistration';
@@ -46,8 +47,6 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const { showToast } = useToastAndConfirm();
   const { saving, run } = useConfirmedAction();
   const committingRef = useRef(false);
-  const closeDialog = () => { if (!committingRef.current) onClose(); };
-  const dialogRef = useAppointmentDialog(isOpen, closeDialog);
   const [patientMode, setPatientMode] = useState<'existing' | 'new'>('existing');
   const [withoutFile,setWithoutFile]=useState(false);
   const [confirmExistingFile,setConfirmExistingFile]=useState(false);
@@ -82,6 +81,10 @@ export const QuickWalkInModal: React.FC<QuickWalkInModalProps> = ({ isOpen, onCl
   const [prescriptionNotes, setPrescriptionNotes] = useState('');
   const [visitNotes, setVisitNotes] = useState('');
   const [visitStatus, setVisitStatus] = useState<'completed' | 'follow_up'>('completed');
+  const requestClose = useDialogDraftClose(isOpen, saving, onClose,
+    { patientMode, withoutFile, selectedId, name, mobile, age, gender, services, hasExamination, paidAmount, chiefComplaint, diagnosis, prescriptionNotes, visitNotes, visitStatus });
+  const closeDialog = () => { if (!committingRef.current) requestClose(); };
+  const dialogRef = useAppointmentDialog(isOpen, closeDialog);
   const exam = hasExamination ? configuredExamFee : 0;
   const paid = Number(paidAmount || 0);
   const discount = 0;

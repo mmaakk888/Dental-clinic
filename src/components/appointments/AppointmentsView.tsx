@@ -12,6 +12,7 @@ import { logAuditAction } from '../../services/auditLogger';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from './AppointmentStatusModal';
 import { adjacentCalendarMonth, appointmentTimeMinutes, availableAppointmentTimes, findAppointmentConflicts, isValidAppointmentDate, localDateISO, occupiesAppointmentSlot } from './appointmentScheduling';
 import { useAppointmentDialog } from './useAppointmentDialog';
+import { useDialogDraftClose } from '../common/useDialogCloseGuard';
 import { cleanEgyptianPhone } from '../../utils/whatsappUtils';
 
 interface AppointmentsViewProps {
@@ -103,7 +104,6 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   React.useEffect(() => { onEditorChange?.(isModalOpen || !!statusModalAppt); return () => onEditorChange?.(false); }, [isModalOpen, statusModalAppt, onEditorChange]);
-  const bookingDialogRef = useAppointmentDialog(isModalOpen, () => { if (!saving) setIsModalOpen(false); });
 
   // Form State
   const [patientSearch, setPatientSearch] = useState('');
@@ -114,6 +114,8 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
   const [apptPeriod, setApptPeriod] = useState<'AM' | 'PM'>('PM');
   const [isFollowUp, setIsFollowUp] = useState(false);
   const [note, setNote] = useState('');
+  const closeBooking = useDialogDraftClose(isModalOpen, saving, () => setIsModalOpen(false), { selectedPatientId, apptDate, apptHour, apptMin, apptPeriod, isFollowUp, note });
+  const bookingDialogRef = useAppointmentDialog(isModalOpen, closeBooking);
 
   // Navigation between weeks/months
   const weekDays = getWeekDays(refDate);
@@ -758,7 +760,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
               </h3>
               <button
                 type="button"
-                disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
+                disabled={saving} onClick={closeBooking}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer min-h-[44px] touch-manipulation"
               >
                 إلغاء وإغلاق
@@ -882,7 +884,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = React.memo(({
                 </button>
                 <button
                   type="button"
-                  disabled={saving} onClick={() => { if (!saving) setIsModalOpen(false); }}
+                  disabled={saving} onClick={closeBooking}
                   className="px-5 py-3.5 min-h-[48px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-700 font-bold text-sm cursor-pointer transition-all touch-manipulation"
                 >
                   إلغاء وإغلاق

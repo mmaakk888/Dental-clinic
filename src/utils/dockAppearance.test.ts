@@ -190,8 +190,8 @@ test('real dock has one responsive navigation landmark, independent visual setti
   const desktop = markup.match(/class="clinic-dock-web-set"([\s\S]*?)<\/div><\/nav>/)![1];
   assert.ok(mobile.indexOf('title="التركيبات"') < mobile.indexOf('title="المواعيد"') || !mobile.includes('title="المواعيد"'));
   assert.ok(desktop.indexOf('title="الرئيسية"') < desktop.indexOf('title="المواعيد"'));
-  assert.ok(desktop.indexOf('title="المواعيد"') < desktop.indexOf('title="جهات الاتصال"'));
-  assert.ok(desktop.indexOf('title="جهات الاتصال"') < desktop.indexOf('title="المرضى"'));
+  assert.ok(desktop.indexOf('title="المواعيد"') < desktop.indexOf('title="الأرقام"'));
+  assert.ok(desktop.indexOf('title="الأرقام"') < desktop.indexOf('title="المرضى"'));
   assert.doesNotMatch(desktop, /المزيد من الأقسام/);
   const css = readFileSync(resolve(root, 'src/components/navigation/dockAppearance.css'), 'utf8');
   assert.match(css, /\.clinic-dock-web-set \{ display: none; \}/);

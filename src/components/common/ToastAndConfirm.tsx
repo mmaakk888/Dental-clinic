@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { CheckCircle2, AlertTriangle, XCircle, Trash2, RotateCcw, AlertCircle } from 'lucide-react';
+import { bindDialogBackdrop, lockDialogScroll } from '../../utils/dialogLifecycle';
 
 export type ToastType = 'success' | 'error' | 'warning';
 
@@ -46,8 +47,8 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
   useEffect(() => {
     if (!confirmState) return;
     const previous = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const releaseScroll = lockDialogScroll(document.body);
+    const releaseBackdrop = confirmRef.current ? bindDialogBackdrop(confirmRef.current, () => { if (!confirmingRef.current) setConfirmState(null); }) : () => {};
     const elements = (): HTMLElement[] => Array.from(confirmRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]') || []) as HTMLElement[];
     elements()[0]?.focus();
     const handleKey = (event: KeyboardEvent) => {
@@ -68,7 +69,7 @@ export const ToastAndConfirmProvider: React.FC<{ children: React.ReactNode }> = 
       }
     };
     document.addEventListener('keydown', handleKey, true);
-    return () => { document.removeEventListener('keydown', handleKey, true); document.body.style.overflow = previousOverflow; if (previous?.isConnected) previous.focus(); };
+    return () => { document.removeEventListener('keydown', handleKey, true); releaseBackdrop(); releaseScroll(); if (previous?.isConnected) previous.focus(); };
   }, [confirmState]);
 
   const showToast = useCallback((
