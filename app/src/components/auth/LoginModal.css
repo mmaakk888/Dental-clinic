@@ -42,6 +42,7 @@
 .clinic-login-input-wrap { position: relative; display: flex; align-items: center; min-width: 0; }
 .clinic-login-input-wrap > input { width: 100%; min-width: 0; height: 52px; border: 1px solid #394761; border-radius: 13px; outline: none; padding: 10px 46px 10px 14px; background: #0a1427; color: #f5f7fc; font-size: 16px; line-height: 1.6; font-weight: 500; caret-color: var(--login-gold); transition: border-color 120ms, box-shadow 120ms; scroll-margin-block: 24px; }
 .clinic-login-input-wrap > input::placeholder { color: #8796b0; opacity: 1; font-size: 14px; }
+.clinic-login-input-wrap > input:placeholder-shown { text-align: right; }
 .clinic-login-input-wrap > input:hover:not(:disabled) { border-color: #596986; }
 .clinic-login-input-wrap > input:focus { border-color: var(--login-gold); box-shadow: 0 0 0 3px #f6c45319; }
 .clinic-login-input-wrap > input:disabled { opacity: .7; cursor: wait; }

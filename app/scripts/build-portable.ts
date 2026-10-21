@@ -18,7 +18,7 @@ const artifacts = path.resolve(staging ? 'build/portable-next-artifacts' : 'buil
 if (fs.existsSync(target) || fs.existsSync(artifacts)) {
   throw Error('Frozen release already exists. Rename build/portable-release AND build/portable-artifacts before preparing another release.');
 }
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md','FINAL-VISUAL-REVIEW.ar.md']) {
   if (!fs.existsSync(path.join('portable', file))) throw Error('Missing release document: ' + file);
 }
 await build({configFile: path.resolve('vite.portable.config.ts')});
@@ -34,7 +34,7 @@ for (const file of ['config.example.php', '.htaccess']) {
 // Private operational tools only; no legacy data migration exporters.
 fs.cpSync('portable/tools',path.join(privateDir,'portable/tools'),{recursive:true});
 fs.copyFileSync('portable/schema.sql', path.join(privateDir, 'schema.sql'));
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md','FINAL-VISUAL-REVIEW.ar.md']) {
   fs.copyFileSync(path.join('portable', file), path.join(privateDir, file));
 }
 const defaults = {

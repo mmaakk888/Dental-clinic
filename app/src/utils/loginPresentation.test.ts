@@ -83,3 +83,9 @@ test('small text and primary action meet minimum normal-text contrast in the sig
     const values=[luminance(text),luminance(bg)].sort((a,b)=>b-a);assert.ok((values[0]+.05)/(values[1]+.05)>=4.5,`${text} on ${bg}`);
   }
 });
+
+test('empty Arabic placeholders align to the right without forcing a typed Latin username to RTL',()=>{
+  assert.match(css,/\.clinic-login-input-wrap > input:placeholder-shown\s*\{\s*text-align: right;/);
+  assert.match(source,/spellCheck=\{false\} dir="auto"/);
+  assert.doesNotMatch(css,/login-username[^}]*direction:\s*rtl/);
+});
