@@ -3,6 +3,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {build} from 'vite';
 import {createZip, listFiles} from './portable-zip';
+import {packageInstallation} from './installation-package';
 import {
   DEFAULT_THEME, DEFAULT_UI_LABELS, DEFAULT_TILE_ORDER, DEFAULT_WHATSAPP_SETTINGS,
 } from '../src/data/initialData';
@@ -16,7 +17,7 @@ const artifacts = path.resolve(staging ? 'build/portable-next-artifacts' : 'buil
 if (fs.existsSync(target) || fs.existsSync(artifacts)) {
   throw Error('Frozen release already exists. Rename build/portable-release AND build/portable-artifacts before preparing another release.');
 }
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md']) {
   if (!fs.existsSync(path.join('portable', file))) throw Error('Missing release document: ' + file);
 }
 await build({configFile: path.resolve('vite.portable.config.ts')});
@@ -32,7 +33,7 @@ for (const file of ['config.example.php', '.htaccess']) {
 // Private operational tools only; no legacy data migration exporters.
 fs.cpSync('portable/tools',path.join(privateDir,'portable/tools'),{recursive:true});
 fs.copyFileSync('portable/schema.sql', path.join(privateDir, 'schema.sql'));
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md']) {
   fs.copyFileSync(path.join('portable', file), path.join(privateDir, file));
 }
 const defaults = {
@@ -80,6 +81,8 @@ const filtered = sourceFiles.filter(file => {
 });
 for(const file of filtered)if(/"format"\s*:\s*"clinic-backup-key"/.test(fs.readFileSync(file,'utf8')))throw Error('Private decryption key file must not enter the source ZIP.');
 createZip(path.join(artifacts, 'clinic-source.zip'), process.cwd(), [...new Set(filtered)]);
+const complete = packageInstallation(target, artifacts, path.resolve('portable/FIRST-INSTALL.ar.md'));
 const hashes = fs.readdirSync(artifacts).sort().map(name => `${createHash('sha256').update(fs.readFileSync(path.join(artifacts, name))).digest('hex')}  ${name}`);
 fs.writeFileSync(path.join(artifacts, 'SHA256SUMS.txt'), hashes.join('\n') + '\n');
 console.log(`Prepared ${manifest.length} public files, separate SQL/tools/configuration, and current source ZIP in ${artifacts}. No patients, accounts or secrets seeded.`);
+console.log(`Complete first installation: ${complete.output} (${complete.files} files, SHA256 ${complete.sha256}). Only htdocs/ belongs in the public web root.`);
