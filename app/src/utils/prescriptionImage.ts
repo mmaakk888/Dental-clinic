@@ -1,7 +1,9 @@
 import type { PrescriptionItem } from '../types';
 import { requireAuthorizedDataOutput } from './authorizedDataOutput';
+import type {PrescriptionDesign} from './prescriptionTemplate';
 
 export interface PrescriptionImageData {
+  design?: PrescriptionDesign;
   clinicName: string; clinicLogo: string | null;
   doctorTitle: string; doctorName: string; doctorEnglish: string; specialties: string[];
   phone: string; address: string; patientName: string; fileNo: string; age: number; date: string;
@@ -9,15 +11,26 @@ export interface PrescriptionImageData {
 }
 /** Validate complete clinical text before capture; never silently truncate it. */
 export function validatePrescriptionImageData(data: PrescriptionImageData): void {
-  if (!data.items.length || data.items.length > 100 || data.items.some(item => !item.drugName.trim())) throw new Error('أضف الأدوية وراجع أسماءها قبل تجهيز الصورة.');
+  if (!data.items.length || data.items.length > 64 || data.items.some(item => !item.drugName.trim())) throw new Error('أضف الأدوية وراجع أسماءها قبل تجهيز الصورة؛ الحد الأقصى ٦٤ دواء.');
   const values = [data.patientName, data.fileNo, data.date, data.doctorTitle, data.clinicName, data.doctorName, data.doctorEnglish,
     data.notes, data.diagnosis, data.phone, data.address, ...data.specialties, ...data.items.flatMap(item => [item.drugName, item.dosage, item.duration])];
   if (values.some(value => typeof value !== 'string' || value.length > 8000)) throw new Error('الروشتة طويلة جدًا. قسّمها على أكثر من روشتة؛ لم يتم حذف أي نص.');
-  if (data.clinicLogo && !isEmbeddedPrescriptionLogo(data.clinicLogo)) throw new Error('لإظهار الشعار في الصورة، ارفع شعار PNG أو JPG أو WebP من الهوية والمظهر.');
+  if (data.clinicLogo && !isEmbeddedPrescriptionLogo(data.clinicLogo) && !isTrustedPrescriptionLogoURL(data.clinicLogo)) throw new Error('لإظهار الشعار في الصورة، ارفع شعار PNG أو JPG أو WebP من الهوية والمظهر.');
 }
 
 export function isEmbeddedPrescriptionLogo(source: string): boolean {
   return source.length <= 6_000_000 && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(source);
+}
+/** Only this installation's authenticated logo endpoint, never an arbitrary URL. */
+export function isTrustedPrescriptionLogoURL(source: string, base = globalThis.location?.href): boolean {
+  if (!base) return false;
+  try {
+    const origin = new URL(base), endpoint = new URL('api/index.php', origin), url = new URL(source, origin);
+    if (url.origin !== origin.origin || url.pathname !== endpoint.pathname || url.hash || url.username || url.password) return false;
+    const action = url.searchParams.get('action');
+    if (action === 'brand-logo') return Array.from(url.searchParams.keys()).length === 1;
+    return action === 'file' && Array.from(url.searchParams.keys()).length === 2 && /^[A-Za-z0-9_\-:.]{1,128}$/.test(url.searchParams.get('id') || '');
+  } catch {return false;}
 }
 
 export function prescriptionCaptureSize(width: number, height: number) {
@@ -30,6 +43,9 @@ export function prescriptionCaptureSize(width: number, height: number) {
 
 /** Only the reviewed paper enters an isolated, scriptless, offline document. */
 export function prescriptionPaperMarkup(paper: HTMLElement): string {
+  return checkedPaperMarkup(paper, isEmbeddedPrescriptionLogo);
+}
+function checkedPaperMarkup(paper: HTMLElement, allowedLogo: (source: string) => boolean): string {
   if (paper.id !== 'printable-prescription' || paper.getAttribute('data-prescription-document') !== 'v2') throw new Error('افتح معاينة الروشتة أولًا.');
   const permitted = new Set(['DIV', 'SPAN', 'STRONG', 'P', 'BDI', 'IMG', 'svg', 'path']);
   for (const node of [paper, ...Array.from(paper.querySelectorAll('*'))]) {
@@ -38,9 +54,32 @@ export function prescriptionPaperMarkup(paper: HTMLElement): string {
       if (/^on/i.test(attribute.name) || /^(href|xlink:href|srcset)$/i.test(attribute.name) ||
         (attribute.name === 'style' && /url\s*\(/i.test(attribute.value))) throw new Error('تعذّر تجهيز قالب الروشتة.');
     }
-    if (node.tagName === 'IMG' && !isEmbeddedPrescriptionLogo(node.getAttribute('src') || '')) throw new Error('ارفع شعار PNG أو JPG أو WebP من الهوية والمظهر.');
+    if (node.tagName === 'IMG' && !allowedLogo(node.getAttribute('src') || '')) throw new Error('ارفع شعار PNG أو JPG أو WebP من الهوية والمظهر.');
   }
   return paper.outerHTML;
+}
+/** Same print DOM, with its protected logo embedded, not a second layout. */
+export async function preparePrescriptionPaperMarkup(paper: HTMLElement, allowed: boolean, authorize?: () => void): Promise<string> {
+  requireAuthorizedDataOutput(allowed, authorize);
+  checkedPaperMarkup(paper, source => isEmbeddedPrescriptionLogo(source) || isTrustedPrescriptionLogoURL(source));
+  const images = Array.from(paper.querySelectorAll('img'));
+  if (images.every(image => isEmbeddedPrescriptionLogo(image.getAttribute('src') || ''))) return prescriptionPaperMarkup(paper);
+  const clone = paper.cloneNode(true) as HTMLElement;
+  for (const image of Array.from(clone.querySelectorAll('img'))) {
+    const source = image.getAttribute('src') || '';
+    if (isEmbeddedPrescriptionLogo(source)) continue;
+    if (!isTrustedPrescriptionLogoURL(source)) throw Error('رابط شعار الروشتة غير مسموح.');
+    requireAuthorizedDataOutput(allowed, authorize);
+    const response = await fetch(new URL(source, location.href), {credentials:'same-origin', cache:'no-store', redirect:'error'});
+    if (!response.ok || Number(response.headers.get('content-length') || 0) > 2 * 1024 * 1024) throw Error('تعذّر تحميل شعار الروشتة المصرّح به.');
+    const blob = await response.blob();
+    if (!['image/png','image/jpeg','image/webp'].includes(blob.type) || !blob.size || blob.size > 2 * 1024 * 1024) throw Error('صورة شعار الروشتة غير صالحة أو تتجاوز الحد.');
+    const encoded = await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>typeof reader.result==='string'?resolve(reader.result):reject(Error('تعذّر تضمين الشعار.'));reader.onerror=()=>reject(Error('تعذّر قراءة الشعار.'));reader.readAsDataURL(blob);});
+    requireAuthorizedDataOutput(allowed, authorize);
+    if (!isEmbeddedPrescriptionLogo(encoded)) throw Error('تعذّر تضمين الشعار بأمان.');
+    image.setAttribute('src', encoded);
+  }
+  return prescriptionPaperMarkup(clone);
 }
 
 type Capture = (paper: HTMLElement, options: Record<string, unknown>) => Promise<HTMLCanvasElement>;
@@ -86,7 +125,7 @@ export async function renderPrescriptionImage(data: PrescriptionImageData, allow
   requireAuthorizedDataOutput(allowed, authorize);
   validatePrescriptionImageData(data);
   if (!paper) throw new Error('افتح معاينة الروشتة أولًا.');
-  const markup = prescriptionPaperMarkup(paper);
+  const markup = await preparePrescriptionPaperMarkup(paper, allowed, authorize);
   const { default: html2canvas } = await import('html2canvas');
   requireAuthorizedDataOutput(allowed, authorize);
   return capturePrescriptionPaper(markup, html2canvas, allowed, authorize);

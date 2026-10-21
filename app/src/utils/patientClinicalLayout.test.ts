@@ -172,11 +172,13 @@ test('Rx print and WhatsApp controls respect denied/privacy-derived capabilities
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { print: () => { printed++; } } });
   try {
     const h = harness(compiled.exports.rx, { ...rxProps, canPrint: true, onAuthorizePrint: () => { checks++; if (!allowed) throw new Error('PRIVATE_SYNTHETIC_ERROR'); } });
+    h.clickLabel('طباعة الروشتة (A5)'); assert.equal(printed,0); assert.equal(checks,0);
+    h.clickAria('إضافة دواء اختبار 00 إلى الروشتة');
     const button = h.find(item => item.type === 'button' && text(item).includes('طباعة الروشتة (A5)'));
     button.props.onClick(); assert.equal(printed, 1); assert.equal(checks, 1);
     allowed = false; button.props.onClick(); assert.equal(printed, 1); assert.equal(checks, 2);
     assert.match(h.toasts.at(-1) || '', /تعذّرت الطباعة/); assert.ok(!h.toasts.join(' ').includes('PRIVATE_SYNTHETIC_ERROR'));
-    h.clickAria('إضافة دواء اختبار 00 إلى الروشتة'); h.change('اسم الدواء 1', ' '); allowed = true;
+    h.change('اسم الدواء 1', ' '); allowed = true;
     h.clickLabel('طباعة الروشتة (A5)'); assert.equal(printed, 1); assert.match(h.toasts.at(-1) || '', /راجع أسماء الأدوية/);
   } finally { if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window'); }
 });

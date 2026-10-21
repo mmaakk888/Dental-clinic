@@ -3,8 +3,9 @@ import test from 'node:test';
 import { buildSync } from 'esbuild';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { capturePrescriptionPaper, isEmbeddedPrescriptionLogo, prescriptionCaptureSize, prescriptionPaperMarkup, renderPrescriptionImage, sharePrescriptionImage, validatePrescriptionImageData } from './prescriptionImage';
+import { capturePrescriptionPaper, isEmbeddedPrescriptionLogo, isTrustedPrescriptionLogoURL, preparePrescriptionPaperMarkup, prescriptionCaptureSize, prescriptionPaperMarkup, renderPrescriptionImage, sharePrescriptionImage, validatePrescriptionImageData } from './prescriptionImage';
 import type { PrescriptionImageData } from './prescriptionImage';
+import {DEFAULT_PRESCRIPTION_DESIGN} from './prescriptionTemplate';
 +test('Rx sharing uses only the prepared image, respects denial/cancellation and never claims WhatsApp delivery', async () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   const file = new File(['synthetic-png'], 'synthetic-prescription.png', { type: 'image/png' });
@@ -65,6 +66,10 @@ test('canonical Rx separates Arabic identity, unchanged logo and numbered mixed-
   for (const item of data.items) for (const value of [item.drugName, item.dosage, item.duration]) assert.ok(html.includes(value));
   assert.doesNotMatch(html, /scaleX|rotateY|transform:scale\(-/);
 });
+test('custom design is rendered in the canonical print and PNG paper, with safe text and no mirroring',()=>{
+ const html=compiled.exports.render({...fixture(),design:{...DEFAULT_PRESCRIPTION_DESIGN,primaryColor:'#123456',headerColor:'#ffffff',accentColor:'#987654',fontFamily:'Tahoma',fontSize:14,logoPosition:'right',headerStyle:'outline',spacing:'compact',showWatermark:false,showLogo:false,showFileNo:false,footerNote:'<script>نص توضيحي فقط</script>'}});
+ assert.match(html,/data-prescription-header="arabic-left-logo-right"/);assert.match(html,/flex-direction:row-reverse/);assert.match(html,/font-family:Tahoma, Arial, sans-serif/);assert.match(html,/font-size:14/);assert.match(html,/background-color:#123456/);assert.match(html,/padding:6px 8px/);assert.doesNotMatch(html,/<script>|opacity:0.06|#501|rx-identity-logo|scaleX|rotateY/);assert.match(html,/&lt;script&gt;/);
+});
 test('image validation rejects empty drugs, remote logos and excessive text instead of dropping it', () => {
   assert.throws(() => validatePrescriptionImageData({ ...fixture(), items: [] }), /أضف الأدوية/);
   assert.throws(() => validatePrescriptionImageData({ ...fixture(), items: [{ ...fixture().items[0], drugName: ' ' }] }));
@@ -81,6 +86,26 @@ test('capture accepts only paper and embedded assets, not controls, scripts or f
   assert.equal(prescriptionPaperMarkup(paper()), '<div>synthetic canonical paper</div>'); assert.throws(() => prescriptionPaperMarkup(node()));
   for (const child of [node('SCRIPT'), node('IFRAME'), node('INPUT'), node('IMG', { src: 'https://example.invalid' }), node('DIV', { style: 'background:url(https://example.invalid)' }), node('DIV', { onclick: 'synthetic' }), node('path', { href: 'https://example.invalid' })]) assert.throws(() => prescriptionPaperMarkup(paper([child])));
   assert.doesNotThrow(() => prescriptionPaperMarkup(paper([node('IMG', { src: 'data:image/png;base64,c3ludGhldGlj' }), node('svg'), node('path')])));
+});
+test('protected logos are limited to the same installation endpoint and never remote URLs or redirects',()=>{
+ const base='https://clinic.example/branch/';
+ assert.equal(isTrustedPrescriptionLogoURL('api/index.php?action=file&id=synthetic-logo',base),true);assert.equal(isTrustedPrescriptionLogoURL('api/index.php?action=brand-logo',base),true);
+ for(const source of ['https://other.invalid/api/index.php?action=file&id=x','/api/index.php?action=file&id=x','api/index.php?action=backup','api/index.php?action=file&id=x&extra=1','api/index.php?action=file&id=x#fragment','https://user:pass@clinic.example/branch/api/index.php?action=file&id=x'])assert.equal(isTrustedPrescriptionLogoURL(source,base),false,source);
+});
+test('PNG capture embeds authenticated logo bytes into a clone of the exact print DOM and rechecks authorization',async()=>{
+ const original = Object.fromEntries(['location','fetch','FileReader'].map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]));
+ let calls=0, revoked=false;const attributes={src:'api/index.php?action=file&id=synthetic-logo'};
+ const image:any={tagName:'IMG',attributes:[{name:'src',value:attributes.src}],getAttribute:(k:string)=>(attributes as any)[k]||null,setAttribute:(k:string,v:string)=>{(attributes as any)[k]=v;image.attributes=[{name:k,value:v}];}};
+ const clone:any={...paper([image]),querySelectorAll:()=>[image]};Object.defineProperty(clone,'outerHTML',{get:()=>`<div id="printable-prescription"><img src="${attributes.src}"></div>`});
+ const source:any={...paper([node('IMG',{src:attributes.src})]),cloneNode:()=>clone};
+ try{
+  Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://clinic.example/branch/'}});
+  Object.defineProperty(globalThis,'fetch',{configurable:true,value:async(url:URL,options:any)=>{calls++;assert.equal(url.origin,'https://clinic.example');assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');return new Response(new Blob(['synthetic-image'],{type:'image/png'}));}});
+  Object.defineProperty(globalThis,'FileReader',{configurable:true,value:class {result='';onload?:()=>void;onerror?:()=>void;readAsDataURL(blob:Blob){void blob.arrayBuffer().then(bytes=>{this.result='data:image/png;base64,'+Buffer.from(bytes).toString('base64');this.onload?.();});}}});
+  const html=await preparePrescriptionPaperMarkup(source,true,()=>{if(revoked)throw Error('synthetic-revoked');});assert.equal(calls,1);assert.match(html,/src="data:image\/png;base64,/);assert.equal(source.querySelectorAll('img')[0].getAttribute('src'),'api/index.php?action=file&id=synthetic-logo');
+  attributes.src='api/index.php?action=file&id=synthetic-logo';image.attributes=[{name:'src',value:attributes.src}];revoked=true;
+  await assert.rejects(preparePrescriptionPaperMarkup(source,true,()=>{if(revoked)throw Error('synthetic-revoked');}),/synthetic-revoked/);assert.equal(calls,1);
+ }finally{for(const key of Object.keys(original)){const d=original[key];if(d)Object.defineProperty(globalThis,key,d);else Reflect.deleteProperty(globalThis,key);}}
 });
 function isolated(images: any[] = []) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'document'); let removed = 0, appended = 0, callback: BlobCallback | undefined;

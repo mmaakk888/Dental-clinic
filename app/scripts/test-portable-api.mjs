@@ -2,6 +2,7 @@ import fs from 'node:fs';import path from 'node:path';import {spawn,spawnSync} f
 import {createServer} from 'node:net';
 import {testWorkflow} from './workflow-regression.mjs';
 import {testSettings} from './settings-regression.mjs';
+import {testRxWorkflow} from './rx-workflow-regression.mjs';
 for(const port of [4189,4192])await new Promise((resolve,reject)=>{const probe=createServer();probe.once('error',reject);probe.listen(port,'127.0.0.1',()=>probe.close(resolve));});
 const root=process.cwd(),php=process.env.CLINIC_TEST_PHP||path.resolve('.clinic-local/php-migration-runtime/php/php.exe');
 if(!fs.existsSync(php))throw Error('Set CLINIC_TEST_PHP to a local PHP CLI with pdo_mysql. Dedicated MariaDB test server must run on 127.0.0.1:33307.');
@@ -107,6 +108,7 @@ try {
  r=await target.mutation('patient.save',{value:{id:'503',name:'بعد الاستعادة مصطنع',age:20}});check(r.data.ok&&r.data.result==='503','counter remains correct after restoring casual visits');
  await testWorkflow({a,target,check,fullKey,client});
  await testSettings({a,check});
+ await testRxWorkflow({a,target,check,fullKey,client});
  await a.request('auth.logout',{});r=await a.request();check(!r.data.user,'logout revoked');
  console.log(JSON.stringify({checks,database:setup.database,artifacts:testDir,syntheticOnly:true},null,2));
 }finally{targetServer?.kill();server.kill();fs.closeSync(log);}

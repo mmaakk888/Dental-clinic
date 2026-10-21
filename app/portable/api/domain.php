@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Clinic;
 require_once __DIR__.'/catalog-validation.php';
+require_once __DIR__.'/prescription-validation.php';
 
 final class Domain {
     public Store $store;
@@ -27,13 +28,13 @@ final class Domain {
         permit($user,'visit.save');$p=$this->store->patient($file);$date=day($s['date']??'');$settings=$this->settings();$exam=money($s['examinationFee']??0);
         if($exam!==0&&$exam!==money($settings['serviceCatalog']['examinationFee']??100))reject('تغيّر سعر الكشف؛ حدّث الأسعار.',409);
         $services=$s['services']??[];if(!is_array($services)||count($services)>64)reject('قائمة خدمات غير صالحة.');$total=$exam;
-        foreach($services as &$service){if(!is_array($service))reject();$name=text($service['name']??'',191);if(!$name)reject('اسم الخدمة مطلوب.');if(array_key_exists($name,$settings['serviceCatalog']['crownPrices']??[]))reject('سجّل هذه الخدمة كنموذج تركيبة لربط المعمل.');$price=money($service['price']??null);$total+=$price;$service=['id'=>uuid(),'name'=>$name,'price'=>$price/100,'tooth'=>isset($service['tooth'])?text($service['tooth'],24):null];}unset($service);
+        foreach($services as &$service){if(!is_array($service))reject();$name=text($service['name']??'',191);if(!$name)reject('اسم الخدمة مطلوب.');if(array_key_exists($name,$settings['serviceCatalog']['crownPrices']??[]))reject('سجّل هذه الخدمة كنموذج تركيبة لربط المعمل.');$price=money($service['price']??null);$total+=$price;$tooth=isset($service['tooth'])?teeth([$service['tooth']])[0]:null;$service=['id'=>uuid(),'name'=>$name,'price'=>$price/100,'tooth'=>$tooth];}unset($service);
         if(!$services&&$exam===0)reject('أضف خدمة أو كشفًا.');if(isset($s['amount'])&&money($s['amount'])!==$total)reject('إجمالي الزيارة غير متطابق.');
         $paid=money($s['paid']??0);if($paid>$total)reject('المدفوع أكبر من الإجمالي.');if($paid>0){permit($user,'receipt.add');$this->consentFinance($user);}
-        $visitId=uuid();$teeth=$s['teethIds']??[];if(!is_array($teeth)||count($teeth)>52)reject('اختيار الأسنان غير صالح.');foreach($teeth as $tooth)if(!is_string($tooth)||!preg_match('/^[a-zA-Z0-9_-]{1,24}$/D',$tooth))reject('سن غير صالح.');
+        $visitId=uuid();$teeth=teeth($s['teethIds']??[]);
         foreach($services as $service)if(!empty($service['tooth'])&&!in_array($service['tooth'],$teeth,true))$teeth[]=$service['tooth'];
         $record=['id'=>$visitId,'type'=>text($s['type']??'خدمة',191),'date'=>$date,'amount'=>$total/100,'paid'=>0,'remain'=>$total/100,'services'=>$services,'examinationFee'=>$exam/100,'treatmentFee'=>($total-$exam)/100,'teethIds'=>$teeth,'tooth'=>count($teeth)===1?$teeth[0]:null,'visitNotes'=>text($s['visitNotes']??''),'treatmentStage'=>text($s['treatmentStage']??'single',32),'rootCanalStatus'=>text($s['rootCanalStatus']??'',100),'visitStatus'=>text($s['visitStatus']??'completed',32),'paymentMethod'=>'cash'];
-        foreach(['chiefComplaint','diagnosis','procedurePerformed','prescriptionNotes','doctorName','time','toothLabel','toothNum'] as $field)if(isset($s[$field]))$record[$field]=text($s[$field]);$record['isWalkIn']=($s['isWalkIn']??false)===true;
+        foreach(['chiefComplaint','diagnosis','procedurePerformed','prescriptionNotes','doctorName','time','toothLabel','toothNum'] as $field)if(isset($s[$field]))$record[$field]=text($s[$field]);$record['isWalkIn']=($s['isWalkIn']??false)===true;$record['createdAt']=now();
         $this->db->q('INSERT INTO dc_visits(id,patient_id,visit_date,total_cents,payload) VALUES (?,?,?,?,?)',[$visitId,$p['id'],$date,$total,json($record)]);
         if($paid)$this->addReceipt($user,$p,['id'=>$visitId,'total_cents'=>$total],$paid,$date);
         return $visitId;
@@ -100,6 +101,7 @@ final class Domain {
         case 'settings.catalog':permit($u,$action);$v=validateCatalogSettings($args['value']??null,$this->settings()['serviceCatalog']??[]);$this->updateSettings('serviceCatalog',$v);return null;
         case 'settings.routing':permit($u,$action);$v=$args['value'];if(!is_array($v)||!is_array($v['defaultLabs']??null)||!is_array($v['overrides']??null))reject();foreach($v['defaultLabs'] as $kind=>$lab){if(!in_array($kind,['fixed','removable'],true))reject();if($lab)$this->existing('dc_labs',id($lab));}foreach($v['overrides'] as $route){$lab=decode($this->existing('dc_labs',id($route['labId']??''))['payload']);$matches=array_filter($lab['services']??[],fn($r)=>$r['id']===($route['labServiceId']??'')&&$r['category']===($route['kind']??''));if(count($matches)!==1||!array_key_exists($route['material']??'',$this->settings()['serviceCatalog']['crownPrices']??[]))reject('توجيه تركيبة غير مرتبط بفهرس المعمل والأسعار.');}$this->updateSettings('prostheticRouting',$v);return null;
         case 'settings.whatsapp':permit($u,$action);$v=validateWhatsAppSettings($args['value']??null);$this->updateSettings('whatsappSettings',$v);return null;
+        case 'settings.prescription':permit($u,$action);$this->updateSettings('prescriptionTemplate',validatePrescriptionTemplate($args['value']??null));return null;
         case 'settings.drugs':permit($u,$action);if(!is_array($args['value'])||count($args['value'])>500)reject();foreach($args['value'] as $drug){id($drug['id']);text($drug['name'],191);}$this->updateSettings('drugCatalog',$args['value']);return null;
         case 'expense.save':permit($u,$action);$this->expense($args['value'],$u);return null;
         case 'expense.payment':permit($u,'expense.save');$this->expensePayment($args['id'],money($args['amount']),day($args['date']),text($args['note']??''),$u);return null;
@@ -138,9 +140,9 @@ final class Domain {
         if(!is_array($items)||!count($items)||count($items)>64)reject('أضف دواءً واحدًا على الأقل، بحد أقصى٦٤.');
         $safe=[];foreach($items as $item){$name=text($item['drugName']??'',200);if(!$name)reject('اسم الدواء مطلوب.');$safe[]=['id'=>uuid(),'drugName'=>$name,'dosage'=>text($item['dosage']??'',500),'duration'=>text($item['duration']??'',200)];}
         $sessionId=$v['sessionId']??null;if($sessionId!==null){$session=$this->existing('dc_visits',id($sessionId));if($session['patient_id']!==$p['id'])reject('الروشتة مرتبطة بجلسة مريض آخر.');}
-        $header=[];foreach(['doctorTitle','doctorName','doctorEnglish','specialty1','specialty2','phone','address'] as $key)$header[$key]=text($v['header'][$key]??'',500);
+        $header=validatePrescriptionHeader($v['header']??[]);$design=validatePrescriptionDesign($v['design']??defaultPrescriptionDesign());
         $profile=decode($p['payload']);$history=$profile['prescriptions']??[];if(count($history)>=1000)reject('بلغ سجل الروشتات حد الأمان لهذا الملف؛ راجع الدعم دون حذف السجل.');
-        $key=uuid();$rx=['id'=>$key,'date'=>day($v['date']??''),'createdAt'=>now(),'recordedBy'=>$u['id'],'sessionId'=>$sessionId,'diagnosis'=>text($v['diagnosis']??''),'items'=>$safe,'instructions'=>text($v['instructions']??''),'header'=>$header];
+        $key=uuid();$rx=['id'=>$key,'date'=>day($v['date']??''),'createdAt'=>now(),'recordedBy'=>$u['id'],'sessionId'=>$sessionId,'diagnosis'=>text($v['diagnosis']??''),'items'=>$safe,'instructions'=>text($v['instructions']??''),'header'=>$header,'design'=>$design];
         array_unshift($history,$rx);$profile['prescriptions']=$history;$this->db->q('UPDATE dc_patients SET payload=?,revision=revision+1 WHERE id=?',[json($profile),$p['id']]);return $key;
     }
     private function progress(array $actor,array $incoming):void {

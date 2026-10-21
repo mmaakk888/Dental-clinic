@@ -32,14 +32,16 @@ import { buildAppointmentReminderText, cleanEgyptianPhone } from '../../utils/wh
 import { normalizeContactPhone } from '../../utils/clinicContacts';
 import type { ProtectedWhatsAppActions } from '../../utils/whatsappSafety';
 import { AppointmentStatusModal, APPOINTMENT_STATUS_CONFIGS } from '../appointments/AppointmentStatusModal';
-import { getPatientFinancialSummary, getSessionCollected } from '../../utils/financials';
+import { getPatientFinancialSummary, getSessionCollected, sumFinancialAmounts } from '../../utils/financials';
+import {patientSessionTimeline, patientReceiptTimeline} from '../../utils/patientTimeline';
 import { getPatientCollectionPresentation, getPatientSessionReceiptLimit } from '../../utils/patientCollection';
 import { appointmentTimeMinutes, findAppointmentConflicts, isValidAppointmentDate } from '../appointments/appointmentScheduling';
 import '../patients/patientDirectory.css';
 import './patientFile.css';
+import './patientTimeline.css';
 
 const clinicToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const sessionBalance = (session: Session) => Math.max(0, session.amount - (session.discount || 0) - getSessionCollected(session));
+const sessionBalance = (session: Session) => Math.max(0, sumFinancialAmounts([session.amount, -(session.discount || 0), -getSessionCollected(session)]));
 
 export interface PatientFileCapabilities {
   patientEdit?: boolean;
@@ -82,6 +84,7 @@ interface PatientFileViewProps {
   onAuthorizePrint?: () => void;
   onPrepareOutput?: () => Promise<void>;
   prescriptionHeader?: { doctorName: string; phone: string; address: string };
+  prescriptionTemplate?: import('../../utils/prescriptionTemplate').PrescriptionTemplate;
   onEditorChange?: (open: boolean) => void;
   readWhatsappSettings?: () => WhatsappSettings;
   cloudWhatsAppActions?: ProtectedWhatsAppActions;
@@ -118,6 +121,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   onAuthorizePrint,
   onPrepareOutput,
   prescriptionHeader,
+  prescriptionTemplate,
   onEditorChange,
   readWhatsappSettings,
   cloudWhatsAppActions,
@@ -147,6 +151,17 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
   const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
   const [showFinancialDetails, setShowFinancialDetails] = useState(true);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [sessionQuery,setSessionQuery] = useState('');
+  const [sessionOrder,setSessionOrder] = useState<'latest'|'oldest'>('latest');
+  const [receiptLimit,setReceiptLimit] = useState(15);
+  const numberedSessions = useMemo(()=>patientSessionTimeline(patient.sessions),[patient.sessions]);
+  const sessionNumbers = useMemo(()=>new Map(numberedSessions.map(r=>[r.session.id,r.number])),[numberedSessions]);
+  const visibleSessions = useMemo(()=>{
+    const query=sessionQuery.trim().toLocaleLowerCase('ar');
+    const rows=numberedSessions.filter(({session:s,number})=>`${number} ${s.type} ${s.date} ${s.toothLabel||''} ${(s.services||[]).map(i=>i.name).join(' ')}`.toLocaleLowerCase('ar').includes(query));
+    return sessionOrder==='latest'?[...rows].reverse():rows;
+  },[numberedSessions,sessionQuery,sessionOrder]);
+  const receiptTimeline = useMemo(()=>canRevealRemainingBalance?patientReceiptTimeline(patient):[],[patient,canRevealRemainingBalance]);
 
   // Financial Calculations
   const financialSummary = useMemo(() => getPatientFinancialSummary(patient), [patient]);
@@ -484,8 +499,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
       ? patient.sessions.find(item => item.id === session.id)
       : patient.sessions.find(item => getPatientSessionReceiptLimit(patient, item) > 0) ?? patient.sessions[0];
     setSelectedSessionForPayment(selectedSession ?? null);
-    setPaymentAmount(getPatientCollectionPresentation(patient, selectedSession, canRevealRemainingBalance).initialAmount);
-    setIsPaymentAmountDefault(canRevealRemainingBalance);
+    setPaymentAmount('');
+    setIsPaymentAmountDefault(false);
     setPaymentDate(clinicToday());
     setIsPaymentModalOpen(true);
   };
@@ -896,6 +911,8 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 </button>)}
               </div>
 
+              {!!patient.sessions.length && <div className="patient-session-filters"><label>بحث في الجلسات<input type="search" aria-label="بحث جلسات المريض" value={sessionQuery} onChange={e=>setSessionQuery(e.target.value)} placeholder="الخدمة أو التاريخ أو رقم الجلسة"/></label><label>الترتيب<select aria-label="ترتيب جلسات المريض" value={sessionOrder} onChange={e=>setSessionOrder(e.target.value as 'latest'|'oldest')}><option value="latest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option></select></label><span role="status">عرض {visibleSessions.length} من {patient.sessions.length}</span></div>}
+              {!!patient.sessions.length && !visibleSessions.length && <p className="text-sm text-slate-500">لا توجد جلسة مطابقة. غيّر البحث لعرض الجلسات.</p>}
               {patient.sessions.length === 0 ? (
                 <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-300 space-y-3">
                   <p className="text-xs font-bold text-slate-500">لا توجد أية خدمات علاجية مسجلة بعد لهذا المريض.</p>
@@ -909,7 +926,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 </div>
               ) : (
                 <div className="patient-session-list">
-                  {patient.sessions.map((s, idx) => {
+                  {visibleSessions.map(({session:s,number}) => {
                     const isExpanded = expandedSessionId === s.id;
 
                     return (
@@ -918,7 +935,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                           <div className="patient-session-heading">
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="patient-session-number">جلسة <bdi>{idx + 1}</bdi></span>
+                                <span className="patient-session-number">جلسة <bdi>{number}</bdi></span>
                                 <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">
                                   {s.type}
                                 </h4>
@@ -935,7 +952,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                             <div className="patient-session-actions">
                               {s.treatmentCompletedAt && <span className="text-xs text-emerald-800 bg-emerald-50 rounded-lg p-2">انتهى العلاج · الحساب محفوظ</span>}
                               {canEditPatients && onCompleteTreatment && (s.treatmentCompletedAt || s.visitStatus==='follow_up' || s.treatmentStage && s.treatmentStage!=='single') && <button type="button" disabled={saving} className="patient-session-collect" onClick={()=>askConfirm({title:s.treatmentCompletedAt?'إعادة فتح المتابعة؟':'تأكيد انتهاء العلاج؟',message:'يتغير وضع المتابعة فقط؛ الخدمات والأسنان والدفعات والمتبقي محفوظون دون تغيير. للتركيبة يجب تسجيل التسليم أولًا.',confirmLabel:s.treatmentCompletedAt?'إعادة المتابعة':'إنهاء العلاج',onConfirm:async()=>{await run(()=>onCompleteTreatment(patient.id,s.id,!s.treatmentCompletedAt));}})}><CheckCircle2 size={16}/>{s.treatmentCompletedAt?'إعادة المتابعة':'إنهاء العلاج'}</button>}
-                              {canRegisterPayment && sessionBalance(s) > 0 && (
+                              {canRegisterPayment && getPatientSessionReceiptLimit(patient,s) > 0 && (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenPaymentModal(s)}
@@ -951,7 +968,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                                 onClick={() => setExpandedSessionId(isExpanded ? null : s.id)}
                                 aria-expanded={isExpanded}
                                 aria-controls={`patient-session-details-${s.id}`}
-                                aria-label={`تفاصيل الجلسة ${idx + 1}`}
+                                aria-label={`تفاصيل الجلسة ${number}`}
                                 className="patient-session-details-button"
                               >
                                 <span>التفاصيل</span>
@@ -980,11 +997,11 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                           {/* Collapsible Payments Log */}
                           {isExpanded && (
                             <div id={`patient-session-details-${s.id}`} className="patient-session-details space-y-2">
-                              <span className="font-bold text-slate-800 block">
+                              {!isPrivacyMode && canViewRemainingBalance && <span className="font-bold text-slate-800 block">
                                 حركات التحصيل المباشرة لهذه الخدمة ({s.paymentsLog?.length || 0}):
-                              </span>
+                              </span>}
 
-                              {!s.paymentsLog || s.paymentsLog.length === 0 ? (
+                              {!isPrivacyMode && canViewRemainingBalance && (!s.paymentsLog || s.paymentsLog.length === 0 ? (
                                 <p className="text-slate-400 italic">لا توجد أية دفعات مسجلة بعد.</p>
                               ) : (
                                 <div className="space-y-1.5">
@@ -998,7 +1015,9 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                                     </div>
                                   ))}
                                 </div>
-                              )}
+                              ))}
+                              {s.visitNotes && <p className="patient-session-notes">ملاحظات الجلسة: {s.visitNotes}</p>}
+                              {s.treatmentStage && <p className="text-sm text-slate-600">مرحلة العلاج: {{single:'جلسة واحدة',first:'الجلسة الأولى',second:'الجلسة الثانية',third:'الجلسة الثالثة',follow_up:'متابعة'}[s.treatmentStage] || s.treatmentStage}</p>}
                             </div>
                           )}
                         </div>
@@ -1169,6 +1188,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               </div>
 
               <p className="text-sm text-slate-600">الملخص أعلى الملف يجمع حساب المريض كله. هنا تفاصيل كل جلسة ودفعاتها، دون تكلفة المعمل.</p>
+              {canRevealRemainingBalance && <section className="patient-receipt-timeline" aria-label="سجل كل دفعات المريض"><h4>سجل التحصيلات المؤرخة</h4><p>دفعة الخدمة مرتبطة بجلستها. الدفعة العامة تخص الحساب كله ولا تُحسب مرة ثانية ضمن جلسة.</p>{!receiptTimeline.length?<p>لم يُسجل أي تحصيل بعد. تسجيل خدمة أو كشف لا يعني تحصيل قيمته.</p>:receiptTimeline.slice(0,receiptLimit).map(row=><article key={`${row.scope}:${row.id}`} className={row.voided?'is-voided':''}><div><strong>{row.scope==='session'?`جلسة ${row.sessionNumber} · ${row.title}`:row.title}</strong><small>{row.voided?'إيصال ملغى — غير محتسب':row.historical?'رصيد مدفوع تاريخي محفوظ':row.scope==='session'?'دفعة مرتبطة بالخدمة':'دفعة عامة مستقلة'}</small></div><time dateTime={row.date}><bdi dir="ltr">{row.date}</bdi></time><bdi>{maskMoney(row.amount)}</bdi></article>)}{receiptTimeline.length>receiptLimit&&<button type="button" className="patient-session-details-button" onClick={()=>setReceiptLimit(n=>n+15)}>عرض دفعات أقدم</button>}</section>}
 
               {/* View Details Toggle Button */}
               <div className="pt-2">
@@ -1187,12 +1207,12 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                 <div className="pt-3 border-t border-slate-100 space-y-3 animate-fadeIn">
                   <h4 className="text-xs font-black text-slate-800">تفاصيل جلسات الخدمات والمبالغ المتبقية:</h4>
                   <div className="patient-file-finance-list">
-                    {patient.sessions.map((s, idx) => (
+                    {[...numberedSessions].reverse().map(({session:s,number}) => (
                       <article
-                        key={s.id || idx}
+                        key={s.id}
                         className="patient-file-finance-row"
                       >
-                        <header><div><strong>{s.type}</strong><small>{s.toothLabel || 'خدمة عامة'}</small></div><time dateTime={s.date}><bdi dir="ltr">{s.date}</bdi></time></header>
+                        <header><div><strong>جلسة {number} · {s.type}</strong><small>{s.toothLabel || 'خدمة عامة'}</small></div><time dateTime={s.date}><bdi dir="ltr">{s.date}</bdi></time></header>
                         <dl>
                           <div><dt>بعد الخصم</dt><dd><bdi>{maskMoney(Math.max(0, s.amount - (s.discount || 0)))}</bdi></dd></div>
                           <div><dt>المدفوع</dt><dd><bdi>{maskMoney(getSessionCollected(s))}</bdi></dd></div>
@@ -1219,6 +1239,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
               onAuthorizePrint={onAuthorizePrint}
               onPrepareOutput={onPrepareOutput}
               prescriptionHeader={prescriptionHeader}
+              prescriptionTemplate={prescriptionTemplate}
               onSavePrescription={canEditPatients ? onSavePrescription : undefined}
               onDirtyChange={onRxDirtyChange}
             />
@@ -1614,18 +1635,19 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                     const sess = patient.sessions.find(s => s.id === e.target.value);
                     if (sess) {
                       setSelectedSessionForPayment(sess);
-                      setPaymentAmount(getPatientCollectionPresentation(patient, sess, canRevealRemainingBalance).initialAmount);
-                      setIsPaymentAmountDefault(canRevealRemainingBalance);
+                      setPaymentAmount('');
+                      setIsPaymentAmountDefault(false);
                     }
                   }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0f3d3e]"
                 >
-                  {patient.sessions.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.type} ({s.toothLabel || 'عام'}){getPatientCollectionPresentation(patient, s, canRevealRemainingBalance).optionSuffix}
+                  {[...numberedSessions].reverse().map(({session:s,number}) => (
+                    <option key={s.id} value={s.id} disabled={canRevealRemainingBalance && getPatientSessionReceiptLimit(patient,s)<=0}>
+                      جلسة {number} · {s.date} · {s.type} ({s.toothLabel || 'عام'}){getPatientCollectionPresentation(patient, s, canRevealRemainingBalance).optionSuffix}
                     </option>
                   ))}
                 </select>
+                {paymentSession && <p className="patient-payment-context">الدفعة ستُسجّل على جلسة {sessionNumbers.get(paymentSession.id)} بتاريخ <bdi dir="ltr">{paymentSession.date}</bdi> — {paymentSession.type}. تاريخ التحصيل أدناه مستقل عن تاريخ تنفيذ الخدمة.</p>}
               </div>
 
               <div>
@@ -1673,7 +1695,7 @@ export const PatientFileView: React.FC<PatientFileViewProps> = React.memo(({
                   type="submit"
                   className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md cursor-pointer min-h-[44px]"
                 >
-                  تأكيد التحصيل
+                  {typeof paymentAmount==='number'&&paymentAmount>0?`تأكيد تحصيل ${paymentAmount.toLocaleString('ar-EG')} ج.م`:'تأكيد التحصيل'}
                 </button>
               </div>
             </fieldset></form>

@@ -16,6 +16,7 @@ final class Importer {
         foreach($backup['_files']??[] as $file){$bytes=base64_decode($file['base64']??'',true);$info=$bytes===false?false:@getimagesizefromstring($bytes);if(!$info||strlen($bytes)>16*1024*1024||$info['mime']!==($file['mime']??null)||!in_array($file['ownerKind']??'',['logo','invoice'],true)||!in_array($info['mime'],['image/png','image/jpeg','image/webp'],true))reject('ملف منقول غير صالح؛ الأصل لم يتغير.');$this->db->q('INSERT INTO dc_files(id,owner_kind,owner_id,mime,byte_length,sha256,content) VALUES (?,?,?,?,?,?,?)',[id($file['id']),$file['ownerKind'],id($file['ownerId']),$file['mime'],strlen($bytes),hash('sha256',$bytes),$bytes]);}
         $settings=$this->db->get('settings',[]);
         foreach(['clinicName','clinicLogo','theme','prostheticRouting','drugCatalog','whatsappSettings','prescriptionHeader'] as $key)if(array_key_exists($key,$backup))$settings[$key]=$backup[$key];
+        if(array_key_exists('prescriptionTemplate',$backup))$settings['prescriptionTemplate']=validatePrescriptionTemplate($backup['prescriptionTemplate']);
         if(isset($backup['labels'],$backup['tileOrder']))$settings['content']=['labels'=>$backup['labels'],'tileOrder'=>$backup['tileOrder']];
         $catalog=$settings['serviceCatalog']??[];foreach(['serviceTypes','crownPrices','clinicalPrices','examinationFee'] as $key)if(array_key_exists($key,$backup))$catalog[$key]=$backup[$key];$settings['serviceCatalog']=$catalog;
         if(!empty($settings['clinicLogo']))$settings['clinicLogo']=$domain->image($settings['clinicLogo'],'logo','clinic');

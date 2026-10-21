@@ -10,7 +10,9 @@ import { createPrescriptionDocument } from './PrescriptionDocument';
 import './patientClinicalTools.css';
 import {useConfirmedAction} from '../common/useConfirmedAction';
 import {localDateISO} from '../appointments/appointmentScheduling';
-import {prescriptionDraftSignature} from '../../utils/prescriptionRecords';
+import {prescriptionDraftSignature,validatePrescriptionDraft} from '../../utils/prescriptionRecords';
+import {patientSessionTimeline} from '../../utils/patientTimeline';
+import {normalizePrescriptionTemplate, normalizePrescriptionDesign, type PrescriptionTemplate} from '../../utils/prescriptionTemplate';
 
 interface PrescriptionAndInstructionsViewProps {
   onSavePrescription?: (patientId:string,value:PrescriptionDraft)=>Promise<string>;
@@ -27,6 +29,7 @@ interface PrescriptionAndInstructionsViewProps {
    * the existing synchronous authorizers still recheck the exact view lease. */
   onPrepareOutput?: () => Promise<void>;
   prescriptionHeader?: { doctorName: string; phone: string; address: string };
+  prescriptionTemplate?: PrescriptionTemplate;
 }
 
 export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructionsViewProps> = ({
@@ -40,6 +43,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   onAuthorizeWhatsappSend,
   onPrepareOutput,
   prescriptionHeader,
+  prescriptionTemplate,
   onSavePrescription,
   onDirtyChange,
 }) => {
@@ -61,18 +65,20 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   const [catalogLimit, setCatalogLimit] = useState(12);
   const matchingDrugs = useMemo(() => filterDrugCatalog(drugCatalog, { query: deferredDrugQuery }), [drugCatalog, deferredDrugQuery]);
 
-  // Prescription Header/Footer Customizable Template Data (Defaults match Dr. Mohamed Osama A5 design)
-  const [rxDocTitle, setRxDocTitle] = useState('دكتور');
-  const [rxDocName, setRxDocName] = useState(prescriptionHeader?.doctorName ?? '');
-  const [rxDocEnglish, setRxDocEnglish] = useState('');
-  const [rxSpecialty1, setRxSpecialty1] = useState('طب وجراحة الفم والأسنان');
-  const [rxSpecialty2, setRxSpecialty2] = useState('تقويم وتجميل الأسنان');
-  const [rxPhone, setRxPhone] = useState(prescriptionHeader?.phone ?? '');
-  const [rxAddress, setRxAddress] = useState(prescriptionHeader?.address ?? '');
+  // New prescriptions inherit the saved clinic template; history keeps its own design.
+  const template = normalizePrescriptionTemplate(prescriptionTemplate, prescriptionHeader);
+  const [rxDocTitle, setRxDocTitle] = useState(template.header.doctorTitle);
+  const [rxDocName, setRxDocName] = useState(template.header.doctorName);
+  const [rxDocEnglish, setRxDocEnglish] = useState(template.header.doctorEnglish);
+  const [rxSpecialty1, setRxSpecialty1] = useState(template.header.specialty1);
+  const [rxSpecialty2, setRxSpecialty2] = useState(template.header.specialty2);
+  const [rxPhone, setRxPhone] = useState(template.header.phone);
+  const [rxAddress, setRxAddress] = useState(template.header.address);
+  const [rxDesign, setRxDesign] = useState(template.design);
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
   const [rxDate,setRxDate]=useState(localDateISO);
   const [rxSession,setRxSession]=useState('');
-  const draft:PrescriptionDraft={date:rxDate,sessionId:rxSession||null,diagnosis,items:rxItems,instructions:doctorNotes,header:{doctorTitle:rxDocTitle,doctorName:rxDocName,doctorEnglish:rxDocEnglish,specialty1:rxSpecialty1,specialty2:rxSpecialty2,phone:rxPhone,address:rxAddress}};
+  const draft:PrescriptionDraft={date:rxDate,sessionId:rxSession||null,diagnosis,items:rxItems,instructions:doctorNotes,header:{doctorTitle:rxDocTitle,doctorName:rxDocName,doctorEnglish:rxDocEnglish,specialty1:rxSpecialty1,specialty2:rxSpecialty2,phone:rxPhone,address:rxAddress},design:rxDesign};
   const signature=prescriptionDraftSignature(draft),initialSignature=useRef<string|null>(null);
   if(initialSignature.current===null)initialSignature.current=signature;
   const [savedSignature,setSavedSignature]=useState('');
@@ -84,6 +90,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     setSubTab('prescription');
     setRxDate(value.date);setRxSession(value.sessionId||'');setDiagnosis(value.diagnosis);setRxItems(value.items.map(i=>({...i})));setDoctorNotes(value.instructions);
     setRxDocTitle(value.header.doctorTitle);setRxDocName(value.header.doctorName);setRxDocEnglish(value.header.doctorEnglish);setRxSpecialty1(value.header.specialty1);setRxSpecialty2(value.header.specialty2);setRxPhone(value.header.phone);setRxAddress(value.header.address);
+    setRxDesign(normalizePrescriptionDesign(value.design));
     setCustomDrugName('');setCustomDosage('');setCustomDuration('');setSavedSignature(prescriptionDraftSignature(value));
   };
   const openSaved=(value:SavedPrescription)=>{
@@ -93,6 +100,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   const savePrescription=()=>{
     if(!onSavePrescription||!rxItems.length||rxItems.some(i=>!i.drugName.trim())){showToast('أضف الأدوية وراجع أسماءها أولًا.','warning');return;}
     if(customDrugName||customDosage||customDuration){showToast('أضف الدواء المخصص إلى الروشتة أو امسح مسودته قبل الحفظ.','warning');return;}
+    try {validatePrescriptionDraft(draft);} catch(error) {showToast(error instanceof Error?error.message:'راجع الروشتة.','warning');return;}
     void run(async()=>{await onSavePrescription(patient.id,draft);},()=>{setSavedSignature(signature);showToast('حُفظت نسخة مؤرخة من الروشتة في ملف المريض.','success');});
   };
   // Native share/window.open require the current user gesture on iPhone.
@@ -131,6 +139,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
 
   // Quick Add from catalog
   const handleAddCatalogDrug = (drug: DrugCatalogItem) => {
+    if(rxItems.length>=64){showToast('الحد الأقصى ٦٤ دواء؛ ابدأ روشتة أخرى عند الحاجة.','warning');return;}
     const newItem: PrescriptionItem = {
       id: crypto.randomUUID(),
       drugName: drug.name,
@@ -144,6 +153,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   // Add custom drug
   const handleAddCustomDrug = (e: React.FormEvent) => {
     e.preventDefault();
+    if(rxItems.length>=64){showToast('الحد الأقصى ٦٤ دواء؛ ابدأ روشتة أخرى عند الحاجة.','warning');return;}
     if (!customDrugName.trim()) {
       showToast('اكتب اسم الدواء أولًا', 'warning');
       return;
@@ -169,7 +179,8 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
     setRxItems(previous => previous.map(item => item.id === id ? { ...item, ...patch } : item));
   };
   const validateRxNames = () => {
-    if (rxItems.some(item => !item.drugName.trim())) { showToast('راجع أسماء الأدوية قبل الطباعة أو الإرسال.', 'warning'); return false; }
+    if(customDrugName||customDosage||customDuration){showToast('أضف الدواء المخصص أو امسح مسودته قبل الطباعة أو تجهيز الصورة.','warning');return false;}
+    try {validatePrescriptionDraft(draft);} catch(error) {showToast(error instanceof Error?error.message:'راجع الروشتة.','warning');return false;}
     return true;
   };
 
@@ -246,7 +257,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
   const mounted = useRef(true);
   const imageData = { clinicName, clinicLogo, doctorTitle: rxDocTitle, doctorName: rxDocName, doctorEnglish: rxDocEnglish,
     specialties: [rxSpecialty1, rxSpecialty2], phone: rxPhone, address: rxAddress, patientName: patient.name,
-    fileNo: patient.id, age: patient.age, date: todayDateStr, diagnosis, items: rxItems, notes: doctorNotes };
+    fileNo: patient.id, age: patient.age, date: todayDateStr, diagnosis, items: rxItems, notes: doctorNotes, design: rxDesign };
   const imageSignature = JSON.stringify(imageData);
   useEffect(() => {
     const paper = paperRef.current, wrapper = paperWrapper.current, scaleLayer = paperScale.current;
@@ -358,8 +369,8 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
       </div>
 
       <section className="rx-card print:hidden space-y-3" aria-label="حفظ الروشتة وسجلها">
-        <div className="flex flex-wrap items-end gap-3"><label className="text-sm flex-1 min-w-0">تاريخ الروشتة<input type="date" aria-label="تاريخ الروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxDate} onChange={e=>setRxDate(e.target.value)} disabled={saving}/></label><label className="text-sm flex-1 min-w-0">الجلسة المرتبطة (اختياري)<select aria-label="الجلسة المرتبطة بالروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxSession} onChange={e=>setRxSession(e.target.value)} disabled={saving}><option value="">روشتة عامة للمريض</option>{patient.sessions.map(s=><option key={s.id} value={s.id}>{s.date} · {s.type}</option>)}</select></label></div>
-        <div className="flex flex-wrap gap-2 items-center"><span role="status" className="text-sm text-slate-600">{dirty?'مسودة غير محفوظة':'لا توجد تغييرات غير محفوظة'}</span>{onSavePrescription&&<button type="button" className="rx-primary-button" disabled={saving||!rxItems.length||!dirty} onClick={savePrescription}>{saving?'جارٍ الحفظ…':'حفظ نسخة في الملف'}</button>}<button type="button" className="rx-secondary-button" disabled={saving} onClick={()=>{const reset=()=>loadDraft({...draft,date:localDateISO(),sessionId:null,diagnosis:'',items:[],instructions:''});if(dirty)askConfirm({title:'بدء روشتة جديدة؟',message:'تجاهل المسودة الحالية فقط؛ الروشتات المحفوظة لا تتغير.',confirmLabel:'مسودة جديدة',onConfirm:reset});else reset();}}>مسودة جديدة</button></div>
+        <div className="flex flex-wrap items-end gap-3"><label className="text-sm flex-1 min-w-0">تاريخ الروشتة<input type="date" aria-label="تاريخ الروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxDate} onChange={e=>setRxDate(e.target.value)} disabled={saving}/></label><label className="text-sm flex-1 min-w-0">الجلسة المرتبطة (اختياري)<select aria-label="الجلسة المرتبطة بالروشتة" className="block w-full min-h-11 border rounded-xl p-2 mt-1" value={rxSession} onChange={e=>setRxSession(e.target.value)} disabled={saving}><option value="">روشتة عامة للمريض</option>{[...patientSessionTimeline(patient.sessions)].reverse().map(({session:s,number})=><option key={s.id} value={s.id}>جلسة {number} · {s.date} · {s.type}</option>)}</select></label></div>
+        <div className="flex flex-wrap gap-2 items-center"><span role="status" className="text-sm text-slate-600">{dirty?'مسودة غير محفوظة':'لا توجد تغييرات غير محفوظة'}</span>{onSavePrescription&&<button type="button" className="rx-primary-button" disabled={saving||!rxItems.length||!dirty} onClick={savePrescription}>{saving?'جارٍ الحفظ…':'حفظ نسخة في الملف'}</button>}<button type="button" className="rx-secondary-button" disabled={saving} onClick={()=>{const reset=()=>loadDraft({date:localDateISO(),sessionId:null,diagnosis:'',items:[],instructions:'',header:{...template.header},design:{...template.design}});if(dirty)askConfirm({title:'بدء روشتة جديدة؟',message:'تجاهل المسودة الحالية فقط؛ الروشتات المحفوظة لا تتغير. تبدأ الجديدة بتصميم العيادة المحفوظ.',confirmLabel:'مسودة جديدة',onConfirm:reset});else reset();}}>مسودة جديدة</button></div>
         <details><summary className="min-h-11 cursor-pointer text-sm font-bold">الروشتات المحفوظة ({patient.prescriptions?.length||0})</summary>{patient.prescriptions?.length?<div className="grid gap-2">{patient.prescriptions.map(rx=><button type="button" key={rx.id} disabled={saving} className="rx-secondary-button justify-between" onClick={()=>openSaved(rx)}><bdi>{rx.date}</bdi><span>{rx.items.length} دواء · عرض الروشتة</span></button>)}</div>:<p className="text-sm text-slate-500">بعد مراجعة الأدوية اضغط «حفظ نسخة في الملف» لتقدر ترجع لها بعد مغادرة الصفحة.</p>}</details>
       </section>
 
@@ -379,6 +390,7 @@ export const PrescriptionAndInstructionsView: React.FC<PrescriptionAndInstructio
               إغلاق ✕
             </button>
           </div>
+          <p className="text-sm text-slate-600">هذه البيانات تخص نسخة الروشتة الحالية. تغيير الألوان والخط ومكان الشعار وحفظ تصميم افتراضي للعيادة من لوحة التحكم ← تصميم الروشتة.</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div>

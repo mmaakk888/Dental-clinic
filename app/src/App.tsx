@@ -1363,6 +1363,7 @@ export function AppContent({runtime}: {runtime?: PortableRuntime} = {}) {
                 clinicLogo={clinicLogo}
                 whatsappSettings={whatsappSettings}
                 prescriptionHeader={runtime?.prescriptionHeader()}
+                prescriptionTemplate={runtime?.prescriptionTemplate()}
                 onAuthorizeWhatsappSend={authorizeWhatsappSend}
                 readWhatsappSettings={Storage.getWhatsappSettingsFresh}
                 drugCatalog={drugCatalog}

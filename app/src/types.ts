@@ -115,6 +115,7 @@ export interface Prescription {
 }
 
 export interface SavedPrescription {
+  design?: import('./utils/prescriptionTemplate').PrescriptionDesign;
   id: string;
   date: string;
   createdAt?: string;
@@ -178,6 +179,7 @@ export interface SessionServiceItem {
 }
 
 export interface Session {
+  createdAt?: string;
   treatmentCompletedAt?: string;
   treatmentCompletedBy?: string;
   /** Imported paid balance without a dated receipt; never counted as today's cash. */

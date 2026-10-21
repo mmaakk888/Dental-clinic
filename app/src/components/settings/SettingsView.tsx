@@ -30,6 +30,7 @@ const AuditTrailView = lazy(() => import('./AuditTrailView').then(module => ({ d
 const WhatsAppManagement = lazy(() => import('./WhatsAppManagement').then(module => ({ default: module.WhatsAppManagement })));
 const DataTransferManagement = lazy(() => import('./DataTransferManagement').then(module => ({ default: module.DataTransferManagement })));
 const SystemUpdatePanel = lazy(() => import('./SystemUpdatePanel').then(module => ({ default: module.SystemUpdatePanel })));
+const PrescriptionTemplateManagement = lazy(() => import('./PrescriptionTemplateManagement').then(module => ({default: module.PrescriptionTemplateManagement})));
 
 function SettingsSectionContent({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -168,6 +169,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const pricesDirty = useCallback((dirty:boolean) => reportDirty('prices',dirty), [reportDirty]);
   const whatsappDirty = useCallback((dirty:boolean) => reportDirty('whatsapp',dirty), [reportDirty]);
   const drugsDirty = useCallback((dirty:boolean) => reportDirty('drugs',dirty), [reportDirty]);
+  const prescriptionDirty = useCallback((dirty:boolean) => reportDirty('prescription',dirty), [reportDirty]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const { showToast, askConfirm, validationFail } = useToastAndConfirm();
   const canDataTransfer = canPerformAction(currentUser, 'data_import') && canPerformAction(currentUser, 'data_export');
@@ -175,6 +177,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const canManageFullBackup = fullBackupRequested && canDataTransfer;
   const allowedSettingsSections = settingsSections.filter(section =>
     section.key === 'users' ? canManageUsers
+      : section.key === 'prescription' ? !!portable && !!currentUser && ['doctor','admin'].includes(currentUser.role)
       : section.key === 'updates' ? !!portable && !!currentUser && ['doctor','admin'].includes(currentUser.role)
       : ['excel', 'backup', 'system'].includes(section.key) ? canDataTransfer : true);
   const isAllowedSection = (value: string | undefined): value is SettingsSectionKey => allowedSettingsSections.some(section => section.key === value);
@@ -267,6 +270,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <DrugCatalogManagement drugCatalog={drugCatalog} onSaveDrugCatalog={onSaveDrugCatalog} onDirtyChange={drugsDirty} />
           </SettingsSectionContent>
         </div>}
+        {allowedSettingsSections.some(s=>s.key==='prescription') && visitedSections.has('prescription') && portable && <div hidden={activeSubTab !== 'prescription'}><SettingsSectionContent label="تصميم الروشتة"><PrescriptionTemplateManagement value={portable.prescriptionTemplate()} clinicName={clinicName} clinicLogo={clinicLogo} onDirtyChange={prescriptionDirty} onSave={value=>portable.action('settings.prescription',{value})}/></SettingsSectionContent></div>}
         {canManageUsers && visitedSections.has('users') && <div hidden={activeSubTab !== 'users'}>
           <SettingsSectionContent label="المستخدمون والصلاحيات">
             <UserAccountsManagement users={users} currentUser={currentUser} onSaveUsers={onSaveUsers} />

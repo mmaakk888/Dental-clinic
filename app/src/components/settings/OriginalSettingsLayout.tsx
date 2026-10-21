@@ -1,5 +1,5 @@
 import React, {useEffect,useRef,useState} from 'react';
-import {ArrowRight,Sliders,Palette,Layout,FileSpreadsheet,Users,ShieldAlert,Check,MessageCircle,Pill,Cloud,ChevronLeft,ChevronDown,X,Server,PackageCheck} from 'lucide-react';
+import {ArrowRight,Sliders,Palette,Layout,FileSpreadsheet,Users,ShieldAlert,Check,MessageCircle,Pill,Cloud,ChevronLeft,ChevronDown,X,Server,PackageCheck,FileText} from 'lucide-react';
 import {useAppointmentDialog} from '../appointments/useAppointmentDialog';
 import './settingsNavigation.css';
 export const settingsSections = [
@@ -8,6 +8,7 @@ export const settingsSections = [
   { key: 'services', group: 'practice', label: 'الخدمات والأسعار', description: 'الخدمات وأسعار البيع وتكاليف المعامل', icon: <Sliders className="w-4 h-4 text-amber-500" /> },
   { key: 'whatsapp', group: 'practice', label: 'إدارة واتساب', description: 'جهات الاتصال والرسائل والحملات', icon: <MessageCircle className="w-4 h-4 text-emerald-600" /> },
   { key: 'drugs', group: 'practice', label: 'فهرس الأدوية', description: 'فهرس الأدوية المستخدم في الروشتة', icon: <Pill className="w-4 h-4 text-purple-500" /> },
+  { key: 'prescription', group: 'appearance', label: 'تصميم الروشتة', description: 'بيانات الطبيب والألوان وترتيب ورقة الطباعة والصورة', icon: <FileText className="w-4 h-4 text-teal-600" /> },
   { key: 'backup', group: 'data', label: 'النسخ الاحتياطي والنقل', description: 'نسخة كاملة مشفرة واستعادة آمنة', icon: <Cloud className="w-4 h-4 text-sky-500" /> },
   { key: 'updates', group: 'data', label: 'تحديث النظام', description: 'حزم موقّعة، نسخة رجوع ومتابعة التحديث', icon: <PackageCheck className="w-4 h-4 text-indigo-500" /> },
   { key: 'users', group: 'people', label: 'المستخدمون والصلاحيات', description: 'حسابات العمل وصلاحيات الدخول', icon: <Users className="w-4 h-4 text-amber-600" /> },

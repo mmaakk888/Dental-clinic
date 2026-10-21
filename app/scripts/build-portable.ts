@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {build} from 'vite';
 import {createZip, listFiles} from './portable-zip';
 import {packageInstallation} from './installation-package';
+import {normalizePrescriptionTemplate} from '../src/utils/prescriptionTemplate';
 import {
   DEFAULT_THEME, DEFAULT_UI_LABELS, DEFAULT_TILE_ORDER, DEFAULT_WHATSAPP_SETTINGS,
 } from '../src/data/initialData';
@@ -17,7 +18,7 @@ const artifacts = path.resolve(staging ? 'build/portable-next-artifacts' : 'buil
 if (fs.existsSync(target) || fs.existsSync(artifacts)) {
   throw Error('Frozen release already exists. Rename build/portable-release AND build/portable-artifacts before preparing another release.');
 }
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md']) {
   if (!fs.existsSync(path.join('portable', file))) throw Error('Missing release document: ' + file);
 }
 await build({configFile: path.resolve('vite.portable.config.ts')});
@@ -33,7 +34,7 @@ for (const file of ['config.example.php', '.htaccess']) {
 // Private operational tools only; no legacy data migration exporters.
 fs.cpSync('portable/tools',path.join(privateDir,'portable/tools'),{recursive:true});
 fs.copyFileSync('portable/schema.sql', path.join(privateDir, 'schema.sql'));
-for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md']) {
+for (const file of ['INSTALL.ar.md', 'DESIGN-REVIEW.ar.md', 'VERIFICATION.ar.md','BACKUP.ar.md','UPDATE.ar.md','UNFILED-VISITS.ar.md','WORKFLOW.ar.md','RELEASE-REVIEW.ar.md','FIRST-INSTALL.ar.md','RX-WORKFLOW.ar.md']) {
   fs.copyFileSync(path.join('portable', file), path.join(privateDir, file));
 }
 const defaults = {
@@ -43,6 +44,7 @@ const defaults = {
   prostheticRouting: {defaultLabs: {}, overrides: []},
   whatsappSettings: {...DEFAULT_WHATSAPP_SETTINGS, senderNumber: '', apiKey: '', webhookUrl: '', autoConfirmOnAppt: false, autoRemind24h: false, autoPostOpOnAttended: false},
   drugCatalog: [], prescriptionHeader: {doctorName:'',phone:'',address:''},
+  prescriptionTemplate: normalizePrescriptionTemplate(),
 };
 fs.writeFileSync(path.join(privateDir, 'clinic-private/defaults.json'), JSON.stringify(defaults, null, 2));
 const builtAt = new Date().toISOString();
