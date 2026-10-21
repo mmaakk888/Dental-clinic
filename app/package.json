@@ -1,0 +1,47 @@
+{
+  "name": "dental-clinic-php-mysql",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx scripts/portable-local.ts dev",
+    "build": "tsx scripts/build-portable.ts",
+    "build:portable": "tsx scripts/build-portable.ts",
+    "start": "tsx scripts/portable-local.ts preview",
+    "preview": "tsx scripts/portable-local.ts preview",
+    "preview:local": "tsx scripts/portable-local.ts preview",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=3 --test-timeout=180000 src/utils/*.test.ts src/components/appointments/*.test.ts",
+    "test:api": "node scripts/test-portable-api.mjs",
+    "test:updates": "tsx scripts/test-system-update.ts",
+    "package:update": "tsx scripts/package-update.ts"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "html2canvas": "1.4.1",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "vite": "^6.2.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "overrides": {
+    "source-map-js": "1.2.2",
+    "@grpc/grpc-js": "1.14.5",
+    "uuid": "11.1.1"
+  }
+}

@@ -1,0 +1,19 @@
+node_modules/
+build/
+dist/
+coverage/
+.clinic-local/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local visual QA screenshots may include clinic or account details.
+review-proofs/
+portable/private/config.php
+migration-private/
+*.clinicbackup
+clinic-decryption-key-*.json
+*.private.sql
+*.private.pem
+*.clinicupdate.zip

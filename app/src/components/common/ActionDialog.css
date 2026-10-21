@@ -1,0 +1,86 @@
+.clinic-action-dialog { --action-color: #4f46e5; --action-tint: #eef2ff; color: #0f172a; }
+.clinic-action-dialog[data-action-tone="emerald"] { --action-color: #047857; --action-tint: #ecfdf5; }
+.clinic-action-dialog[data-action-tone="amber"] { --action-color: #b45309; --action-tint: #fffbeb; }
+.clinic-action-dialog[data-action-tone="rose"] { --action-color: #be123c; --action-tint: #fff1f2; }
+.clinic-action-dialog[data-action-tone="slate"] { --action-color: #475569; --action-tint: #f1f5f9; }
+.clinic-action-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-shrink: 0; padding: 1rem 1.25rem; border-bottom: 1px solid #e2e8f0; background: #fff; }
+.clinic-action-heading { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.clinic-action-symbol { display: grid; place-items: center; flex: 0 0 auto; width: 2.75rem; height: 2.75rem; border-radius: .85rem; color: var(--action-color); background: var(--action-tint); }
+.clinic-action-symbol svg { width: 1.35rem; height: 1.35rem; }
+.clinic-action-heading h2, .clinic-action-heading h3 { margin: 0; color: #0f172a; font-size: 1.05rem; font-weight: 900; line-height: 1.6; }
+.clinic-action-heading p { margin: .15rem 0 0; color: #64748b; font-size: .8rem; line-height: 1.6; }
+.clinic-action-close { display: grid; place-items: center; flex: 0 0 auto; width: 44px; min-height: 44px; border: 1px solid #e2e8f0; border-radius: .75rem; background: #f8fafc; color: #475569; }
+.clinic-action-close:hover { color: #0f172a; background: #f1f5f9; }
+.clinic-action-close svg { width: 1.15rem; height: 1.15rem; }
+.clinic-action-dialog :is(input:not([type="checkbox"]):not([type="file"]), select, textarea) { min-width: 0; max-width: 100%; min-height: 44px; font-size: 1rem; }
+.clinic-action-dialog button { min-height: 44px; }
+.clinic-action-dialog button:disabled { cursor: not-allowed; opacity: .5; }
+.clinic-action-dialog :is(button, input, textarea, select):focus-visible { outline: 3px solid var(--action-color); outline-offset: 2px; }
+.clinic-action-footer { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: .75rem; flex-shrink: 0; padding: 1rem 1.25rem; border-top: 1px solid #e2e8f0; background: #f8fafc; }
+.clinic-action-primary, .clinic-action-cancel { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 48px; padding: .6rem 1.1rem; border-radius: .8rem; font-size: .9rem; font-weight: 800; }
+.clinic-action-primary { color: #fff; background: var(--action-color); }
+.clinic-action-cancel { color: #475569; border: 1px solid #cbd5e1; background: #fff; }
+.walkin-form { display: grid; gap: 1rem; padding: 1rem 1.25rem; background: #f8fafc; }
+.walkin-section { min-width: 0; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 1rem; background: #fff; }
+.walkin-section h4 { margin: 0 0 .75rem; font-weight: 900; color: #334155; font-size: .95rem; }
+.walkin-section label { display: grid; gap: .4rem; color: #475569; font-size: .85rem; font-weight: 700; }
+.walkin-section :is(input, select, textarea) { width: 100%; padding: .6rem .75rem; border: 1px solid #cbd5e1; border-radius: .7rem; background: #fff; color: #0f172a; }
+.walkin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.walkin-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin-bottom: .75rem; }
+.walkin-mode button { padding: .6rem; border: 1px solid #cbd5e1; border-radius: .75rem; color: #475569; background: #fff; font-weight: 800; font-size: .85rem; }
+.walkin-mode button[aria-pressed="true"] { border-color: var(--action-color); color: var(--action-color); background: var(--action-tint); }
+.walkin-results { display: grid; max-height: 13rem; overflow-y: auto; margin-top: .5rem; border: 1px solid #e2e8f0; border-radius: .75rem; }
+.walkin-results button { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .25rem .75rem; padding: .65rem; border-bottom: 1px solid #f1f5f9; text-align: start; }
+.walkin-results button:hover { background: var(--action-tint); }
+.walkin-results small { color: #64748b; }
+.walkin-presets { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .75rem; }
+.walkin-presets button { padding: .45rem .6rem; border: 1px solid #e2e8f0; border-radius: .6rem; font-size: .75rem; font-weight: 700; color: #475569; background: #f8fafc; }
+.walkin-service-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .6rem; margin-bottom: .85rem; }
+.walkin-service-list { display: grid; gap: .75rem; }
+.walkin-service-card { min-width: 0; padding: .75rem; border: 1px solid #e2e8f0; border-radius: .85rem; background: #f8fafc; }
+.walkin-service { display: grid; grid-template-columns: minmax(0, 1fr) 7rem 44px; align-items: end; gap: .5rem; padding-block: .5rem; }
+.walkin-service + .walkin-service { border-top: 1px solid #f1f5f9; }
+.walkin-service button { color: #be123c; border-radius: .65rem; background: #fff1f2; }
+.walkin-details summary { cursor: pointer; color: #475569; font-size: .9rem; font-weight: 800; }
+.walkin-details[open] summary { margin-bottom: 1rem; }
+.walkin-payment-summary { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-top: .85rem; padding: .75rem; border-radius: .75rem; background: #f1f5f9; color: #475569; font-size: .85rem; }
+.walkin-payment-summary strong { display: block; margin-top: .15rem; font-size: 1rem; color: #0f172a; }
+.walkin-hint { margin-top: .5rem; color: #64748b; font-size: .78rem; line-height: 1.7; }
+.walkin-dialog .walkin-acknowledge { display:flex; align-items:flex-start; gap:.5rem; }
+.walkin-dialog .walkin-acknowledge input[type='checkbox'] { inline-size:20px; block-size:20px; min-block-size:20px; flex:none; margin-block-start:3px; }
+.walkin-dialog .walkin-form { gap: .6rem; padding: .75rem; align-items: start; }
+.walkin-dialog .walkin-section { padding: .7rem; border-radius: .85rem; }
+.walkin-dialog .walkin-section h4 { margin-bottom: .5rem; font-size: .85rem; }
+.walkin-dialog .walkin-results { max-height: 10rem; }
+.walkin-dialog .walkin-results button { padding: .45rem .65rem; }
+.walkin-dialog .walkin-service-card { padding: .5rem; }
+.walkin-dialog .walkin-service { padding-block: 0; grid-template-columns: minmax(0, 1fr) 6rem 44px; }
+.walkin-dialog .walkin-service > label:first-child { grid-column: auto; }
+.walkin-dialog .walkin-tooth-details summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem; min-height: 44px; font-size: .82rem; color: #305a59; cursor: pointer; padding: .55rem .7rem; border: 1px solid #d6e5e2; border-radius: .7rem; background: #f7fbfa; }
+.walkin-tooth-details .tooth-picker-open-label { color: #0f766e; font-size: .72rem; font-weight: 800; }
+.walkin-tooth-details[open] > summary { margin-bottom: .65rem; }
+.walkin-duplicate-warning { display: grid; gap: .4rem; margin-top: .6rem; padding: .7rem; background: #fff8e8; border: 1px solid #eddbb0; border-radius: .8rem; font-size: .78rem; color: #775519; }
+.walkin-duplicate-warning > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+.walkin-duplicate-warning button { padding: .4rem .7rem; border-radius: .6rem; background: #fff; border: 1px solid #dbcaa4; }
+.walkin-dialog .walkin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.walkin-dialog .walkin-medical-details { order: 4; }
+.walkin-dialog .clinic-action-header, .walkin-dialog .clinic-action-footer { padding: .7rem .9rem; }
+.walkin-dialog .walkin-payment-summary { gap: .5rem; justify-content: space-between; padding: .6rem; }
+@media (min-width: 700px) {
+  .walkin-dialog .walkin-form { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
+  .walkin-dialog .walkin-form > fieldset > .walkin-section:first-child, .walkin-dialog .walkin-medical-details { grid-column: 1 / -1; }
+}
+@media (max-width: 480px) {
+  .clinic-action-header, .clinic-action-footer { padding: .85rem; }
+  .clinic-action-heading { gap: .5rem; }
+  .clinic-action-symbol { width: 2.35rem; height: 2.35rem; }
+  .clinic-action-heading h2, .clinic-action-heading h3 { font-size: .95rem; }
+  .clinic-action-heading p { font-size: .75rem; }
+  .walkin-form { padding: .75rem; }
+  .walkin-section { padding: .8rem; }
+  .walkin-grid { grid-template-columns: minmax(0, 1fr); }
+  .walkin-service-picker { grid-template-columns: minmax(0, 1fr); }
+  .walkin-service { grid-template-columns: minmax(0, 1fr) 44px; }
+  .walkin-service > label:first-child { grid-column: 1 / -1; }
+  .clinic-action-footer > button { flex: 1; }
+}
