@@ -1,0 +1,103 @@
+/* Keep the approved navy/gold sign-in identity; all rules stay in this screen. */
+.clinic-login {
+  --login-gold: #f6c453;
+  --login-ink: #101b30;
+  position: fixed;
+  inset-inline: 0;
+  top: var(--clinic-viewport-top, 0px);
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  height: var(--clinic-visible-height, 100dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(20px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  background: #080f20;
+  color: #f5f7fc;
+  isolation: isolate;
+}
+.clinic-login-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 80% 10%, #24326254, transparent 55%), radial-gradient(ellipse at 8% 90%, #93692816, transparent 50%);
+}
+.clinic-login-frame { position: relative; width: min(100%, 460px); min-width: 0; margin-block: auto; flex: 0 1 460px; padding-block: 4px; }
+.clinic-login-brand { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-bottom: 24px; text-align: center; }
+.clinic-login-brand h1 { margin: 0; font-size: clamp(21px, 2.5vw, 27px); font-weight: 800; line-height: 1.6; overflow-wrap: anywhere; }
+.clinic-login-brand p { margin: 3px 0 0; font-size: 13px; color: #a8b5cd; line-height: 1.8; }
+.clinic-login-logo > img, .clinic-login-logo > div { width: 64px; height: 64px; border-radius: 18px; box-shadow: 0 8px 28px #0002; }
+.clinic-login-card { position: relative; border: 1px solid #2c3953; border-radius: 24px; background: linear-gradient(150deg, #14213a, #0e192d 65%); padding: 28px 32px 22px; box-shadow: 0 24px 64px #02081752, 0 1px 0 #ffffff06 inset; }
+.clinic-login-card::before { position: absolute; content: ''; top: -1px; inset-inline: 24px; height: 1px; background: linear-gradient(90deg, transparent, #f6c4539e, transparent); }
+.clinic-login-card-heading { display: flex; align-items: center; gap: 12px; }
+.clinic-login-lock { display: inline-flex; flex: 0 0 auto; width: 46px; height: 46px; align-items: center; justify-content: center; color: var(--login-gold); border: 1px solid #f6c4532b; border-radius: 14px; background: #f6c4530b; }
+.clinic-login-eyebrow { margin: 0 0 3px; color: var(--login-gold); font-size: 11px; font-weight: 700; line-height: 1.7; }
+.clinic-login-card h2 { margin: 0; color: #f5f7fc; font-size: 23px; font-weight: 800; line-height: 1.5; }
+.clinic-login-intro { margin: 12px 0 24px; color: #adb9cf; font-size: 13px; line-height: 1.9; }
+.clinic-login-form { display: grid; gap: 18px; min-width: 0; }
+.clinic-login-field { display: grid; gap: 8px; min-width: 0; }
+.clinic-login-field > label { color: #dfe7f4; font-size: 13px; font-weight: 650; line-height: 1.7; }
+.clinic-login-input-wrap { position: relative; display: flex; align-items: center; min-width: 0; }
+.clinic-login-input-wrap > input { width: 100%; min-width: 0; height: 52px; border: 1px solid #394761; border-radius: 13px; outline: none; padding: 10px 46px 10px 14px; background: #0a1427; color: #f5f7fc; font-size: 16px; line-height: 1.6; font-weight: 500; caret-color: var(--login-gold); transition: border-color 120ms, box-shadow 120ms; scroll-margin-block: 24px; }
+.clinic-login-input-wrap > input::placeholder { color: #8796b0; opacity: 1; font-size: 14px; }
+.clinic-login-input-wrap > input:hover:not(:disabled) { border-color: #596986; }
+.clinic-login-input-wrap > input:focus { border-color: var(--login-gold); box-shadow: 0 0 0 3px #f6c45319; }
+.clinic-login-input-wrap > input:disabled { opacity: .7; cursor: wait; }
+.clinic-login-input-wrap > input:-webkit-autofill { -webkit-text-fill-color: #f5f7fc; box-shadow: 0 0 0 1000px #0a1427 inset; caret-color: var(--login-gold); }
+.clinic-login-input-wrap > .clinic-login-password { padding-inline: 46px; text-align: right; }
+.clinic-login-field-icon { position: absolute; right: 15px; color: #9baac3; pointer-events: none; transition: color 120ms; }
+.clinic-login-input-wrap:focus-within .clinic-login-field-icon { color: var(--login-gold); }
+.clinic-login-password-toggle { position: absolute; left: 4px; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 0; border-radius: 10px; background: transparent; color: #aab8ce; cursor: pointer; }
+.clinic-login-password-toggle:hover:not(:disabled) { color: #fff; background: #ffffff09; }
+.clinic-login-caps-lock { margin: 0; color: var(--login-gold); font-size: 12px; line-height: 1.7; }
+.clinic-login-options { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; margin-top: -5px; }
+.clinic-login-remember { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; color: #d0dbed; font-size: 12px; cursor: pointer; user-select: none; }
+.clinic-login-remember > input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.clinic-login-check { display: inline-flex; justify-content: center; align-items: center; flex: 0 0 auto; width: 18px; height: 18px; border: 1px solid #62718a; border-radius: 5px; background: #0a1427; color: var(--login-ink); }
+.clinic-login-remember > input:checked + .clinic-login-check { background: var(--login-gold); border-color: var(--login-gold); }
+.clinic-login-remember > input:focus-visible + .clinic-login-check { outline: 2px solid var(--login-gold); outline-offset: 3px; }
+.clinic-login-help { min-height: 44px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--login-gold); font-size: 12px; font-weight: 650; cursor: pointer; }
+.clinic-login-help:hover:not(:disabled) { color: #ffdfa0; text-decoration: underline; text-underline-offset: 4px; }
+.clinic-login-submit { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; width: 100%; min-height: 52px; margin: 0; padding: 12px 18px; border: 1px solid #ffdb84; border-radius: 13px; background: linear-gradient(110deg, #f7ce70, #f4bb41); color: #111d31; font-size: 15px; font-weight: 800; line-height: 1.7; box-shadow: 0 6px 18px #0000001a; cursor: pointer; }
+.clinic-login-submit > svg, .clinic-login-submit > span:empty { width: 20px; flex: 0 0 20px; }
+.clinic-login-submit:hover:not(:disabled) { background: #ffda86; box-shadow: 0 8px 22px #f6c45312; }
+.clinic-login-submit:disabled { cursor: wait; opacity: .72; }
+.clinic-login button:focus-visible { outline: 2px solid var(--login-gold); outline-offset: 4px; }
+.clinic-login-privacy { display: flex; align-items: flex-start; justify-content: center; gap: 6px; margin: 20px 0 0; padding-top: 16px; border-top: 1px solid #ffffff0c; color: #a1b0c9; font-size: 11px; line-height: 1.9; text-align: center; }
+.clinic-login-privacy > svg { flex: 0 0 16px; margin-top: 2px; color: #adbbcf; }
+.clinic-login-footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 18px; color: #96a5c0; font-size: 11px; line-height: 1.8; text-align: center; }
+.clinic-login-error { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 18px; padding: 12px; border: 1px solid #fa71854d; border-radius: 12px; background: #fb718511; color: #fecdd3; font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.clinic-login-error > svg { flex: 0 0 19px; margin-top: 3px; }
+.clinic-login-spinner { animation: clinicLoginSpin .8s linear infinite; }
+.clinic-login-recovery { width: min(100%, 400px); padding: 26px; border: 1px solid #394761; background: #101b30; color: #f5f7fc; }
+.clinic-login-recovery h3 { margin: 16px 0 10px; font-size: 19px; font-weight: 800; line-height: 1.6; }
+.clinic-login-recovery p { margin: 0 0 16px; color: #c3cfe1; font-size: 13px; line-height: 2; }
+.clinic-login-recovery .clinic-login-submit { justify-content: center; margin-top: 20px; }
+@keyframes clinicLoginSpin { to { transform: rotate(360deg); } }
+@media (min-width: 769px) and (min-height: 720px) {
+  .clinic-login-frame { animation: clinicLoginEnter 180ms ease-out both; }
+  @keyframes clinicLoginEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 480px) {
+  .clinic-login { padding-block: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-bottom, 0px)); }
+  .clinic-login-brand { gap: 10px; margin-bottom: 18px; }
+  .clinic-login-logo > img, .clinic-login-logo > div { width: 56px; height: 56px; border-radius: 16px; }
+  .clinic-login-card { border-radius: 20px; padding: 23px 20px 18px; }
+  .clinic-login-card h2 { font-size: 22px; }
+  .clinic-login-intro { margin-bottom: 20px; }
+  .clinic-login-form { gap: 16px; }
+  .clinic-login-footer { margin-top: 14px; }
+}
+@media (max-height: 580px) {
+  .clinic-login { padding-block: 14px; }
+  .clinic-login-brand { flex-direction: row; justify-content: center; gap: 12px; margin-bottom: 14px; }
+  .clinic-login-brand h1 { font-size: 20px; }
+  .clinic-login-logo > img, .clinic-login-logo > div { width: 44px; height: 44px; border-radius: 12px; }
+  .clinic-login-card { padding-block: 20px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clinic-login-frame, .clinic-login-spinner { animation: none; }
+  .clinic-login *, .clinic-login *::before, .clinic-login *::after { transition: none; scroll-behavior: auto; }
+}
